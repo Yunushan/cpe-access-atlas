@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
-from typing import Iterable
+from collections.abc import Iterable
 
 
 class PolicyError(ValueError):
@@ -53,17 +54,28 @@ def parse_ports(value: str) -> tuple[int, ...]:
     return tuple(ports)
 
 
+def parse_timeout(value: str | float) -> float:
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise PolicyError("timeout must be a finite number of seconds") from exc
+    if not math.isfinite(timeout) or not 0 < timeout <= 30:
+        raise PolicyError("timeout must be greater than 0 and at most 30 seconds")
+    return timeout
+
+
 def probe_tcp_ports(
     host: str,
     ports: Iterable[int],
     timeout: float = 1.0,
 ) -> dict[int, bool]:
     address = parse_single_private_address(host)
+    timeout = parse_timeout(timeout)
     results: dict[int, bool] = {}
     for port in ports:
         try:
             with socket.create_connection((str(address), int(port)), timeout=timeout):
                 results[int(port)] = True
-        except OSError:
+        except (OSError, OverflowError, ValueError):
             results[int(port)] = False
     return results

@@ -26,6 +26,7 @@ def build_research_template(recipe: Recipe) -> str:
 - Vendor: {recipe.vendor}
 - Model: {recipe.model}
 - Hardware revision: {recipe.hardware_revision}
+- Hardware revision verification: {recipe.hardware_revision_status}
 - Firmware: {recipe.firmware}
 - Firmware string copied exactly from: <!-- local UI page name only -->
 

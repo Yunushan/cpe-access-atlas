@@ -40,6 +40,7 @@ Telekom, Netspeed, Vodafone Net и Millenicom. Наличие провайдер
 |---|---|
 | Провайдер | Türk Telekom |
 | Устройство | ZTE ZXHN H3600P V9 |
+| Аппаратная ревизия | `V9.0` (проверка не завершена) |
 | Прошивка | `H3600P V9.0 TTN.10_260210` |
 | Обычный Web-admin | Поддерживается провайдером |
 | Привилегированный Web-admin | Заблокирован; требуется исследование |
@@ -51,13 +52,14 @@ Telekom, Netspeed, Vodafone Net и Millenicom. Наличие провайдер
 
 ## Быстрый старт
 
-Требуется Python 3.11 или новее:
+Требуется Python 3.11 или новее. Установка также включает валидатор JSON Schema:
 
 ```shell
 python -m pip install -e .
 cpe-atlas providers
 cpe-atlas validate
 cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -67,7 +69,7 @@ cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
 cpe-atlas doctor --host 192.168.1.1
 ```
 
-Команда `apply` в версии 0.1.0 намеренно работает по принципу fail-closed и не
+Команда `apply` в версии 0.2.0 намеренно работает по принципу fail-closed и не
 изменяет устройство для заблокированного рецепта.
 
 ## Безопасность и разрешение

@@ -54,6 +54,7 @@ Bir ISS'nin listede bulunması tüm modemlerinin desteklendiği anlamına gelmez
 |---|---|
 | ISS | Türk Telekom |
 | Cihaz | ZTE ZXHN H3600P V9 |
+| Donanım revizyonu | `V9.0` (doğrulama çözümlenmedi) |
 | Cihaz yazılımı | `H3600P V9.0 TTN.10_260210` |
 | Standart yerel web yöneticisi | ISS tarafından destekleniyor |
 | Ayrıcalıklı web yöneticisi | Engelli; araştırma gerekli |
@@ -65,7 +66,8 @@ Ayrıntılar için [uyumluluk tablosuna](SUPPORT.md) ve
 
 ## Hızlı başlangıç
 
-Python 3.11 veya daha yeni bir sürüm gerekir. Çalışma zamanı bağımlılığı yoktur.
+Python 3.11 veya daha yeni bir sürüm gerekir. Kurulum, katalog şemasını çalışma
+zamanında doğrulamak için JSON Schema doğrulayıcısını da yükler.
 
 ```shell
 python -m pip install -e .
@@ -80,6 +82,7 @@ Tam hedefi sorgulayın:
 cpe-atlas status \
   --isp "Türk Telekom" \
   --model "ZTE H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -89,6 +92,7 @@ Değişiklik yapmayan planı görüntüleyin:
 cpe-atlas plan \
   --isp "turk-telekom" \
   --model "H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -99,7 +103,7 @@ cpe-atlas doctor --host 192.168.1.1
 ```
 
 Yalnızca açıkça belirtilen portları kontrol etmek için `--probe` eklenebilir.
-`apply` komutu 0.1.0 sürümünde kasıtlı olarak kapalıdır; sahiplik onayı verilse
+`apply` komutu 0.2.0 sürümünde kasıtlı olarak kapalıdır; sahiplik onayı verilse
 bile bu engelli tarifte hiçbir değişiklik yapmaz.
 
 ## Erişim terimleri

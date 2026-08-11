@@ -12,11 +12,13 @@ class ReportTests(unittest.TestCase):
         recipe = find_recipe(
             "turk-telekom",
             "H3600P",
+            "V9.0",
             "H3600P V9.0 TTN.10_260210",
         )
         content = build_research_template(recipe)
         self.assertIn(recipe.id, content)
         self.assertIn(recipe.firmware, content)
+        self.assertIn("Hardware revision verification: unresolved", content)
         self.assertIn("Do not paste passwords", content)
         self.assertIn("No configuration backup is attached", content)
 

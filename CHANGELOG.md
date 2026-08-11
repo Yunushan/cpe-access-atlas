@@ -2,6 +2,19 @@
 
 All notable changes are documented here.
 
+## 0.2.0 - 2026-08-11
+
+### Changed
+
+- Exact target lookup now requires ISP, model, hardware revision, and firmware.
+- Hardware revision verification is explicit; unresolved records cannot become
+  verified or stable.
+- Catalog and provider JSON are validated against packaged JSON Schemas.
+- CLI timeout input is finite and bounded; malformed values fail cleanly.
+- Redaction covers JSON-style secrets, bearer tokens, and public IPv6 literals.
+- Added a guarded `cpe-atlas redact` command for sanitizing text before sharing.
+- CI adds linting, coverage enforcement, package builds, and release validation.
+
 ## 0.1.0 - 2026-08-11
 
 ### Added

@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cpe-access-atlas"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Owner-authorized, firmware-aware access research for ISP-provided modems and routers"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "0BSD" }
+license = "0BSD"
+license-files = ["LICENSE"]
 authors = [
   { name = "Yunus ÇOĞAL" }
 ]
@@ -21,9 +22,8 @@ keywords = [
   "right-to-repair"
 ]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Environment :: Console",
-  "License :: OSI Approved :: Zero-Clause BSD (0BSD)",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
@@ -31,7 +31,16 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: System :: Networking"
 ]
-dependencies = []
+dependencies = [
+  "jsonschema>=4.23,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "coverage>=7.6,<8",
+  "ruff>=0.8,<1",
+]
 
 [project.scripts]
 cpe-atlas = "cpe_access_atlas.cli:main"
@@ -40,11 +49,32 @@ cpe-atlas = "cpe_access_atlas.cli:main"
 package-dir = { "" = "src" }
 include-package-data = true
 
+[tool.setuptools.dynamic]
+version = { attr = "cpe_access_atlas.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 cpe_access_atlas = [
   "data/*.json",
-  "data/recipes/*.json"
+  "data/recipes/*.json",
+  "data/schemas/*.json"
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/cpe_access_atlas"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if __name__ == .__main__.:",
+]
+fail_under = 100

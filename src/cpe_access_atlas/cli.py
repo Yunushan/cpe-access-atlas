@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from . import __version__
 from .catalog import (
@@ -17,18 +17,42 @@ from .catalog import (
     load_recipes,
     validate_catalog,
 )
-from .policy import PolicyError, parse_ports, parse_single_private_address, probe_tcp_ports
+from .policy import (
+    PolicyError,
+    parse_ports,
+    parse_single_private_address,
+    parse_timeout,
+    probe_tcp_ports,
+)
+from .redaction import redact_text
 from .report import build_research_template
 
 
 def _recipe_from_args(args: argparse.Namespace) -> Recipe:
-    return find_recipe(args.isp, args.model, args.firmware)
+    return find_recipe(
+        args.isp,
+        args.model,
+        args.hardware_revision,
+        args.firmware,
+    )
 
 
 def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--isp", required=True, help="provider ID or name")
     parser.add_argument("--model", required=True, help="exact device model")
+    parser.add_argument(
+        "--hardware-revision",
+        required=True,
+        help="exact hardware revision recorded in the catalog",
+    )
     parser.add_argument("--firmware", required=True, help="exact firmware string")
+
+
+def _parse_timeout_argument(value: str) -> float:
+    try:
+        return parse_timeout(value)
+    except PolicyError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _recipe_payload(recipe: Recipe) -> dict[str, object]:
@@ -39,6 +63,7 @@ def _recipe_payload(recipe: Recipe) -> dict[str, object]:
         "isp": recipe.isp_name,
         "device": f"{recipe.vendor} {recipe.model}",
         "hardware_revision": recipe.hardware_revision,
+        "hardware_revision_status": recipe.hardware_revision_status,
         "firmware": recipe.firmware,
         "access": recipe.access,
         "capabilities": list(recipe.capabilities),
@@ -90,6 +115,7 @@ def command_status(args: argparse.Namespace) -> int:
     print(f"Confidence: {recipe.confidence}")
     print(f"Target:     {recipe.isp_name} / {recipe.vendor} {recipe.model}")
     print(f"Hardware:   {recipe.hardware_revision}")
+    print(f"Hardware verification: {recipe.hardware_revision_status}")
     print(f"Firmware:   {recipe.firmware} (exact match)")
     print("Access:")
     for level, status in recipe.access.items():
@@ -113,10 +139,10 @@ def command_plan(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
     print(f"Target record: {recipe.id}")
     print(f"Current status: {recipe.status}")
-    if recipe.status in {"blocked", "researching"}:
+    if recipe.status in {"blocked", "researching"} or recipe.hardware_revision_status != "exact":
         print("Decision: STOP")
-        print("Reason: no verified mutation workflow exists for this exact firmware.")
-        print("The project will not substitute a recipe from another firmware.")
+        print("Reason: no verified mutation workflow exists for this exact target.")
+        print("The project will not substitute another hardware revision or firmware.")
         print("Next evidence needed:")
         for item in recipe.next_evidence:
             print(f"  - {item}")
@@ -168,6 +194,28 @@ def command_report_template(args: argparse.Namespace) -> int:
         return 4
     output.write_text(content, encoding="utf-8")
     print(f"Wrote sanitized research template: {output}")
+    return 0
+
+
+def command_redact(args: argparse.Namespace) -> int:
+    value = (
+        Path(args.input).read_text(encoding="utf-8")
+        if args.input
+        else sys.stdin.read()
+    )
+    content = redact_text(value)
+    if not args.output:
+        print(content, end="")
+        return 0
+    output = Path(args.output)
+    if output.exists() and not args.force:
+        print(
+            f"Refused: {output} already exists; use --force to replace it.",
+            file=sys.stderr,
+        )
+        return 4
+    output.write_text(content, encoding="utf-8")
+    print(f"Wrote redacted text: {output}")
     return 0
 
 
@@ -229,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--host", required=True, help="one RFC1918 or IPv6 ULA literal")
     doctor.add_argument("--ports", default="80,443", help="up to eight explicit TCP ports")
     doctor.add_argument("--probe", action="store_true", help="connect to the listed ports")
-    doctor.add_argument("--timeout", type=float, default=1.0)
+    doctor.add_argument("--timeout", type=_parse_timeout_argument, default=1.0)
     doctor.set_defaults(func=command_doctor)
 
     report = subparsers.add_parser(
@@ -241,6 +289,15 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--force", action="store_true")
     report.set_defaults(func=command_report_template)
 
+    redact = subparsers.add_parser(
+        "redact",
+        help="redact common secrets and identifying network data from text",
+    )
+    redact.add_argument("--input", help="input text file; stdin is used when omitted")
+    redact.add_argument("--output")
+    redact.add_argument("--force", action="store_true")
+    redact.set_defaults(func=command_redact)
+
     validate = subparsers.add_parser("validate", help="validate bundled catalog data")
     validate.set_defaults(func=command_validate)
     return parser
@@ -248,12 +305,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code)
     try:
         return int(args.func(args))
     except (CatalogError, PolicyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    except OSError as exc:
+        print(f"ERROR: filesystem operation failed: {exc}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         print("Interrupted; no retry was attempted.", file=sys.stderr)
         return 130

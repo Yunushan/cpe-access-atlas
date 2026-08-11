@@ -24,6 +24,20 @@ class RedactionTests(unittest.TestCase):
         self.assertIn("[REDACTED-PUBLIC-IP]", output)
         self.assertIn("192.168.1.1", output)
 
+    def test_redacts_json_secrets_bearer_tokens_and_public_ipv6(self) -> None:
+        output = redact_text(
+            '{"password":"abc123"} Authorization: Bearer abc.def.ghi '
+            "public=2001:4860:4860::8888 local=fd00::1"
+        )
+        self.assertNotIn("abc123", output)
+        self.assertNotIn("abc.def.ghi", output)
+        self.assertIn("[REDACTED-PUBLIC-IP]", output)
+        self.assertIn("fd00::1", output)
+
+    def test_preserves_non_ip_colon_tokens(self) -> None:
+        output = redact_text("label=ab:cd:ef")
+        self.assertEqual(output, "label=ab:cd:ef")
+
 
 if __name__ == "__main__":
     unittest.main()

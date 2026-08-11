@@ -38,6 +38,7 @@ pas que tous ses appareils sont pris en charge.
 |---|---|
 | FAI | Türk Telekom |
 | Appareil | ZTE ZXHN H3600P V9 |
+| Révision matérielle | `V9.0` (vérification non résolue) |
 | Micrologiciel | `H3600P V9.0 TTN.10_260210` |
 | Administrateur Web standard | Pris en charge par le FAI |
 | Administrateur Web privilégié | Bloqué ; recherche nécessaire |
@@ -49,13 +50,15 @@ Consultez la [compatibilité](SUPPORT.md) et la
 
 ## Démarrage rapide
 
-Python 3.11 ou version ultérieure :
+Python 3.11 ou version ultérieure. L'installation inclut aussi le validateur
+JSON Schema :
 
 ```shell
 python -m pip install -e .
 cpe-atlas providers
 cpe-atlas validate
 cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -65,7 +68,7 @@ Valider une cible privée sans établir de connexion :
 cpe-atlas doctor --host 192.168.1.1
 ```
 
-Dans la version 0.1.0, `apply` est volontairement fermé par défaut et ne
+Dans la version 0.2.0, `apply` est volontairement fermé par défaut et ne
 modifie pas cette cible bloquée.
 
 ## Sécurité et autorisation

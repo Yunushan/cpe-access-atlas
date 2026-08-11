@@ -16,10 +16,10 @@
       "ZTE H3600P",
       "ZTE H3600P V9",
       "ZTE ZXHN H3600P",
-      "ZTE ZXHN H3600P V9",
-      "H3600"
+      "ZTE ZXHN H3600P V9"
     ],
-    "hardware_revision": "V9.0; exact sub-revision must be recorded"
+    "hardware_revision": "V9.0",
+    "hardware_revision_status": "unresolved"
   },
   "firmware": {
     "display": "H3600P V9.0 TTN.10_260210",

@@ -34,7 +34,8 @@ enough.
 Use Python 3.11 or newer:
 
 ```shell
-python -m pip install -e .
+python -m pip install -e ".[dev]"
+python -m ruff check src tests
 python -m unittest discover -s tests -v
 cpe-atlas validate
 ```

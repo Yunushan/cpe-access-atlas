@@ -1,18 +1,25 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
+import runpy
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from cpe_access_atlas.catalog import find_recipe
 from cpe_access_atlas.cli import main
-
 
 TARGET = [
     "--isp",
     "Türk Telekom",
     "--model",
     "ZTE H3600P",
+    "--hardware-revision",
+    "V9.0",
     "--firmware",
     "H3600P V9.0 TTN.10_260210",
 ]
@@ -33,11 +40,57 @@ class CliTests(unittest.TestCase):
         self.assertIn("Status:     blocked", stdout)
         self.assertIn("No device change was attempted", stdout)
 
+    def test_provider_and_recipe_listing_support_text_and_json(self) -> None:
+        code, stdout, stderr = self.run_cli(["providers"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Provider ID", stdout)
+
+        code, stdout, stderr = self.run_cli(["providers", "--json"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn('"turk-telekom"', stdout)
+
+        code, stdout, stderr = self.run_cli(["recipes"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("tr.turk-telekom", stdout)
+
+        code, stdout, stderr = self.run_cli(["recipes", "--json"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn('"hardware_revision"', stdout)
+
+    def test_status_json_and_evidence(self) -> None:
+        code, stdout, stderr = self.run_cli(["status", *TARGET, "--json"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn('"status": "blocked"', stdout)
+
+        code, stdout, stderr = self.run_cli(["evidence", *TARGET])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Official ZTE H3600P product page", stdout)
+
     def test_plan_stops_on_exact_build(self) -> None:
         code, stdout, _ = self.run_cli(["plan", *TARGET])
         self.assertEqual(code, 0)
         self.assertIn("Decision: STOP", stdout)
         self.assertIn("will not substitute", stdout)
+
+    def test_plan_requires_review_for_non_blocked_recipe(self) -> None:
+        recipe = find_recipe(
+            "turk-telekom",
+            "H3600P",
+            "V9.0",
+            "H3600P V9.0 TTN.10_260210",
+        )
+        with patch(
+            "cpe_access_atlas.cli._recipe_from_args",
+            return_value=replace(
+                recipe,
+                status="experimental",
+                blockers=(),
+                hardware_revision_status="exact",
+            ),
+        ):
+            code, stdout, stderr = self.run_cli(["plan", *TARGET])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("REVIEW REQUIRED", stdout)
 
     def test_apply_requires_authorization_and_still_refuses(self) -> None:
         code, _, stderr = self.run_cli(["apply", *TARGET])
@@ -57,10 +110,131 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertIn("Probe disabled", stdout)
 
+    def test_doctor_probe_reports_open_and_closed_ports(self) -> None:
+        with patch(
+            "cpe_access_atlas.cli.probe_tcp_ports",
+            return_value={80: True, 443: False},
+        ) as probe:
+            code, stdout, stderr = self.run_cli(
+                ["doctor", "--host", "192.168.1.1", "--probe"]
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        probe.assert_called_once()
+        self.assertIn("tcp/80: open", stdout)
+        self.assertIn("tcp/443: closed/unreachable", stdout)
+
     def test_public_target_is_rejected(self) -> None:
         code, _, stderr = self.run_cli(["doctor", "--host", "1.1.1.1"])
         self.assertEqual(code, 2)
         self.assertIn("only RFC1918", stderr)
+
+    def test_invalid_probe_timeout_is_a_cli_error(self) -> None:
+        code, stdout, stderr = self.run_cli(
+            ["doctor", "--host", "192.168.1.1", "--probe", "--timeout", "-1"]
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("timeout must be greater than 0", stderr)
+
+    def test_report_template_output_and_force_guard(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "report.md"
+            code, stdout, stderr = self.run_cli(["report-template", *TARGET])
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertIn("Sanitized device research report", stdout)
+
+            args = ["report-template", *TARGET, "--output", str(output)]
+            code, stdout, stderr = self.run_cli(args)
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertTrue(output.exists())
+
+            code, _, stderr = self.run_cli(args)
+            self.assertEqual(code, 4)
+            self.assertIn("already exists", stderr)
+
+            code, stdout, stderr = self.run_cli([*args, "--force"])
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertIn("Wrote sanitized", stdout)
+
+    def test_report_template_filesystem_error_is_controlled(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "missing" / "report.md"
+            code, stdout, stderr = self.run_cli(
+                ["report-template", *TARGET, "--output", str(output)]
+            )
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn("filesystem operation failed", stderr)
+
+    def test_redact_command_supports_stdin_and_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "source.txt"
+            output = Path(directory) / "redacted.txt"
+            source.write_text("password=secret public=8.8.8.8", encoding="utf-8")
+
+            code, stdout, stderr = self.run_cli(["redact", "--input", str(source)])
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertNotIn("secret", stdout)
+            self.assertIn("[REDACTED-PUBLIC-IP]", stdout)
+
+            args = ["redact", "--input", str(source), "--output", str(output)]
+            code, stdout, stderr = self.run_cli(args)
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertTrue(output.exists())
+            self.assertNotIn("secret", output.read_text(encoding="utf-8"))
+
+            code, _, stderr = self.run_cli(args)
+            self.assertEqual(code, 4)
+            self.assertIn("already exists", stderr)
+
+            code, stdout, stderr = self.run_cli([*args, "--force"])
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertIn("Wrote redacted text", stdout)
+
+    def test_status_without_blockers_omits_blocker_section(self) -> None:
+        recipe = find_recipe(
+            "turk-telekom",
+            "H3600P",
+            "V9.0",
+            "H3600P V9.0 TTN.10_260210",
+        )
+        with patch(
+            "cpe_access_atlas.cli._recipe_from_args",
+            return_value=replace(recipe, blockers=()),
+        ):
+            code, stdout, stderr = self.run_cli(["status", *TARGET])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertNotIn("Blockers:", stdout)
+
+    def test_validate_reports_catalog_errors(self) -> None:
+        with patch("cpe_access_atlas.cli.validate_catalog", return_value=["bad record"]):
+            code, stdout, stderr = self.run_cli(["validate"])
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn("ERROR: bad record", stderr)
+
+    def test_validate_success_is_reported(self) -> None:
+        code, stdout, stderr = self.run_cli(["validate"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Catalog validation passed", stdout)
+
+    def test_keyboard_interrupt_is_reported_without_retry(self) -> None:
+        with patch(
+            "cpe_access_atlas.cli.command_validate",
+            side_effect=KeyboardInterrupt,
+        ):
+            code, stdout, stderr = self.run_cli(["validate"])
+        self.assertEqual((code, stdout), (130, ""))
+        self.assertIn("Interrupted; no retry was attempted", stderr)
+
+    def test_version_is_a_successful_parser_exit(self) -> None:
+        code, stdout, stderr = self.run_cli(["--version"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(stdout.strip(), "0.2.0")
+
+    def test_module_entrypoint_propagates_exit_code(self) -> None:
+        with patch("cpe_access_atlas.cli.main", return_value=7):
+            with self.assertRaises(SystemExit) as raised:
+                runpy.run_module("cpe_access_atlas.__main__", run_name="__main__")
+        self.assertEqual(raised.exception.code, 7)
 
 
 if __name__ == "__main__":

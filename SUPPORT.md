@@ -21,6 +21,12 @@ level. Listing a provider does not imply that every device is supported.
 |---|---|---|---|---|
 | Türk Telekom | ZTE H3600P V9 | `H3600P V9.0 TTN.10_260210` | Blocked / researching | Not supported |
 
+The cataloged hardware value for this research record is
+`V9.0`, but its verification status is `unresolved`. Every CLI recipe command
+requires the hardware value explicitly; another revision is rejected rather
+than falling back to the closest record. A recipe cannot become verified or
+stable until its hardware verification status is `exact`.
+
 ### Why it is not marked supported
 
 As of 2026-08-11:

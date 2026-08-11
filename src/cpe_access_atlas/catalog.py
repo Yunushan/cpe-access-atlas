@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from importlib import resources
 import json
 import re
 import unicodedata
-from typing import Any, Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
+from importlib import resources
+from typing import Any
+
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import SchemaError
 
 
 class CatalogError(ValueError):
@@ -29,7 +33,7 @@ class Provider:
     status: str
 
     @classmethod
-    def from_dict(cls, item: dict[str, Any]) -> "Provider":
+    def from_dict(cls, item: dict[str, Any]) -> Provider:
         return cls(
             id=str(item["id"]),
             name=str(item["name"]),
@@ -52,6 +56,7 @@ class Recipe:
     model: str
     model_aliases: tuple[str, ...]
     hardware_revision: str
+    hardware_revision_status: str
     firmware: str
     firmware_match: str
     access: dict[str, str]
@@ -62,7 +67,7 @@ class Recipe:
     last_reviewed: str
 
     @classmethod
-    def from_dict(cls, item: dict[str, Any]) -> "Recipe":
+    def from_dict(cls, item: dict[str, Any]) -> Recipe:
         isp = item["isp"]
         device = item["device"]
         firmware = item["firmware"]
@@ -78,6 +83,7 @@ class Recipe:
             model=str(device["model"]),
             model_aliases=tuple(str(value) for value in device.get("aliases", [])),
             hardware_revision=str(device["hardware_revision"]),
+            hardware_revision_status=str(device["hardware_revision_status"]),
             firmware=str(firmware["display"]),
             firmware_match=str(firmware["match_policy"]),
             access={str(key): str(value) for key, value in item["access"].items()},
@@ -91,7 +97,13 @@ class Recipe:
             last_reviewed=str(item["last_reviewed"]),
         )
 
-    def matches(self, isp: str, model: str, firmware: str) -> bool:
+    def matches(
+        self,
+        isp: str,
+        model: str,
+        hardware_revision: str,
+        firmware: str,
+    ) -> bool:
         isp_values = {normalize(self.isp_id), normalize(self.isp_name)}
         model_values = {
             normalize(self.model),
@@ -101,28 +113,75 @@ class Recipe:
         return (
             normalize(isp) in isp_values
             and normalize(model) in model_values
+            and normalize(hardware_revision) == normalize(self.hardware_revision)
             and normalize(firmware) == normalize(self.firmware)
         )
 
 
 def _load_json(relative_path: str) -> Any:
     data_root = resources.files("cpe_access_atlas").joinpath("data")
-    with data_root.joinpath(relative_path).open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    return _read_json(data_root.joinpath(relative_path), relative_path)
+
+
+def _read_json(resource: Any, label: str) -> Any:
+    try:
+        with resource.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CatalogError(f"invalid catalog JSON in {label}: {exc}") from exc
+
+
+def _load_schema(filename: str) -> dict[str, Any]:
+    schema_root = resources.files("cpe_access_atlas").joinpath("data", "schemas")
+    payload = _read_json(schema_root.joinpath(filename), filename)
+    if not isinstance(payload, dict):
+        raise CatalogError(f"schema {filename} must contain a JSON object")
+    return payload
+
+
+def _validate_payload(payload: Any, schema_filename: str, label: str) -> Any:
+    schema = _load_schema(schema_filename)
+    try:
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+        errors = sorted(validator.iter_errors(payload), key=lambda error: list(error.path))
+    except SchemaError as exc:
+        raise CatalogError(f"invalid bundled schema {schema_filename}: {exc.message}") from exc
+    if errors:
+        details = "; ".join(
+            f"{label} at {'.'.join(str(part) for part in error.path) or '<root>'}: {error.message}"
+            for error in errors[:5]
+        )
+        if len(errors) > 5:
+            details += f"; and {len(errors) - 5} more error(s)"
+        raise CatalogError(details)
+    return payload
 
 
 def load_providers() -> tuple[Provider, ...]:
-    payload = _load_json("providers.json")
+    payload = _validate_payload(
+        _load_json("providers.json"),
+        "providers.schema.json",
+        "providers.json",
+    )
     return tuple(Provider.from_dict(item) for item in payload["providers"])
 
 
 def load_recipes() -> tuple[Recipe, ...]:
     recipe_root = resources.files("cpe_access_atlas").joinpath("data", "recipes")
     recipes: list[Recipe] = []
-    for entry in sorted(recipe_root.iterdir(), key=lambda item: item.name):
+    try:
+        entries = sorted(recipe_root.iterdir(), key=lambda item: item.name)
+    except OSError as exc:
+        raise CatalogError(f"unable to read recipe catalog: {exc}") from exc
+    for entry in entries:
         if entry.name.endswith(".json"):
-            with entry.open("r", encoding="utf-8") as handle:
-                recipes.append(Recipe.from_dict(json.load(handle)))
+            payload = _validate_payload(
+                _read_json(entry, entry.name),
+                "recipe.schema.json",
+                entry.name,
+            )
+            recipes.append(Recipe.from_dict(payload))
     return tuple(recipes)
 
 
@@ -144,16 +203,21 @@ def resolve_provider(value: str, providers: Iterable[Provider] | None = None) ->
     return matches[0]
 
 
-def find_recipe(isp: str, model: str, firmware: str) -> Recipe:
+def find_recipe(
+    isp: str,
+    model: str,
+    hardware_revision: str,
+    firmware: str,
+) -> Recipe:
     provider = resolve_provider(isp)
     matches = [
         recipe
         for recipe in load_recipes()
-        if recipe.matches(provider.id, model, firmware)
+        if recipe.matches(provider.id, model, hardware_revision, firmware)
     ]
     if not matches:
         raise CatalogError(
-            "no exact recipe for the supplied ISP, model, and firmware"
+            "no exact recipe for the supplied ISP, model, hardware revision, and firmware"
         )
     if len(matches) > 1:
         raise CatalogError("multiple exact recipes matched; catalog is invalid")
@@ -162,8 +226,11 @@ def find_recipe(isp: str, model: str, firmware: str) -> Recipe:
 
 def validate_catalog() -> list[str]:
     errors: list[str] = []
-    providers = load_providers()
-    recipes = load_recipes()
+    try:
+        providers = load_providers()
+        recipes = load_recipes()
+    except CatalogError as exc:
+        return [str(exc)]
     provider_ids = [item.id for item in providers]
     recipe_ids = [item.id for item in recipes]
 
@@ -173,16 +240,44 @@ def validate_catalog() -> list[str]:
         errors.append("recipe IDs are not unique")
 
     known_providers = set(provider_ids)
+    provider_by_id = {item.id: item for item in providers}
+    provider_names: dict[str, str] = {}
+    for provider in providers:
+        for value in (provider.id, provider.name, *provider.aliases):
+            key = normalize(value)
+            previous = provider_names.get(key)
+            if previous is not None and previous != provider.id:
+                errors.append(f"provider alias is ambiguous: {value!r}")
+            provider_names[key] = provider.id
+
     valid_statuses = {"researching", "experimental", "verified", "stable", "blocked"}
+    target_keys: set[tuple[str, str, str, str]] = set()
     for recipe in recipes:
         if recipe.schema_version != 1:
             errors.append(f"{recipe.id}: unsupported schema version")
         if recipe.isp_id not in known_providers:
             errors.append(f"{recipe.id}: unknown provider {recipe.isp_id}")
+        elif recipe.isp_name != provider_by_id[recipe.isp_id].name:
+            errors.append(f"{recipe.id}: provider name does not match provider catalog")
         if recipe.status not in valid_statuses:
             errors.append(f"{recipe.id}: invalid status {recipe.status}")
         if recipe.firmware_match != "exact":
             errors.append(f"{recipe.id}: firmware matching must be exact")
         if not recipe.evidence:
             errors.append(f"{recipe.id}: at least one evidence link is required")
+        if recipe.hardware_revision_status != "exact" and recipe.status in {
+            "verified",
+            "stable",
+        }:
+            errors.append(f"{recipe.id}: verified recipes require a resolved hardware revision")
+        target_key = (
+            normalize(recipe.isp_id),
+            normalize(recipe.model),
+            normalize(recipe.hardware_revision),
+            normalize(recipe.firmware),
+        )
+        if target_key in target_keys:
+            errors.append(f"{recipe.id}: duplicate exact target")
+        target_keys.add(target_key)
+
     return errors

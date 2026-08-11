@@ -38,6 +38,7 @@ bedeutet nicht, dass alle seine Geräte unterstützt werden.
 |---|---|
 | Anbieter | Türk Telekom |
 | Gerät | ZTE ZXHN H3600P V9 |
+| Hardware-Revision | `V9.0` (nicht verifiziert) |
 | Firmware | `H3600P V9.0 TTN.10_260210` |
 | Standard-Webadmin | Vom Anbieter unterstützt |
 | Privilegierter Webadmin | Blockiert; Forschung erforderlich |
@@ -49,13 +50,14 @@ Siehe [Kompatibilität](SUPPORT.md) und
 
 ## Schnellstart
 
-Python 3.11 oder neuer:
+Python 3.11 oder neuer. Die Installation enthält auch den JSON-Schema-Validator:
 
 ```shell
 python -m pip install -e .
 cpe-atlas providers
 cpe-atlas validate
 cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -65,7 +67,7 @@ Eine private Zieladresse kann ohne Verbindung geprüft werden:
 cpe-atlas doctor --host 192.168.1.1
 ```
 
-Der Befehl `apply` arbeitet in Version 0.1.0 absichtlich nach dem
+Der Befehl `apply` arbeitet in Version 0.2.0 absichtlich nach dem
 Fail-Closed-Prinzip und ändert bei dieser blockierten Firmware nichts.
 
 ## Sicherheit und Berechtigung

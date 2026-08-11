@@ -62,6 +62,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 |---|---|
 | ISP | Türk Telekom |
 | Device | ZTE ZXHN H3600P V9 |
+| Hardware revision | `V9.0` (verification unresolved) |
 | Firmware | `H3600P V9.0 TTN.10_260210` |
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
@@ -76,8 +77,9 @@ instead of doing something unsafe.
 
 ## Quick start
 
-Requirements: Python 3.11 or newer. The current catalog and safety tooling have
-no third-party runtime dependencies.
+Requirements: Python 3.11 or newer. Installation also installs the pinned
+major-version range of the JSON Schema validator used by the runtime catalog
+validator.
 
 ```shell
 python -m pip install -e .
@@ -92,6 +94,7 @@ Check the exact target:
 cpe-atlas status \
   --isp "Türk Telekom" \
   --model "ZTE H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -101,6 +104,7 @@ Render the decision plan:
 cpe-atlas plan \
   --isp "turk-telekom" \
   --model "H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
@@ -123,11 +127,21 @@ Generate a contribution template:
 cpe-atlas report-template \
   --isp "turk-telekom" \
   --model "H3600P" \
+  --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210" \
   --output h3600p-research.md
 ```
 
-The `apply` command is deliberately fail-closed in version 0.1.0. Even after
+Sanitize a text report before manual review and sharing:
+
+```shell
+cpe-atlas redact --input raw-observations.txt --output sanitized-observations.txt
+```
+
+Redaction is conservative assistance; manually review the output and any
+screenshots, captures, or configuration exports before sharing.
+
+The `apply` command is deliberately fail-closed in version 0.2.0. Even after
 ownership acknowledgement it refuses this blocked recipe and makes no device
 change.
 
@@ -152,6 +166,8 @@ The code enforces these boundaries:
 - no public addresses, hostnames, ranges, CIDRs, or target lists;
 - no LAN discovery, credential retries, brute force, or spraying;
 - exact firmware matching with no fallback to a “similar” recipe;
+- exact hardware-revision matching with no implicit sub-revision fallback;
+- JSON Schema validation plus cross-record catalog consistency checks;
 - no arbitrary commands embedded in recipe data;
 - non-mutating behavior by default;
 - no telemetry.
@@ -164,6 +180,10 @@ Before any future verified mutation:
 4. Establish and test a recovery path.
 5. Keep configuration exports and captures private.
 6. Use a unique password and keep WAN-side administration disabled.
+
+The report redactor is conservative assistance, not a proof of sanitization.
+Manually review every report, screenshot, capture, and exported text before
+sharing it.
 
 Modifying ISP-provided equipment can break connectivity, VoIP, IPTV, updates,
 remote support, warranty coverage, or contractual terms. Rented or loaned
