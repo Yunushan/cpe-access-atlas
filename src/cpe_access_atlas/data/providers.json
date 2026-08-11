@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "country": "TR",
+  "providers": [
+    {
+      "id": "turknet",
+      "name": "TurkNet",
+      "aliases": ["Turk Net"],
+      "country": "TR",
+      "status": "cataloged"
+    },
+    {
+      "id": "turkcell-superonline",
+      "name": "Turkcell Superonline",
+      "aliases": ["Superonline", "SOL"],
+      "country": "TR",
+      "status": "cataloged"
+    },
+    {
+      "id": "turksat-kablonet",
+      "name": "Türksat Kablonet",
+      "aliases": ["Kablonet", "Turksat Kablonet"],
+      "country": "TR",
+      "status": "cataloged"
+    },
+    {
+      "id": "turk-telekom",
+      "name": "Türk Telekom",
+      "aliases": ["Turk Telekom", "TT", "TTNET"],
+      "country": "TR",
+      "status": "researching"
+    },
+    {
+      "id": "netspeed",
+      "name": "Netspeed",
+      "aliases": ["Net Speed"],
+      "country": "TR",
+      "status": "cataloged"
+    },
+    {
+      "id": "vodafone-net",
+      "name": "Vodafone Net",
+      "aliases": ["Vodafone Evde İnternet", "Vodafone Turkey"],
+      "country": "TR",
+      "status": "cataloged"
+    },
+    {
+      "id": "millenicom",
+      "name": "Millenicom",
+      "aliases": ["Milleni"],
+      "country": "TR",
+      "status": "cataloged"
+    }
+  ]
+}

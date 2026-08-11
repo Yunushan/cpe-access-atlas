@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e .
+      - name: Compile
+        run: python -m compileall -q src
+      - name: Test
+        run: python -m unittest discover -s tests -v
+      - name: Validate catalog
+        run: cpe-atlas validate
+      - name: Smoke test exact target
+        run: >-
+          cpe-atlas status
+          --isp "Türk Telekom"
+          --model "ZTE H3600P"
+          --firmware "H3600P V9.0 TTN.10_260210"

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/cpe-access-atlas/recipe.schema.json",
+  "title": "CPE Access Atlas recipe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "country",
+    "status",
+    "confidence",
+    "isp",
+    "device",
+    "firmware",
+    "access",
+    "capabilities",
+    "blockers",
+    "evidence",
+    "next_evidence",
+    "last_reviewed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]+$"
+    },
+    "country": {
+      "const": "TR"
+    },
+    "status": {
+      "enum": ["researching", "experimental", "verified", "stable", "blocked"]
+    },
+    "confidence": {
+      "enum": ["low", "medium", "high"]
+    },
+    "isp": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"}
+      }
+    },
+    "device": {
+      "type": "object",
+      "required": ["vendor", "model", "aliases", "hardware_revision"],
+      "additionalProperties": false,
+      "properties": {
+        "vendor": {"type": "string"},
+        "model": {"type": "string"},
+        "aliases": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "hardware_revision": {"type": "string"}
+      }
+    },
+    "firmware": {
+      "type": "object",
+      "required": ["display", "match_policy"],
+      "additionalProperties": false,
+      "properties": {
+        "display": {"type": "string"},
+        "match_policy": {"const": "exact"}
+      }
+    },
+    "access": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string"}
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "blockers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["title", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "title": {"type": "string"},
+          "url": {"type": "string", "format": "uri"}
+        }
+      }
+    },
+    "next_evidence": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "last_reviewed": {
+      "type": "string",
+      "format": "date"
+    }
+  }
+}

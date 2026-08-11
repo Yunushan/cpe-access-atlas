@@ -1,0 +1,70 @@
+name: Device support research
+description: Propose an exact ISP, device, hardware, and firmware record
+title: "[Device]: "
+labels: ["device-research"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach configuration backups, firmware, packet captures, passwords,
+        cookies, certificates, serial numbers, MAC addresses, public IPs, or
+        subscriber identifiers.
+  - type: checkboxes
+    id: authorization
+    attributes:
+      label: Authorization
+      options:
+        - label: I own this device or have explicit authorization to administer it.
+          required: true
+        - label: I removed all secrets and subscriber/device identifiers.
+          required: true
+  - type: input
+    id: isp
+    attributes:
+      label: ISP
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Exact vendor and model
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Exact hardware revision
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Exact firmware string
+    validations:
+      required: true
+  - type: dropdown
+    id: access_level
+    attributes:
+      label: Access level being researched
+      options:
+        - Privileged web administrator
+        - Local shell
+        - Root shell (UID 0)
+        - Bootloader
+        - Configuration recovery
+    validations:
+      required: true
+  - type: textarea
+    id: observations
+    attributes:
+      label: Sanitized observations
+      description: Describe behavior without sharing credentials or private files.
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Recovery and rollback
+      description: Explain what was tested without exposing configuration data.
+    validations:
+      required: true
