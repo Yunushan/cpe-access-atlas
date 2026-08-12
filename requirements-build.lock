@@ -1,2 +1,2 @@
 # Generated from pyproject.toml build-system requirements on 2026-08-12.
-setuptools==82.0.1
+setuptools==84.0.0

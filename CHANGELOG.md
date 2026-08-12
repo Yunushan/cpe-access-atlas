@@ -32,6 +32,9 @@ All notable changes are documented here.
   dependencies before installing wheel and source-distribution artifacts.
 - Made dependency audits strict, rejected moderate-or-higher dependency-review
   findings, and rejected lightweight release tags.
+- Updated the pinned setuptools build backend to 84.0.0 across packaging and
+  every CI, release, and security lock file after the security audit identified
+  the vulnerable 82.0.1 pin.
 - Added weekly Dependabot configuration for Python and GitHub Actions, plus
   dependency-consistency checks to every CI test job.
 - Added release changelog-entry enforcement, explicit strict SBOM auditing,
