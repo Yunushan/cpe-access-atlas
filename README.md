@@ -67,7 +67,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
 | Linux root shell | Not supported |
-| Last evidence review | 2026-08-11 |
+| Last evidence review | 2026-08-12 |
 
 Public community evidence says the older provisioning interception workflow
 does not work on this build. No official firmware image, safe downgrade path,
@@ -140,6 +140,22 @@ cpe-atlas redact --input raw-observations.txt --output sanitized-observations.tx
 
 Redaction is conservative assistance; manually review the output and any
 screenshots, captures, or configuration exports before sharing.
+
+Inspect a private firmware artifact without executing or changing it:
+
+```shell
+cpe-atlas firmware-inspect \
+  --input firmware.bin \
+  --expected-version "H3600P V9.0 TTN.10_260210" \
+  --json
+```
+
+This records a SHA-256 hash and scans opaque bytes for the exact build string
+and common image markers. It does not prove that an image is flashable,
+unsigned, recoverable, or safe to modify, and no proprietary firmware belongs
+in this repository or a public issue. If a hash was recorded separately, pass
+it with `--expected-sha256` to verify artifact identity; a mismatch returns a
+nonzero exit code.
 
 The `apply` command is deliberately fail-closed in version 0.2.0. Even after
 ownership acknowledgement it refuses this blocked recipe and makes no device
@@ -220,6 +236,10 @@ identifiers.
 Security-sensitive firmware findings should not be placed in a public issue.
 See [SECURITY.md](SECURITY.md).
 
+Repository administrators should apply the [GitHub production settings
+checklist](docs/github-production-settings.md) before declaring a release
+production-ready.
+
 ## Research sources
 
 - [Official ZTE H3600P product page](https://www.zte.com.cn/global/product_index/smart_home_en/home_router/zxhn-h3600p/zxhn-h3600p.html)
@@ -228,6 +248,7 @@ See [SECURITY.md](SECURITY.md).
 - [July 2026 patched-method report](https://techolay.net/sosyal/konu/zte-zxhn-h3600p-v9-routerda-root-erisimi-nasil-alinir.204807/)
 - [Open H3600P configuration-decoding request](https://github.com/mkst/zte-config-utility/issues/137)
 - [Firmware-specific Digi H3600P research](https://orca.pet/zteh3600p/)
+- [Official Türk Telekom H3600P user manual](https://www.turktelekom.com.tr/tt-destek/Documents/zte-h3600p-fiber-modem-ullanim-kilavuzu.pdf)
 
 See the full [exact-build research note](docs/research/zte-h3600p-ttn10-260210.md).
 

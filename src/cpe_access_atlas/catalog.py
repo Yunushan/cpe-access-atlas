@@ -20,6 +20,8 @@ class CatalogError(ValueError):
 
 
 def normalize(value: str) -> str:
+    if not isinstance(value, str):
+        raise CatalogError("catalog lookup values must be strings")
     value = unicodedata.normalize("NFKC", value)
     return re.sub(r"\s+", " ", value).strip().casefold()
 

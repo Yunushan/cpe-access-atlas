@@ -29,7 +29,7 @@ stable until its hardware verification status is `exact`.
 
 ### Why it is not marked supported
 
-As of 2026-08-11:
+As of 2026-08-12:
 
 - the archived community tool states that newer firmware is unsupported and
   limits its working range to older builds;
@@ -39,6 +39,8 @@ As of 2026-08-11:
   update;
 - no reproducible method with backup and rollback evidence was found for this
   exact firmware.
+- a newer H3600P guide found during review documents `TTN.8_250626`, not
+  `TTN.10_260210`.
 
 Relevant public evidence:
 
@@ -47,6 +49,7 @@ Relevant public evidence:
 - [July 2026 patched-method report](https://techolay.net/sosyal/konu/zte-zxhn-h3600p-v9-routerda-root-erisimi-nasil-alinir.204807/)
 - [Open H3600P configuration-support request](https://github.com/mkst/zte-config-utility/issues/137)
 - [Official ZTE H3600P product page](https://www.zte.com.cn/global/product_index/smart_home_en/home_router/zxhn-h3600p/zxhn-h3600p.html)
+- [Official Türk Telekom H3600P user manual](https://www.turktelekom.com.tr/tt-destek/Documents/zte-h3600p-fiber-modem-ullanim-kilavuzu.pdf)
 
 The CLI deliberately stops on this build. It does not silently run an older
 recipe, downgrade firmware, guess credentials, or claim success based on a

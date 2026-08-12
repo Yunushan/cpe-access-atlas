@@ -7,8 +7,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -17,16 +22,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "26"
-      - name: Verify Node.js
-        run: node --version
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install -r requirements-ci.lock
+          python -m pip install -e . --no-deps --no-build-isolation
+      - name: Check installed dependency consistency
+        run: python -m pip check
       - name: Lint
         run: python -m ruff check src tests
       - name: Compile
@@ -46,23 +52,33 @@ jobs:
           --firmware "H3600P V9.0 TTN.10_260210"
 
   package-smoke:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "26"
-      - name: Verify Node.js
-        run: node --version
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Install build tooling
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install -r requirements-ci.lock
+          python -m pip install -e . --no-deps --no-build-isolation
       - name: Build distributions
         run: python -m build --wheel --sdist
       - name: Install wheel in a clean virtual environment
         run: |
-          python -m venv "$RUNNER_TEMP/package-smoke"
-          "$RUNNER_TEMP/package-smoke/bin/python" -m pip install dist/*.whl
-          "$RUNNER_TEMP/package-smoke/bin/cpe-atlas" validate
+          python -m venv "$RUNNER_TEMP/package-smoke-wheel"
+          "$RUNNER_TEMP/package-smoke-wheel/bin/python" -m pip install -r requirements-runtime.lock
+          "$RUNNER_TEMP/package-smoke-wheel/bin/python" -m pip install --no-deps dist/*.whl
+          "$RUNNER_TEMP/package-smoke-wheel/bin/python" -m pip check
+          "$RUNNER_TEMP/package-smoke-wheel/bin/cpe-atlas" validate
+      - name: Install sdist in a clean virtual environment
+        run: |
+          python -m venv "$RUNNER_TEMP/package-smoke-sdist"
+          "$RUNNER_TEMP/package-smoke-sdist/bin/python" -m pip install -r requirements-runtime.lock
+          "$RUNNER_TEMP/package-smoke-sdist/bin/python" -m pip install -r requirements-build.lock
+          "$RUNNER_TEMP/package-smoke-sdist/bin/python" -m pip install --no-deps --no-build-isolation dist/*.tar.gz
+          "$RUNNER_TEMP/package-smoke-sdist/bin/python" -m pip check
+          "$RUNNER_TEMP/package-smoke-sdist/bin/cpe-atlas" validate

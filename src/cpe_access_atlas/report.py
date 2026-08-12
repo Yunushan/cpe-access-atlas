@@ -29,6 +29,10 @@ def build_research_template(recipe: Recipe) -> str:
 - Hardware revision verification: {recipe.hardware_revision_status}
 - Firmware: {recipe.firmware}
 - Firmware string copied exactly from: <!-- local UI page name only -->
+- Private firmware artifact inspected: <!-- yes/no/not available -->
+- Private artifact SHA-256: <!-- keep the image private; record hash only -->
+- Exact build string found in artifact: <!-- yes/no/not available -->
+- Recognized image markers: <!-- high-level names only; no extracted files -->
 
 ## Non-secret observations
 

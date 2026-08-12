@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
+import hashlib
+import json
 import runpy
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -189,6 +191,82 @@ class CliTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli([*args, "--force"])
             self.assertEqual((code, stderr), (0, ""))
             self.assertIn("Wrote redacted text", stdout)
+
+    def test_redact_rejects_invalid_text_encoding_cleanly(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "invalid.txt"
+            source.write_bytes(b"password=\xff")
+            code, stdout, stderr = self.run_cli(["redact", "--input", str(source)])
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn("text encoding failed", stderr)
+
+    def test_firmware_inspection_supports_text_json_and_exact_mismatch(self) -> None:
+        version = "H3600P V9.0 TTN.10_260210"
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "firmware.bin"
+            artifact.write_bytes(b"header\x27\x05\x19\x56" + version.encode("ascii"))
+
+            code, stdout, stderr = self.run_cli(
+                ["firmware-inspect", "--input", str(artifact)]
+            )
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertIn("Exact build match: not checked", stdout)
+            self.assertIn("No firmware code was executed or modified", stdout)
+
+            code, stdout, stderr = self.run_cli(
+                [
+                    "firmware-inspect",
+                    "--input",
+                    str(artifact),
+                    "--expected-version",
+                    version,
+                    "--expected-sha256",
+                    hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                    "--json",
+                ]
+            )
+            self.assertEqual((code, stderr), (0, ""))
+            result = json.loads(stdout)
+            self.assertTrue(result["exact_build_match"])
+            self.assertTrue(result["sha256_match"])
+
+            code, stdout, stderr = self.run_cli(
+                [
+                    "firmware-inspect",
+                    "--input",
+                    str(artifact),
+                    "--expected-version",
+                    "H3600P V9.0 TTN.9_250626",
+                    "--expected-sha256",
+                    hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr, "")
+            self.assertIn("Exact build match: no", stdout)
+            self.assertIn("SHA-256 match:     yes", stdout)
+
+            code, stdout, stderr = self.run_cli(
+                [
+                    "firmware-inspect",
+                    "--input",
+                    str(artifact),
+                    "--expected-version",
+                    version,
+                    "--expected-sha256",
+                    "0" * 64,
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr, "")
+            self.assertIn("SHA-256 match:     no", stdout)
+
+    def test_firmware_inspection_errors_are_controlled(self) -> None:
+        code, stdout, stderr = self.run_cli(
+            ["firmware-inspect", "--input", "does-not-exist.bin"]
+        )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("firmware artifact does not exist", stderr)
 
     def test_status_without_blockers_omits_blocker_section(self) -> None:
         recipe = find_recipe(

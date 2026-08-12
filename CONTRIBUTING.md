@@ -34,11 +34,23 @@ enough.
 Use Python 3.11 or newer:
 
 ```shell
-python -m pip install -e ".[dev]"
+python -m pip install -r requirements-ci.lock
+python -m pip install -e . --no-deps --no-build-isolation
 python -m ruff check src tests
-python -m unittest discover -s tests -v
+python -m coverage run -m unittest discover -s tests -v
+python -m coverage report -m
 cpe-atlas validate
 ```
+
+The CI, security, release, runtime-SBOM, and artifact-build environments use the
+committed lock files. When updating tooling or runtime dependencies, regenerate
+the relevant lock file from a clean Python 3.14 environment, run the full
+validation suite, and record the reason in the pull request. Dependabot is
+configured to propose updates for these files.
+
+For a release candidate, use `requirements-release.lock`, build both wheel and
+sdist artifacts, run `python -m twine check dist/*`, and install each artifact
+in a clean virtual environment before tagging.
 
 All contributions are licensed under 0BSD. Add SPDX identifiers to new source
 files and sign off commits with the Developer Certificate of Origin:

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools==82.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -35,6 +35,12 @@ classifiers = [
 dependencies = [
   "jsonschema>=4.23,<5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Yunushan/cpe-access-atlas"
+Repository = "https://github.com/Yunushan/cpe-access-atlas"
+Issues = "https://github.com/Yunushan/cpe-access-atlas/issues"
+Changelog = "https://github.com/Yunushan/cpe-access-atlas/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

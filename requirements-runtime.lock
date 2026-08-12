@@ -1,0 +1,8 @@
+# Generated from the runtime dependency set on 2026-08-12.
+# The application package is installed separately; this file contains its
+# transitive runtime dependencies for reproducible audits and SBOM generation.
+attrs==26.1.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==2026.6.3

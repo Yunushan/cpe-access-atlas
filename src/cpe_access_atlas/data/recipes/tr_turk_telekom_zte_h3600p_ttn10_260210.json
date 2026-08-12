@@ -41,12 +41,18 @@
     "No public, reproducible privileged-access workflow is verified on this exact firmware.",
     "Community reports state that the older WAN-side TR-069/DHCP method is patched.",
     "H3600P configuration backup decoding remains unresolved in the referenced utility.",
-    "No official public downgrade image or recovery-tested downgrade path was found."
+    "No official public downgrade image or recovery-tested downgrade path was found.",
+    "The newer H3600P guide found during review identifies TTN.8_250626, not this TTN.10 build.",
+    "The available guide relies on an unverified third-party VM and provides no exact-build artifact hash or recovery proof."
   ],
   "evidence": [
     {
       "title": "Official ZTE H3600P product page",
       "url": "https://www.zte.com.cn/global/product_index/smart_home_en/home_router/zxhn-h3600p/zxhn-h3600p.html"
+    },
+    {
+      "title": "Official Türk Telekom H3600P user manual",
+      "url": "https://www.turktelekom.com.tr/tt-destek/Documents/zte-h3600p-fiber-modem-ullanim-kilavuzu.pdf"
     },
     {
       "title": "Archived h3600-root project and newer-firmware limitation",
@@ -59,6 +65,10 @@
     {
       "title": "July 2026 community report that the recent method was patched",
       "url": "https://techolay.net/sosyal/konu/zte-zxhn-h3600p-v9-routerda-root-erisimi-nasil-alinir.204807/"
+    },
+    {
+      "title": "H3600P guide documenting a different TTN.8_250626 build",
+      "url": "https://techolay.net/sosyal/konu/turk-telekom-superonline-icin-zte-h3600p-nasil-rootlanir.181032/"
     },
     {
       "title": "Exact-build community request awaiting a method",
@@ -76,9 +86,11 @@
   "next_evidence": [
     "Authorized physical-device validation on the exact hardware revision and firmware.",
     "Exact local UI firmware string and non-secret page behavior after factory reset.",
+    "Private SHA-256 hash and offline inspection of an exact TTN.10_260210 firmware artifact, if available.",
+    "An exact-build parameter inventory showing whether the reported access-control paths exist.",
     "A recovery path tested before and after any privileged-access experiment.",
     "Sanitized protocol metadata proving the requested change and a separate login verification.",
     "Independent reproduction that preserves Internet, IPTV, VoIP, and WAN-management safety."
   ],
-  "last_reviewed": "2026-08-11"
+  "last_reviewed": "2026-08-12"
 }

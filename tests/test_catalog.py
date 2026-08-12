@@ -60,6 +60,12 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(recipe.id, "tr.turk-telekom.zte.h3600p.h3600p-v9-ttn10-260210")
         self.assertEqual(normalize("A\u00a0B"), "a b")
 
+    def test_non_string_lookup_values_are_controlled_errors(self) -> None:
+        with self.assertRaises(CatalogError):
+            normalize(None)  # type: ignore[arg-type]
+        with self.assertRaises(CatalogError):
+            resolve_provider(None)  # type: ignore[arg-type]
+
     def test_firmware_fallback_is_forbidden(self) -> None:
         with self.assertRaises(CatalogError):
             find_recipe(
@@ -112,6 +118,13 @@ class CatalogTests(unittest.TestCase):
         with patch.object(catalog, "_load_schema", return_value={"type": {"bad": 1}}):
             with self.assertRaises(CatalogError):
                 catalog._validate_payload({}, "broken.schema.json", "fixture")
+
+        payload = catalog._load_json(
+            "recipes/tr_turk_telekom_zte_h3600p_ttn10_260210.json"
+        )
+        payload["evidence"][0]["url"] = "http://example.test/insecure"
+        with self.assertRaises(CatalogError):
+            catalog._validate_payload(payload, "recipe.schema.json", "fixture")
 
     def test_catalog_loader_reports_json_and_schema_errors(self) -> None:
         class BrokenResource:

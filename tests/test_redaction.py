@@ -34,6 +34,28 @@ class RedactionTests(unittest.TestCase):
         self.assertIn("[REDACTED-PUBLIC-IP]", output)
         self.assertIn("fd00::1", output)
 
+    def test_redacts_quoted_secrets_and_auth_headers(self) -> None:
+        output = redact_text(
+            'password="my secret phrase" '
+            "api-key='key with spaces' "
+            "X-API-Key: abc123 "
+            "Authorization: Basic dXNlcjpwYXNz\n"
+            'Authorization: "Basic quoted-secret"'
+        )
+        self.assertNotIn("my secret phrase", output)
+        self.assertNotIn("key with spaces", output)
+        self.assertNotIn("abc123", output)
+        self.assertNotIn("dXNlcjpwYXNz", output)
+        self.assertNotIn("quoted-secret", output)
+        self.assertEqual(output.count("[REDACTED]"), 5)
+
+    def test_redacts_nonstandard_authorization_headers(self) -> None:
+        output = redact_text(
+            'Authorization: Digest username="alice", nonce="sensitive-value"\n'
+        )
+        self.assertNotIn("sensitive-value", output)
+        self.assertIn("Authorization: [REDACTED]", output)
+
     def test_preserves_non_ip_colon_tokens(self) -> None:
         output = redact_text("label=ab:cd:ef")
         self.assertEqual(output, "label=ab:cd:ef")

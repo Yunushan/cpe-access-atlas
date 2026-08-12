@@ -1,4 +1,6 @@
 include CHANGELOG.md CONTRIBUTING.md LEGAL.md LICENSE README*.md SECURITY.md SUPPORT.md
+include requirements-build.lock requirements-ci.lock requirements-release.lock requirements-runtime.lock requirements-security.lock
+include .github/CODEOWNERS .github/dependabot.yml .github/pull_request_template.md .github/ISSUE_TEMPLATE/config.yml
 recursive-include .github *.yml
 recursive-include docs *.md
 recursive-include schemas *.json

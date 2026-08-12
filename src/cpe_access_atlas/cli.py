@@ -17,6 +17,7 @@ from .catalog import (
     load_recipes,
     validate_catalog,
 )
+from .firmware import FirmwareInspectionError, inspect_firmware
 from .policy import (
     PolicyError,
     parse_ports,
@@ -219,6 +220,50 @@ def command_redact(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_firmware_inspect(args: argparse.Namespace) -> int:
+    inspection = inspect_firmware(
+        args.input,
+        args.expected_version,
+        args.expected_sha256,
+    )
+    payload = {
+        "path": inspection.path,
+        "size": inspection.size,
+        "sha256": inspection.sha256,
+        "version_strings": list(inspection.version_strings),
+        "markers": list(inspection.markers),
+        "expected_version": inspection.expected_version,
+        "exact_build_match": inspection.exact_build_match,
+        "expected_sha256": inspection.expected_sha256,
+        "sha256_match": inspection.sha256_match,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"Artifact:       {inspection.path}")
+        print(f"Size:           {inspection.size} bytes")
+        print(f"SHA-256:        {inspection.sha256}")
+        print(
+            "Version strings: "
+            + (", ".join(inspection.version_strings) or "none detected")
+        )
+        print("Markers:        " + (", ".join(inspection.markers) or "none detected"))
+        version_match_label = {
+            None: "not checked",
+            True: "yes",
+            False: "no",
+        }[inspection.exact_build_match]
+        sha256_match_label = {
+            None: "not checked",
+            True: "yes",
+            False: "no",
+        }[inspection.sha256_match]
+        print(f"Exact build match: {version_match_label}")
+        print(f"SHA-256 match:     {sha256_match_label}")
+        print("No firmware code was executed or modified.")
+    return int(False in {inspection.exact_build_match, inspection.sha256_match})
+
+
 def command_validate(args: argparse.Namespace) -> int:
     del args
     errors = validate_catalog()
@@ -298,6 +343,19 @@ def build_parser() -> argparse.ArgumentParser:
     redact.add_argument("--force", action="store_true")
     redact.set_defaults(func=command_redact)
 
+    firmware = subparsers.add_parser(
+        "firmware-inspect",
+        help="hash and scan one private firmware artifact without modifying it",
+    )
+    firmware.add_argument("--input", required=True, help="path to a private firmware artifact")
+    firmware.add_argument("--expected-version", help="exact firmware string to check")
+    firmware.add_argument(
+        "--expected-sha256",
+        help="expected SHA-256 hash of the private artifact (64 hexadecimal characters)",
+    )
+    firmware.add_argument("--json", action="store_true")
+    firmware.set_defaults(func=command_firmware_inspect)
+
     validate = subparsers.add_parser("validate", help="validate bundled catalog data")
     validate.set_defaults(func=command_validate)
     return parser
@@ -311,11 +369,14 @@ def main(argv: list[str] | None = None) -> int:
         return int(exc.code)
     try:
         return int(args.func(args))
-    except (CatalogError, PolicyError) as exc:
+    except (CatalogError, FirmwareInspectionError, PolicyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:
         print(f"ERROR: filesystem operation failed: {exc}", file=sys.stderr)
+        return 1
+    except UnicodeError as exc:
+        print(f"ERROR: text encoding failed: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("Interrupted; no retry was attempted.", file=sys.stderr)

@@ -7,27 +7,42 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dependency-audit:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "26"
-      - name: Verify Node.js
-        run: node --version
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Create isolated audit environment
         run: |
           python -m venv "$RUNNER_TEMP/security-venv"
-          "$RUNNER_TEMP/security-venv/bin/python" -m pip install -e .
-          "$RUNNER_TEMP/security-venv/bin/python" -m pip install "pip-audit>=2.7,<3"
+          "$RUNNER_TEMP/security-venv/bin/python" -m pip install -r requirements-security.lock
+          "$RUNNER_TEMP/security-venv/bin/python" -m pip install -e . --no-deps --no-build-isolation
       - name: Check installed dependency consistency
         run: |
           "$RUNNER_TEMP/security-venv/bin/python" -m pip check
       - name: Audit dependencies
         run: |
-          "$RUNNER_TEMP/security-venv/bin/pip-audit" --local
+          "$RUNNER_TEMP/security-venv/bin/pip-audit" --local --strict
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
