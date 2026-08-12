@@ -32,7 +32,9 @@ jobs:
           "$RUNNER_TEMP/security-venv/bin/python" -m pip check
       - name: Audit dependencies
         run: |
-          "$RUNNER_TEMP/security-venv/bin/pip-audit" --local --strict
+          "$RUNNER_TEMP/security-venv/bin/pip-audit" \
+            -r requirements-security.lock \
+            --strict
 
   dependency-review:
     if: github.event_name == 'pull_request'

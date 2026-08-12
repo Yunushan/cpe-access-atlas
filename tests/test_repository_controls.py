@@ -37,6 +37,14 @@ class RepositoryControlTests(unittest.TestCase):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("python -m pip check", ci)
 
+    def test_security_audits_locked_dependencies_without_local_project(self) -> None:
+        security = (ROOT / ".github" / "workflows" / "security.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-r requirements-security.lock", security)
+        self.assertIn("--strict", security)
+        self.assertNotIn("--local", security)
+
     def test_release_contains_required_safety_gates(self) -> None:
         release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
@@ -48,9 +56,17 @@ class RepositoryControlTests(unittest.TestCase):
             "Verify tag is on main",
             "-m pip_audit",
             "actions/attest-build-provenance@",
+            "name: release",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, release)
+
+    def test_production_settings_document_external_security_prerequisites(self) -> None:
+        settings = (ROOT / "docs" / "github-production-settings.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Dependency graph", settings)
+        self.assertIn("release` environment", settings)
 
     def test_source_distribution_manifest_includes_governance_config(self) -> None:
         manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")

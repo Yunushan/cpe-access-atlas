@@ -36,6 +36,10 @@ All notable changes are documented here.
   dependency-consistency checks to every CI test job.
 - Added release changelog-entry enforcement, explicit strict SBOM auditing,
   and boolean-timeout rejection for direct library callers.
+- Corrected the security workflow to audit the locked dependency set instead of
+  treating the unpublished local project as a PyPI dependency.
+- Added a protected `release` environment requirement and documented the
+  Dependency Graph prerequisite for pull-request dependency review.
 - Added regression tests that protect pinned workflow actions, dependency
   update configuration, CI consistency checks, and release safety gates.
 - Added a read-only `firmware-inspect` command that hashes private artifacts,
