@@ -35,12 +35,13 @@
     "exact-target-status",
     "single-private-target-validation",
     "non-mutating-port-check",
-    "sanitized-research-report"
+    "sanitized-research-report",
+    "offline-private-config-codec"
   ],
   "blockers": [
     "No public, reproducible privileged-access workflow is verified on this exact firmware.",
     "Community reports state that the older WAN-side TR-069/DHCP method is patched.",
-    "H3600P configuration backup decoding remains unresolved in the referenced utility.",
+    "The offline codec is experimental; exact TTN.10 field semantics, encryption inputs, firmware acceptance, and recovery remain unverified.",
     "No official public downgrade image or recovery-tested downgrade path was found.",
     "The newer H3600P guide found during review identifies TTN.8_250626, not this TTN.10 build.",
     "The available guide relies on an unverified third-party VM and provides no exact-build artifact hash or recovery proof."

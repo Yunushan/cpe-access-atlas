@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 from pathlib import Path
@@ -17,6 +18,16 @@ from .catalog import (
     load_recipes,
     validate_catalog,
 )
+from .config import (
+    H3600P_SIGNATURE,
+    ConfigError,
+    decode_config,
+    default_root_xml,
+    encode_config,
+    inspect_config,
+    patch_root_ssh,
+    read_private_config,
+)
 from .firmware import FirmwareInspectionError, inspect_firmware
 from .policy import (
     PolicyError,
@@ -25,6 +36,7 @@ from .policy import (
     parse_timeout,
     probe_tcp_ports,
 )
+from .private_files import write_private_bytes, write_private_text
 from .redaction import redact_text
 from .report import build_research_template
 
@@ -169,6 +181,142 @@ def command_apply(args: argparse.Namespace) -> int:
     return 3
 
 
+def _read_secret(
+    args: argparse.Namespace,
+    stdin_name: str,
+    prompt: str,
+    label: str,
+) -> str:
+    if getattr(args, stdin_name, False):
+        value = sys.stdin.readline().rstrip("\r\n")
+    else:
+        value = getpass.getpass(prompt)
+    if not value:
+        raise ConfigError(f"{label} must not be empty")
+    return value
+
+
+def command_config_generate(args: argparse.Namespace) -> int:
+    recipe = _recipe_from_args(args)
+    if not args.i_own_or_administer_this_device:
+        print(
+            "Refused: explicit ownership/authorization acknowledgement is required.",
+            file=sys.stderr,
+        )
+        return 3
+
+    output = Path(args.output)
+    if output.exists() and not args.force:
+        print(
+            "Refused: output artifact already exists; use --force to replace it.",
+            file=sys.stderr,
+        )
+        return 4
+
+    source_label = "minimal offline template"
+    device_key: str | None = None
+    private_config: bytes | None = None
+    private_config_encrypted = False
+    source_xml: bytes | None
+    if args.input_config:
+        source_label = "private configuration baseline"
+        private_config = read_private_config(args.input_config)
+        private_config_encrypted = inspect_config(private_config).encrypted
+        if private_config_encrypted:
+            if not args.serial or not args.mac:
+                raise ConfigError(
+                    "encrypted input requires --serial and --mac for local decryption"
+                )
+        source_xml = None
+    elif args.input_xml:
+        source_label = "private XML baseline"
+        try:
+            source_xml = Path(args.input_xml).read_bytes()
+        except OSError as exc:
+            raise ConfigError("unable to read XML baseline") from exc
+    else:
+        source_xml = None
+
+    encrypted_output = args.encrypted or (
+        private_config_encrypted and not args.allow_unencrypted
+    )
+    if not encrypted_output and not args.allow_unencrypted:
+        raise ConfigError(
+            "unencrypted output requires explicit --allow-unencrypted acknowledgement"
+        )
+    if encrypted_output:
+        if not args.serial or not args.mac:
+            raise ConfigError("encrypted output requires --serial and --mac")
+
+    ssh_password = _read_secret(
+        args,
+        "ssh_password_stdin",
+        "SSH password to write into the private artifact: ",
+        "SSH password",
+    )
+    if private_config is not None:
+        if private_config_encrypted:
+            device_key = _read_secret(
+                args,
+                "device_key_stdin",
+                "H3600P device encryption passphrase: ",
+                "H3600P device encryption passphrase",
+            )
+        decoded = decode_config(
+            private_config,
+            device_key=device_key,
+            serial=args.serial,
+            mac=args.mac,
+        )
+        source_xml = decoded.xml
+    if encrypted_output and device_key is None:
+        device_key = _read_secret(
+            args,
+            "device_key_stdin",
+            "H3600P device encryption passphrase: ",
+            "H3600P device encryption passphrase",
+        )
+    if source_xml is None:
+        source_xml = default_root_xml(ssh_password, args.username)
+    else:
+        source_xml = patch_root_ssh(source_xml, ssh_password, args.username)
+
+    artifact = encode_config(
+        source_xml,
+        signature=args.signature,
+        base64_wrap=not args.raw,
+        encrypted=encrypted_output,
+        device_key=device_key,
+        serial=args.serial,
+        mac=args.mac,
+    )
+    verification = decode_config(
+        artifact,
+        device_key=device_key if encrypted_output else None,
+        serial=args.serial if encrypted_output else None,
+        mac=args.mac if encrypted_output else None,
+    )
+    if verification.xml != source_xml:
+        raise ConfigError("generated configuration failed its in-memory round-trip check")
+    try:
+        write_private_bytes(output, artifact, replace=args.force)
+    except OSError as exc:
+        raise ConfigError("unable to write configuration artifact") from exc
+
+    encryption_label = "encrypted type-4" if encrypted_output else "compressed, unencrypted"
+    wrapper_label = "base64 wrapped" if not args.raw else "raw binary"
+    print("Wrote offline configuration artifact.")
+    print(f"Target: {recipe.id}")
+    print(f"Source: {source_label}")
+    print(f"Container: {encryption_label}; {wrapper_label}")
+    print("SSH privilege fields were patched locally; no device connection was attempted.")
+    print(
+        "WARNING: acceptance on this exact firmware, preservation of ISP settings, "
+        "and recovery are not verified. Keep the original backup private."
+    )
+    return 0
+
+
 def command_doctor(args: argparse.Namespace) -> int:
     address = parse_single_private_address(args.host)
     ports = parse_ports(args.ports)
@@ -199,15 +347,18 @@ def command_report_template(args: argparse.Namespace) -> int:
 
 
 def command_redact(args: argparse.Namespace) -> int:
+    if not args.output:
+        print(
+            "Refused: --output is required; redacted text is never printed to the terminal.",
+            file=sys.stderr,
+        )
+        return 4
     value = (
         Path(args.input).read_text(encoding="utf-8")
         if args.input
         else sys.stdin.read()
     )
     content = redact_text(value)
-    if not args.output:
-        print(content, end="")
-        return 0
     output = Path(args.output)
     if output.exists() and not args.force:
         print(
@@ -215,8 +366,11 @@ def command_redact(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 4
-    output.write_text(content, encoding="utf-8")
-    print(f"Wrote redacted text: {output}")
+    try:
+        write_private_text(output, content, replace=args.force)
+    except OSError as exc:
+        raise OSError("unable to write redacted text") from exc
+    print("Wrote redacted text.")
     return 0
 
 
@@ -318,6 +472,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     apply_parser.set_defaults(func=command_apply)
 
+    config_generate = subparsers.add_parser(
+        "config-generate",
+        help="generate a private offline H3600P config artifact; never flashes a device",
+    )
+    _add_target_arguments(config_generate)
+    source = config_generate.add_mutually_exclusive_group()
+    source.add_argument(
+        "--input-config",
+        help="private existing config.bin baseline; never upload this file",
+    )
+    source.add_argument(
+        "--input-xml",
+        help="private decoded XML baseline",
+    )
+    config_generate.add_argument(
+        "--output",
+        required=True,
+        help="output path for the generated private artifact",
+    )
+    config_generate.add_argument("--username", default="admin")
+    config_generate.add_argument(
+        "--ssh-password-stdin",
+        action="store_true",
+        help="read the SSH password from the first stdin line instead of prompting",
+    )
+    config_generate.add_argument(
+        "--device-key-stdin",
+        action="store_true",
+        help="read the H3600P device encryption passphrase from stdin when needed",
+    )
+    config_generate.add_argument(
+        "--serial",
+        help="device serial required to decode or encrypt a type-4 artifact",
+    )
+    config_generate.add_argument(
+        "--mac",
+        help="lower-case colon-separated device MAC required for type-4 crypto",
+    )
+    config_generate.add_argument("--signature", default=H3600P_SIGNATURE)
+    output_format = config_generate.add_mutually_exclusive_group()
+    output_format.add_argument(
+        "--encrypted",
+        action="store_true",
+        help="emit the device-specific encrypted type-4 container",
+    )
+    output_format.add_argument(
+        "--allow-unencrypted",
+        action="store_true",
+        help="explicitly allow a credential-bearing unencrypted artifact",
+    )
+    config_generate.add_argument(
+        "--raw",
+        action="store_true",
+        help="write raw binary instead of the usual base64 wrapper",
+    )
+    config_generate.add_argument("--force", action="store_true")
+    config_generate.add_argument(
+        "--i-own-or-administer-this-device",
+        action="store_true",
+        help="acknowledge ownership or explicit authorization",
+    )
+    config_generate.set_defaults(func=command_config_generate)
+
     doctor = subparsers.add_parser("doctor", help="validate one private target")
     doctor.add_argument("--host", required=True, help="one RFC1918 or IPv6 ULA literal")
     doctor.add_argument("--ports", default="80,443", help="up to eight explicit TCP ports")
@@ -369,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         return int(exc.code)
     try:
         return int(args.func(args))
-    except (CatalogError, FirmwareInspectionError, PolicyError) as exc:
+    except (CatalogError, ConfigError, FirmwareInspectionError, PolicyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:

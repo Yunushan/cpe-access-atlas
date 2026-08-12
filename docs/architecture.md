@@ -9,6 +9,7 @@ CLI
  ├── exact firmware matcher
  ├── single-private-host policy
  ├── non-mutating diagnostics
+ ├── offline private-config inspection and generation
  └── fail-closed apply gate
 ```
 
@@ -32,6 +33,13 @@ CLI
 8. **Evidence before status.** Hardware verification and recovery evidence are
    required before a recipe can become verified; unresolved hardware records
    remain non-mutating research records.
+9. **Offline config boundaries.** The configuration codec reads and writes only
+   user-supplied local artifacts. It never connects to, flashes, or changes a
+   device, and generated SSH fields are not evidence of a root shell. Private
+   outputs are written atomically with restrictive local permissions where the
+   platform supports owner-only modes; Windows destination ACLs remain
+   authoritative. The CLI does not print credential-bearing configuration or
+   redaction output.
 
 ## Future adapter contract
 
