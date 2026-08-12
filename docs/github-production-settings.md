@@ -38,11 +38,15 @@ test (macos-latest, 3.14)
 
 - Protect the `v*` tag pattern and restrict release-tag creation to
   maintainers.
+- Enable the repository Dependency graph; the pull-request dependency-review
+  check cannot run while it is disabled.
 - Keep Dependabot alerts and security updates enabled; the repository also
   includes weekly update configuration for Python and GitHub Actions.
 - Keep secret scanning and push protection enabled.
 - Configure private vulnerability reporting through GitHub Security Advisories
   or a monitored security address.
+- Configure a `release` environment with required reviewers before allowing the
+  release workflow's write permissions to publish artifacts.
 - Publish and verify the first release from a protected `v0.2.0` tag.
 
 ## Read-only evidence checks

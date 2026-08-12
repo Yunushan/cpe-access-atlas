@@ -32,10 +32,17 @@ All notable changes are documented here.
   dependencies before installing wheel and source-distribution artifacts.
 - Made dependency audits strict, rejected moderate-or-higher dependency-review
   findings, and rejected lightweight release tags.
+- Updated the pinned setuptools build backend to 84.0.0 across packaging and
+  every CI, release, and security lock file after the security audit identified
+  the vulnerable 82.0.1 pin.
 - Added weekly Dependabot configuration for Python and GitHub Actions, plus
   dependency-consistency checks to every CI test job.
 - Added release changelog-entry enforcement, explicit strict SBOM auditing,
   and boolean-timeout rejection for direct library callers.
+- Corrected the security workflow to audit the locked dependency set instead of
+  treating the unpublished local project as a PyPI dependency.
+- Added a protected `release` environment requirement and documented the
+  Dependency Graph prerequisite for pull-request dependency review.
 - Added regression tests that protect pinned workflow actions, dependency
   update configuration, CI consistency checks, and release safety gates.
 - Added a read-only `firmware-inspect` command that hashes private artifacts,
