@@ -24,6 +24,7 @@ platformdirs==4.11.2
 py-serializable==2.1.0
 Pygments==2.20.0
 pyparsing==3.3.2
+pycryptodome==3.23.0
 referencing==0.37.0
 requests==2.34.2
 rich==15.0.0

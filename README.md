@@ -157,6 +157,41 @@ in this repository or a public issue. If a hash was recorded separately, pass
 it with `--expected-sha256` to verify artifact identity; a mismatch returns a
 nonzero exit code.
 
+Generate an offline configuration artifact for a device you own or administer:
+
+```shell
+cpe-atlas config-generate \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --output h3600p-config.bin \
+  --allow-unencrypted \
+  --i-own-or-administer-this-device
+```
+
+The command refuses credential-bearing unencrypted output unless
+`--allow-unencrypted` is explicitly supplied. It prompts for the SSH password
+and writes a local, base64-wrapped compressed configuration artifact. To
+preserve an existing private baseline, add `--input-config config.bin`;
+encrypted type-4 baselines also require the device serial, lower-case MAC
+address, and the device-specific encryption passphrase. Encrypted input is
+preserved by default; use `--encrypted` with the serial, MAC, and passphrase to
+request encrypted output from another baseline or a new template. Passphrases
+are read locally and never printed. Use `--input-xml` only with a private
+decoded XML baseline. `--raw` emits the raw binary container. Generated config
+files are atomically written with restrictive local permissions where the
+platform exposes owner-only modes; on Windows the destination directory's ACL
+remains authoritative. The destination directory must already exist.
+
+This is an offline research tool, not a firmware image, root exploit, or device
+flasher. A no-input artifact uses a minimal template and does not preserve ISP
+provisioning such as Internet, VoIP, IPTV, VLAN, Wi-Fi, or TR-069 settings. The
+exact TTN.10 build is still cataloged as blocked: artifact generation does not
+prove that the firmware accepts the file, enables a Linux UID 0 shell, or has a
+recoverable rollback path. Keep the original backup and every generated file
+private; do not upload them to GitHub or include them in bug reports.
+
 The `apply` command is deliberately fail-closed in version 0.2.0. Even after
 ownership acknowledgement it refuses this blocked recipe and makes no device
 change.
@@ -198,8 +233,10 @@ Before any future verified mutation:
 6. Use a unique password and keep WAN-side administration disabled.
 
 The report redactor is conservative assistance, not a proof of sanitization.
-Manually review every report, screenshot, capture, and exported text before
-sharing it.
+It requires `--output`, never prints report contents to the terminal, and writes
+the result with restrictive local permissions where supported. On Windows,
+secure the destination directory's ACL and manually review every report,
+screenshot, capture, and exported text before sharing it.
 
 Modifying ISP-provided equipment can break connectivity, VoIP, IPTV, updates,
 remote support, warranty coverage, or contractual terms. Rented or loaned
@@ -208,7 +245,7 @@ equipment requires the provider's explicit permission.
 ## Repository layout
 
 ```text
-src/cpe_access_atlas/       CLI, policy, catalog, redaction, report generator
+src/cpe_access_atlas/       CLI, policy, catalog, redaction, report generator, offline config codec
 src/cpe_access_atlas/data/  Provider and exact-firmware records
 schemas/                    Recipe JSON Schema
 docs/                       Architecture and research notes

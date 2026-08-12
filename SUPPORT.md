@@ -39,6 +39,10 @@ As of 2026-08-12:
   update;
 - no reproducible method with backup and rollback evidence was found for this
   exact firmware.
+- the repository's offline configuration codec is experimental and does not
+  establish that a generated artifact will be accepted or preserve ISP data;
+  exact field semantics, device-specific encryption inputs, and recovery remain
+  unverified.
 - a newer H3600P guide found during review documents `TTN.8_250626`, not
   `TTN.10_260210`.
 

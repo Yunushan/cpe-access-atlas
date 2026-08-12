@@ -81,6 +81,8 @@ class RepositoryControlTests(unittest.TestCase):
         )
         self.assertIn("Dependency graph", settings)
         self.assertIn("release` environment", settings)
+        self.assertIn("SHA-pinning enforcement", settings)
+        self.assertIn("zero open CodeQL alerts", settings)
 
     def test_source_distribution_manifest_includes_governance_config(self) -> None:
         manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")

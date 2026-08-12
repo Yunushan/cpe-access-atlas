@@ -7,6 +7,7 @@ coverage==7.15.4
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 packaging==26.3
+pycryptodome==3.23.0
 pyproject_hooks==1.2.0
 referencing==0.37.0
 rpds-py==2026.6.3

@@ -6,6 +6,13 @@ All notable changes are documented here.
 
 ### Security and delivery
 
+- Added an owner-gated, offline H3600P configuration codec and generator that
+  can patch a private baseline or create a clearly experimental minimal
+  artifact, with encrypted-container round-trip tests and no device I/O.
+- Required an explicit acknowledgement for unencrypted generated configs,
+  atomically write private artifacts with restrictive permissions where
+  supported, and stopped the redactor from printing potentially sensitive
+  output to the terminal.
 - Hardened redaction for quoted secrets, API keys, and Basic authorization
   values.
 - Added pinned CI/security/release dependency lock files and clean wheel/sdist

@@ -43,6 +43,10 @@ test (macos-latest, 3.14)
 - Keep Dependabot alerts and security updates enabled; the repository also
   includes weekly update configuration for Python and GitHub Actions.
 - Keep secret scanning and push protection enabled.
+- Restrict Actions to the approved action allowlist or verified creators and
+  require full-length commit-SHA pinning at the repository policy level; the
+  workflow files pin their actions independently, but YAML alone cannot enforce
+  this setting for future workflows.
 - Configure private vulnerability reporting through GitHub Security Advisories
   or a monitored security address.
 - Configure a `release` environment with required reviewers before allowing the
@@ -63,5 +67,6 @@ gh api repos/Yunushan/cpe-access-atlas
 
 The final audit should show branch protection or an enforced ruleset, at least
 one published release, a protected release-tag policy, enabled Dependabot
-security updates, and successful CI, security, and CodeQL runs for the merged
-commit.
+security updates, restricted Actions permissions with SHA-pinning enforcement,
+zero open CodeQL alerts, and successful CI, security, and CodeQL runs for the
+merged commit.

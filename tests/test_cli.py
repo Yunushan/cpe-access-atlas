@@ -10,10 +10,13 @@ from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
+from xml.etree import ElementTree as ET
 
 from cpe_access_atlas.catalog import find_recipe
 from cpe_access_atlas.cli import main
+from cpe_access_atlas.config import decode_config, default_root_xml, encode_config
 
 TARGET = [
     "--isp",
@@ -106,6 +109,311 @@ class CliTests(unittest.TestCase):
         self.assertIn("no verified apply adapter", stderr)
         self.assertIn("No device change was attempted", stderr)
 
+    def test_config_generate_requires_authorization_before_prompting(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "config.bin"
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    ["config-generate", *TARGET, "--output", str(output)]
+                )
+        self.assertEqual((code, stdout), (3, ""))
+        self.assertIn("acknowledgement", stderr)
+        prompt.assert_not_called()
+
+    def test_config_generate_from_scratch_is_local_and_round_trips(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "generated.bin"
+            with patch(
+                "cpe_access_atlas.cli.getpass.getpass",
+                return_value="DummyPass123",
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            decoded = decode_config(output.read_bytes())
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Wrote offline configuration artifact", stdout)
+        self.assertIn("no device connection was attempted", stdout)
+        self.assertNotIn("DummyPass123", stdout + stderr)
+        fields = {
+            item.attrib["name"]: item.attrib["val"]
+            for item in ET.fromstring(decoded.xml).find("Tbl/Row").findall("DM")
+        }
+        self.assertEqual(fields["SSH_UserName"], "admin")
+        self.assertEqual(fields["SSH_PassWord"], "DummyPass123")
+        self.assertEqual(fields["SSH_Level"], "1")
+
+    def test_config_generate_patches_private_config_baseline(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "private-config.bin"
+            output = Path(directory) / "generated.bin"
+            source.write_bytes(encode_config(default_root_xml("OldPass123")))
+            with patch(
+                "cpe_access_atlas.cli.getpass.getpass",
+                return_value="NewPass123",
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--input-config",
+                        str(source),
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            decoded = decode_config(output.read_bytes())
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("private configuration baseline", stdout)
+        self.assertNotIn("NewPass123", stdout + stderr)
+        self.assertIn(b'val="NewPass123"', decoded.xml)
+
+    def test_config_generate_supports_encrypted_output_from_stdin(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "encrypted-config.bin"
+            stdin = StringIO("NewPass123\n" + "a" * 32 + "\n")
+            with patch("cpe_access_atlas.cli.sys.stdin", stdin):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--encrypted",
+                        "--serial",
+                        "ZTE12345678",
+                        "--mac",
+                        "00:11:22:33:44:55",
+                        "--ssh-password-stdin",
+                        "--device-key-stdin",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            decoded = decode_config(
+                output.read_bytes(),
+                device_key="a" * 32,
+                serial="ZTE12345678",
+                mac="00:11:22:33:44:55",
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("encrypted type-4", stdout)
+        self.assertNotIn("NewPass123", stdout + stderr)
+        self.assertIn(b'val="NewPass123"', decoded.xml)
+
+    def test_config_generate_reads_encrypted_private_baseline(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "encrypted-config.bin"
+            output = Path(directory) / "generated.bin"
+            source.write_bytes(
+                encode_config(
+                    default_root_xml("OldPass123"),
+                    encrypted=True,
+                    device_key="a" * 32,
+                    serial="ZTE12345678",
+                    mac="00:11:22:33:44:55",
+                )
+            )
+            with patch(
+                "cpe_access_atlas.cli.getpass.getpass",
+                side_effect=["NewPass123", "a" * 32],
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--input-config",
+                        str(source),
+                        "--output",
+                        str(output),
+                        "--serial",
+                        "ZTE12345678",
+                        "--mac",
+                        "00:11:22:33:44:55",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            decoded = decode_config(
+                output.read_bytes(),
+                device_key="a" * 32,
+                serial="ZTE12345678",
+                mac="00:11:22:33:44:55",
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("private configuration baseline", stdout)
+        self.assertIn(b'val="NewPass123"', decoded.xml)
+
+    def test_config_generate_force_guard_and_empty_secret(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "existing.bin"
+            output.write_bytes(b"keep")
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (4, ""))
+            self.assertIn("already exists", stderr)
+            prompt.assert_not_called()
+
+            output.unlink()
+            with patch("cpe_access_atlas.cli.getpass.getpass", return_value=""):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("SSH password must not be empty", stderr)
+
+    def test_config_generate_reports_input_and_output_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--input-xml",
+                        str(directory_path),
+                        "--output",
+                        str(directory_path / "generated.bin"),
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("unable to read XML baseline", stderr)
+            prompt.assert_not_called()
+
+            with patch("cpe_access_atlas.cli.getpass.getpass", return_value="DummyPass123"):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(directory_path / "missing" / "generated.bin"),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("unable to write configuration artifact", stderr)
+
+    def test_config_generate_requires_crypto_coordinates_and_checks_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "generated.bin"
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--encrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("encrypted output requires", stderr)
+            prompt.assert_not_called()
+
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--input-config",
+                        str(output),
+                        "--output",
+                        str(Path(directory) / "other.bin"),
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("unable to read configuration artifact", stderr)
+            prompt.assert_not_called()
+
+            encrypted_source = Path(directory) / "encrypted.bin"
+            encrypted_source.write_bytes(
+                encode_config(
+                    default_root_xml("OldPass123"),
+                    encrypted=True,
+                    device_key="a" * 32,
+                    serial="ZTE12345678",
+                    mac="00:11:22:33:44:55",
+                )
+            )
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--input-config",
+                        str(encrypted_source),
+                        "--output",
+                        str(Path(directory) / "from-encrypted.bin"),
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("encrypted input requires", stderr)
+            prompt.assert_not_called()
+
+            with patch("cpe_access_atlas.cli.getpass.getpass", return_value="DummyPass123"):
+                with patch(
+                    "cpe_access_atlas.cli.decode_config",
+                    return_value=SimpleNamespace(xml=b"different"),
+                ):
+                    code, stdout, stderr = self.run_cli(
+                        [
+                            "config-generate",
+                            *TARGET,
+                            "--output",
+                            str(output),
+                            "--allow-unencrypted",
+                            "--i-own-or-administer-this-device",
+                        ]
+                    )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("round-trip check", stderr)
+
+    def test_config_generate_rejects_unencrypted_output_without_acknowledgement(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "generated.bin"
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("allow-unencrypted", stderr)
+        self.assertFalse(output.exists())
+        prompt.assert_not_called()
+
     def test_doctor_does_not_probe_by_default(self) -> None:
         code, stdout, stderr = self.run_cli(["doctor", "--host", "192.168.1.1"])
         self.assertEqual(code, 0)
@@ -174,9 +482,8 @@ class CliTests(unittest.TestCase):
             source.write_text("password=secret public=8.8.8.8", encoding="utf-8")
 
             code, stdout, stderr = self.run_cli(["redact", "--input", str(source)])
-            self.assertEqual((code, stderr), (0, ""))
-            self.assertNotIn("secret", stdout)
-            self.assertIn("[REDACTED-PUBLIC-IP]", stdout)
+            self.assertEqual((code, stdout), (4, ""))
+            self.assertIn("--output is required", stderr)
 
             args = ["redact", "--input", str(source), "--output", str(output)]
             code, stdout, stderr = self.run_cli(args)
@@ -192,13 +499,42 @@ class CliTests(unittest.TestCase):
             self.assertEqual((code, stderr), (0, ""))
             self.assertIn("Wrote redacted text", stdout)
 
+    def test_redact_reads_stdin_only_when_writing_a_private_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "redacted.txt"
+            with patch("cpe_access_atlas.cli.sys.stdin", StringIO("token=secret")):
+                code, stdout, stderr = self.run_cli(
+                    ["redact", "--output", str(output)]
+                )
+            self.assertEqual((code, stderr), (0, ""))
+            self.assertNotIn("secret", stdout)
+            self.assertNotIn("secret", output.read_text(encoding="utf-8"))
+
     def test_redact_rejects_invalid_text_encoding_cleanly(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "invalid.txt"
+            output = Path(directory) / "redacted.txt"
             source.write_bytes(b"password=\xff")
-            code, stdout, stderr = self.run_cli(["redact", "--input", str(source)])
+            code, stdout, stderr = self.run_cli(
+                ["redact", "--input", str(source), "--output", str(output)]
+            )
         self.assertEqual((code, stdout), (1, ""))
         self.assertIn("text encoding failed", stderr)
+
+    def test_redact_write_error_is_controlled(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "source.txt"
+            output = Path(directory) / "redacted.txt"
+            source.write_text("token=secret", encoding="utf-8")
+            with patch(
+                "cpe_access_atlas.cli.write_private_text",
+                side_effect=OSError("simulated write failure"),
+            ):
+                code, stdout, stderr = self.run_cli(
+                    ["redact", "--input", str(source), "--output", str(output)]
+                )
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn("filesystem operation failed", stderr)
 
     def test_firmware_inspection_supports_text_json_and_exact_mismatch(self) -> None:
         version = "H3600P V9.0 TTN.10_260210"
