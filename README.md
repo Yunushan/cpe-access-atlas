@@ -67,7 +67,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
 | Linux root shell | Not supported |
-| Last evidence review | 2026-08-12 |
+| Last evidence review | 2026-08-13 |
 
 Public community evidence says the older provisioning interception workflow
 does not work on this build. No official firmware image, safe downgrade path,
@@ -84,9 +84,15 @@ validator.
 ```shell
 python -m pip install -e .
 cpe-atlas providers
+cpe-atlas devices
 cpe-atlas recipes
 cpe-atlas validate
 ```
+
+`cpe-atlas devices` lists model names found on official Turkish ISP device
+pages. These are public listing records only; they do not imply firmware
+compatibility, privileged access, root access, or support for every ISP-issued
+unit. See [the official device inventory](docs/official-device-inventory.md).
 
 Check the exact target:
 
@@ -107,6 +113,26 @@ cpe-atlas plan \
   --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
+
+Check root-access readiness without touching the device:
+
+```shell
+cpe-atlas root-readiness \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --firmware-input firmware.bin \
+  --expected-sha256 <private-recorded-sha256>
+```
+
+This command only hashes and scans the optional firmware file as opaque bytes.
+It reports `STOP` unless the catalog has an exact hardware record, a verified
+exact-build root method, and the supplied artifact matches the requested build
+and optional private hash. It never reads configuration XML, connects to a
+device, executes firmware, generates a configuration, or flashes anything.
+For the current TTN.10 record it is expected to stop; that is a safety gate,
+not a root-enablement method.
 
 Validate one local target without making a network connection:
 
@@ -246,7 +272,7 @@ equipment requires the provider's explicit permission.
 
 ```text
 src/cpe_access_atlas/       CLI, policy, catalog, redaction, report generator, offline config codec
-src/cpe_access_atlas/data/  Provider and exact-firmware records
+src/cpe_access_atlas/data/  Provider, official-device, and exact-firmware records
 schemas/                    Recipe JSON Schema
 docs/                       Architecture and research notes
 tests/                      Unit and CLI behavior tests
@@ -283,7 +309,9 @@ production-ready.
 - [Archived h3600-root project](https://github.com/enoymuss/h3600-root)
 - [TTN.10_260210 community status](https://forum.donanimhaber.com/zte-zxhn-h3600p-guncel-h298a-root-etkinlestirme--161912895-3)
 - [July 2026 patched-method report](https://techolay.net/sosyal/konu/zte-zxhn-h3600p-v9-routerda-root-erisimi-nasil-alinir.204807/)
+- [February H3600P guide and its TTN.8 follow-up](https://techolay.net/sosyal/konu/turk-telekom-superonline-icin-zte-h3600p-nasil-rootlanir.181032/)
 - [Open H3600P configuration-decoding request](https://github.com/mkst/zte-config-utility/issues/137)
+- [H298A-only CWMP proof-of-concept](https://github.com/Faharee/ZTE-H298A-Root)
 - [Firmware-specific Digi H3600P research](https://orca.pet/zteh3600p/)
 - [Official Türk Telekom H3600P user manual](https://www.turktelekom.com.tr/tt-destek/Documents/zte-h3600p-fiber-modem-ullanim-kilavuzu.pdf)
 

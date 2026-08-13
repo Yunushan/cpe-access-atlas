@@ -6,6 +6,13 @@ All notable changes are documented here.
 
 ### Security and delivery
 
+- Added the read-only `root-readiness` gate for exact-build firmware evidence;
+  the TTN.10_260210 target remains fail-closed because no reproducible root
+  method or recovery-tested workflow is verified.
+- Added a schema-validated official ISP device inventory and `cpe-atlas devices`
+  command for the four reviewed Türk Telekom, Turkcell Superonline,
+  and Türksat device pages; listings remain separate from exact firmware or
+  privileged-access support claims.
 - Added an owner-gated, offline H3600P configuration codec and generator that
   can patch a private baseline or create a clearly experimental minimal
   artifact, with encrypted-container round-trip tests and no device I/O.

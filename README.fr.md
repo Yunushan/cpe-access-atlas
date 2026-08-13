@@ -43,7 +43,7 @@ pas que tous ses appareils sont pris en charge.
 | Administrateur Web standard | Pris en charge par le FAI |
 | Administrateur Web privilégié | Bloqué ; recherche nécessaire |
 | Shell root Linux | Non pris en charge |
-| Dernière révision | 11 août 2026 |
+| Dernière révision | 13 août 2026 |
 
 Consultez la [compatibilité](SUPPORT.md) et la
 [note de recherche](docs/research/zte-h3600p-ttn10-260210.md).
@@ -56,6 +56,7 @@ JSON Schema :
 ```shell
 python -m pip install -e .
 cpe-atlas providers
+cpe-atlas devices
 cpe-atlas validate
 cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
   --hardware-revision "V9.0" \
@@ -67,6 +68,27 @@ Valider une cible privée sans établir de connexion :
 ```shell
 cpe-atlas doctor --host 192.168.1.1
 ```
+
+La vérification de préparation, en lecture seule, pour la version exacte peut
+être lancée ainsi :
+
+```shell
+cpe-atlas root-readiness \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --firmware-input firmware.bin \
+  --expected-sha256 <sha256-documenté-privé>
+```
+
+Cette commande hache et inspecte le fichier uniquement comme des octets
+opaques ; pour l'entrée TTN.10 actuelle, `STOP` est le résultat attendu. Elle
+ne se connecte pas à l'appareil, ne génère pas de configuration et ne flashe
+rien. `cpe-atlas firmware-inspect` permet la même vérification sûre du hash et
+de la version d'un firmware privé. `config-generate` est un outil hors ligne,
+pas un exploit root ni un flasheur ; les fichiers générés et les sauvegardes
+doivent rester privés.
 
 Dans la version 0.2.0, `apply` est volontairement fermé par défaut et ne
 modifie pas cette cible bloquée.

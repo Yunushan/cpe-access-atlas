@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/cpe-access-atlas/device-inventory.schema.json",
+  "title": "CPE Access Atlas official device inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "country", "scope", "sources", "providers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "country": {"const": "TR"},
+    "scope": {"const": "official-listing-only"},
+    "notes": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "provider_id",
+          "title",
+          "url",
+          "expected_device_count",
+          "last_reviewed"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$"},
+          "provider_id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "expected_device_count": {"type": "integer", "minimum": 1},
+          "alternate_urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "uniqueItems": true
+          },
+          "last_reviewed": {"type": "string", "format": "date"}
+        }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider_id", "devices"],
+        "properties": {
+          "provider_id": {"type": "string", "minLength": 1},
+          "devices": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "vendor",
+                "model",
+                "official_name",
+                "category",
+                "source_ids"
+              ],
+              "properties": {
+                "vendor": {"type": "string", "minLength": 1},
+                "model": {"type": "string", "minLength": 1},
+                "official_name": {"type": "string", "minLength": 1},
+                "category": {
+                  "enum": [
+                    "docsis-modem",
+                    "fiber-ont",
+                    "mesh-wifi",
+                    "mobile-modem",
+                    "not-specified",
+                    "signal-extender",
+                    "vdsl-modem"
+                  ]
+                },
+                "network_technology": {"type": "string", "minLength": 1},
+                "source_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {"type": "string", "minLength": 1},
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

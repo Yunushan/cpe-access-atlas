@@ -45,7 +45,7 @@ Telekom, Netspeed, Vodafone Net и Millenicom. Наличие провайдер
 | Обычный Web-admin | Поддерживается провайдером |
 | Привилегированный Web-admin | Заблокирован; требуется исследование |
 | Linux root shell | Не поддерживается |
-| Последняя проверка | 11 августа 2026 г. |
+| Последняя проверка | 13 августа 2026 г. |
 
 См. [таблицу совместимости](SUPPORT.md) и
 [исследовательскую заметку](docs/research/zte-h3600p-ttn10-260210.md).
@@ -57,6 +57,7 @@ Telekom, Netspeed, Vodafone Net и Millenicom. Наличие провайдер
 ```shell
 python -m pip install -e .
 cpe-atlas providers
+cpe-atlas devices
 cpe-atlas validate
 cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
   --hardware-revision "V9.0" \
@@ -68,6 +69,27 @@ cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
 ```shell
 cpe-atlas doctor --host 192.168.1.1
 ```
+
+Проверку готовности для точной версии прошивки можно выполнить в режиме
+только чтения:
+
+```shell
+cpe-atlas root-readiness \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --firmware-input firmware.bin \
+  --expected-sha256 <приватно-сохраненный-sha256>
+```
+
+Команда хеширует и проверяет файл только как непрозрачный набор байтов; для
+текущей записи TTN.10 ожидаемым результатом является `STOP`. Она не
+подключается к устройству, не создает конфигурацию и ничего не прошивает.
+`cpe-atlas firmware-inspect` выполняет такую же безопасную проверку хеша и
+версии частного файла прошивки. `config-generate` — автономный инструмент, а
+не root-эксплойт и не прошивальщик; созданные файлы и резервные копии должны
+оставаться приватными.
 
 Команда `apply` в версии 0.2.0 намеренно работает по принципу fail-closed и не
 изменяет устройство для заблокированного рецепта.

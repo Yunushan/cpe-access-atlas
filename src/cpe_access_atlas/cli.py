@@ -12,10 +12,13 @@ from pathlib import Path
 from . import __version__
 from .catalog import (
     CatalogError,
+    OfficialDevice,
     Recipe,
     find_recipe,
+    load_official_devices,
     load_providers,
     load_recipes,
+    resolve_provider,
     validate_catalog,
 )
 from .config import (
@@ -85,6 +88,19 @@ def _recipe_payload(recipe: Recipe) -> dict[str, object]:
     }
 
 
+def _device_payload(device: OfficialDevice) -> dict[str, object]:
+    return {
+        "provider_id": device.provider_id,
+        "vendor": device.vendor,
+        "model": device.model,
+        "official_name": device.official_name,
+        "category": device.category,
+        "network_technology": device.network_technology,
+        "source_ids": list(device.source_ids),
+        "source_urls": list(device.source_urls),
+    }
+
+
 def command_providers(args: argparse.Namespace) -> int:
     providers = load_providers()
     if args.json:
@@ -114,6 +130,33 @@ def command_recipes(args: argparse.Namespace) -> int:
             f"  {recipe.isp_name} | {recipe.vendor} {recipe.model} | {recipe.firmware}\n"
             f"  status={recipe.status}, confidence={recipe.confidence}"
         )
+    return 0
+
+
+def command_devices(args: argparse.Namespace) -> int:
+    devices = load_official_devices()
+    if args.isp:
+        provider = resolve_provider(args.isp)
+        devices = tuple(device for device in devices if device.provider_id == provider.id)
+    if args.json:
+        print(
+            json.dumps(
+                [_device_payload(device) for device in devices],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    print("Provider ID               Vendor       Model                 Category")
+    print("------------------------  -----------  --------------------  ----------------")
+    if not devices:
+        print("No official device listings found for the selected provider.")
+    for device in devices:
+        print(
+            f"{device.provider_id:<24}  {device.vendor:<11}  "
+            f"{device.model:<20}  {device.category}"
+        )
+    print("Official listings only; this command makes no firmware or access-support claim.")
     return 0
 
 
@@ -163,6 +206,98 @@ def command_plan(args: argparse.Namespace) -> int:
     print("Decision: REVIEW REQUIRED")
     print("No mutating adapter is included in this release.")
     return 0
+
+
+def command_root_readiness(args: argparse.Namespace) -> int:
+    """Report whether the catalog has enough evidence for root research.
+
+    This command is deliberately a read-only gate.  It may hash and scan one
+    private firmware artifact, but it never reads configuration XML, connects
+    to a device, executes firmware, generates a config, or flashes anything.
+    """
+
+    recipe = _recipe_from_args(args)
+    inspection = (
+        inspect_firmware(args.firmware_input, recipe.firmware, args.expected_sha256)
+        if args.firmware_input
+        else None
+    )
+    exact_hardware = recipe.hardware_revision_status == "exact"
+    root_method_verified = recipe.status in {"verified", "stable"} and recipe.access.get(
+        "local_root_shell"
+    ) in {"verified", "stable"}
+    artifact_exact = None if inspection is None else inspection.exact_build_match
+    artifact_hash = None if inspection is None else inspection.sha256_match
+    artifact_identity_verified = (
+        inspection is not None
+        and inspection.exact_build_match is True
+        and (
+            inspection.expected_sha256 is None
+            or inspection.sha256_match is True
+        )
+    )
+
+    blockers = list(recipe.blockers)
+    if not exact_hardware:
+        blockers.append("The hardware revision is not resolved to an exact catalog value.")
+    if not root_method_verified:
+        blockers.append("No verified exact-build Linux root-shell method is recorded.")
+    if inspection is None:
+        blockers.append("No private firmware artifact was supplied for exact-build inspection.")
+    elif inspection.exact_build_match is not True:
+        blockers.append("The supplied firmware artifact does not prove the exact catalog build.")
+    elif inspection.expected_sha256 is not None and inspection.sha256_match is not True:
+        blockers.append("The supplied firmware artifact does not match the expected SHA-256.")
+
+    decision = "STOP" if blockers else "REVIEW REQUIRED"
+    payload: dict[str, object] = {
+        "target": _recipe_payload(recipe),
+        "decision": decision,
+        "checks": {
+            "exact_hardware_revision": exact_hardware,
+            "catalog_root_method_verified": root_method_verified,
+            "firmware_artifact_supplied": inspection is not None,
+            "firmware_exact_build_match": artifact_exact,
+            "firmware_sha256_match": artifact_hash,
+            "firmware_identity_verified": artifact_identity_verified,
+        },
+        "blockers": blockers,
+        "required_before_any_mutation": [
+            "A reproducible method for this exact firmware and hardware revision.",
+            "A recovery path tested before and after the experiment.",
+            "Separate local login verification and service-preservation checks.",
+            "Private handling of configuration, firmware, credentials, and device identifiers.",
+        ],
+        "device_io_attempted": False,
+        "config_or_firmware_written": False,
+    }
+    if inspection is not None:
+        payload["firmware_artifact"] = {
+            "path": inspection.path,
+            "size": inspection.size,
+            "sha256": inspection.sha256,
+            "version_strings": list(inspection.version_strings),
+            "markers": list(inspection.markers),
+        }
+
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"Target record: {recipe.id}")
+        print(f"Decision: {decision}")
+        print(f"Root shell status: {recipe.access.get('local_root_shell', 'not-recorded')}")
+        print(f"Exact hardware revision: {'yes' if exact_hardware else 'no'}")
+        if inspection is None:
+            print("Firmware artifact: not supplied; no artifact was read")
+        else:
+            print(f"Firmware artifact: {inspection.path}")
+            print(f"Exact build match: {artifact_exact}")
+            print(f"SHA-256 match: {artifact_hash}")
+        print("Blockers:")
+        for blocker in blockers:
+            print(f"  - {blocker}")
+        print("No device connection, config write, firmware execution, or flashing was attempted.")
+    return int(decision == "STOP")
 
 
 def command_apply(args: argparse.Namespace) -> int:
@@ -447,6 +582,14 @@ def build_parser() -> argparse.ArgumentParser:
     recipes.add_argument("--json", action="store_true")
     recipes.set_defaults(func=command_recipes)
 
+    devices = subparsers.add_parser(
+        "devices",
+        help="list devices published on official ISP pages (not support recipes)",
+    )
+    devices.add_argument("--isp", help="filter by provider ID, name, or alias")
+    devices.add_argument("--json", action="store_true")
+    devices.set_defaults(func=command_devices)
+
     status = subparsers.add_parser("status", help="show exact target status")
     _add_target_arguments(status)
     status.add_argument("--json", action="store_true")
@@ -459,6 +602,22 @@ def build_parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser("plan", help="render a non-mutating decision plan")
     _add_target_arguments(plan)
     plan.set_defaults(func=command_plan)
+
+    root_readiness = subparsers.add_parser(
+        "root-readiness",
+        help="check exact-build root evidence without changing a device",
+    )
+    _add_target_arguments(root_readiness)
+    root_readiness.add_argument(
+        "--firmware-input",
+        help="optional private firmware artifact to hash and scan only",
+    )
+    root_readiness.add_argument(
+        "--expected-sha256",
+        help="expected SHA-256 for the private firmware artifact",
+    )
+    root_readiness.add_argument("--json", action="store_true")
+    root_readiness.set_defaults(func=command_root_readiness)
 
     apply_parser = subparsers.add_parser(
         "apply",
@@ -578,7 +737,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_stdio() -> None:
+    """Prefer UTF-8 output while leaving test and embedded streams untouched."""
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):
+            continue
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

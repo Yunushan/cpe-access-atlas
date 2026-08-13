@@ -59,7 +59,7 @@ Bir ISS'nin listede bulunması tüm modemlerinin desteklendiği anlamına gelmez
 | Standart yerel web yöneticisi | ISS tarafından destekleniyor |
 | Ayrıcalıklı web yöneticisi | Engelli; araştırma gerekli |
 | Linux root kabuğu | Desteklenmiyor |
-| Son kanıt incelemesi | 11 Ağustos 2026 |
+| Son kanıt incelemesi | 13 Ağustos 2026 |
 
 Ayrıntılar için [uyumluluk tablosuna](SUPPORT.md) ve
 [tam sürüm araştırma notuna](docs/research/zte-h3600p-ttn10-260210.md) bakın.
@@ -72,6 +72,7 @@ zamanında doğrulamak için JSON Schema doğrulayıcısını da yükler.
 ```shell
 python -m pip install -e .
 cpe-atlas providers
+cpe-atlas devices
 cpe-atlas recipes
 cpe-atlas validate
 ```
@@ -101,6 +102,25 @@ Ağ bağlantısı kurmadan tek yerel hedefi doğrulayın:
 ```shell
 cpe-atlas doctor --host 192.168.1.1
 ```
+
+Tam sürüm için yalnızca okuma yapan root-hazırlık kontrolü:
+
+```shell
+cpe-atlas root-readiness \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --firmware-input firmware.bin \
+  --expected-sha256 <özel-kayıtlı-sha256>
+```
+
+Bu komut firmware dosyasını yalnızca opak baytlar olarak hash'ler ve tarar;
+mevcut TTN.10 kaydı için beklenen sonuç `STOP`'tur. Modeme bağlanmaz,
+konfigürasyon üretmez ve hiçbir şey flash'lamaz. `cpe-atlas firmware-inspect`
+özel firmware dosyasında aynı güvenli hash ve sürüm kontrolünü yapar.
+`config-generate` çevrimdışı bir araştırma aracıdır; root açığı veya firmware
+yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
 Yalnızca açıkça belirtilen portları kontrol etmek için `--probe` eklenebilir.
 `apply` komutu 0.2.0 sürümünde kasıtlı olarak kapalıdır; sahiplik onayı verilse

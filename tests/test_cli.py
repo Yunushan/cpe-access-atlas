@@ -11,11 +11,11 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from xml.etree import ElementTree as ET
 
 from cpe_access_atlas.catalog import find_recipe
-from cpe_access_atlas.cli import main
+from cpe_access_atlas.cli import _configure_stdio, main
 from cpe_access_atlas.config import decode_config, default_root_xml, encode_config
 
 TARGET = [
@@ -37,6 +37,20 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = main(args)
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_stdio_encoding_configuration_is_best_effort(self) -> None:
+        stdout = SimpleNamespace(reconfigure=Mock())
+        stderr = SimpleNamespace(reconfigure=Mock())
+        with patch("cpe_access_atlas.cli.sys.stdout", stdout), patch(
+            "cpe_access_atlas.cli.sys.stderr", stderr
+        ):
+            _configure_stdio()
+        stdout.reconfigure.assert_called_once_with(
+            encoding="utf-8", errors="backslashreplace"
+        )
+        stderr.reconfigure.assert_called_once_with(
+            encoding="utf-8", errors="backslashreplace"
+        )
 
     def test_status_reports_blocked_and_no_change(self) -> None:
         code, stdout, stderr = self.run_cli(["status", *TARGET])
@@ -61,6 +75,24 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self.run_cli(["recipes", "--json"])
         self.assertEqual((code, stderr), (0, ""))
         self.assertIn('"hardware_revision"', stdout)
+
+    def test_official_device_listing_supports_text_json_and_filtering(self) -> None:
+        code, stdout, stderr = self.run_cli(["devices"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Official listings only", stdout)
+        self.assertIn("H3600P", stdout)
+
+        code, stdout, stderr = self.run_cli(
+            ["devices", "--isp", "Turkcell Superonline", "--json"]
+        )
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual({item["provider_id"] for item in payload}, {"turkcell-superonline"})
+        self.assertTrue(any(item["model"] == "H3600P" for item in payload))
+
+        code, stdout, stderr = self.run_cli(["devices", "--isp", "TurkNet"])
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("No official device listings", stdout)
 
     def test_status_json_and_evidence(self) -> None:
         code, stdout, stderr = self.run_cli(["status", *TARGET, "--json"])
@@ -96,6 +128,108 @@ class CliTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli(["plan", *TARGET])
         self.assertEqual((code, stderr), (0, ""))
         self.assertIn("REVIEW REQUIRED", stdout)
+
+    def test_root_readiness_stops_without_artifact_or_verified_method(self) -> None:
+        code, stdout, stderr = self.run_cli(["root-readiness", *TARGET])
+        self.assertEqual((code, stderr), (1, ""))
+        self.assertIn("Decision: STOP", stdout)
+        self.assertIn("artifact was supplied", stdout)
+        self.assertIn("No device connection", stdout)
+
+    def test_root_readiness_json_reports_private_artifact_checks(self) -> None:
+        version = "H3600P V9.0 TTN.10_260210"
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "firmware.bin"
+            artifact.write_bytes(b"header" + version.encode("ascii"))
+            expected_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            code, stdout, stderr = self.run_cli(
+                [
+                    "root-readiness",
+                    *TARGET,
+                    "--firmware-input",
+                    str(artifact),
+                    "--expected-sha256",
+                    expected_hash,
+                    "--json",
+                ]
+            )
+        self.assertEqual((code, stderr), (1, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["decision"], "STOP")
+        self.assertTrue(payload["checks"]["firmware_exact_build_match"])
+        self.assertTrue(payload["checks"]["firmware_sha256_match"])
+        self.assertTrue(payload["checks"]["firmware_identity_verified"])
+        self.assertFalse(payload["device_io_attempted"])
+        self.assertIn("firmware_artifact", payload)
+
+    def test_root_readiness_reports_hash_mismatch(self) -> None:
+        version = "H3600P V9.0 TTN.10_260210"
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "firmware.bin"
+            artifact.write_bytes(b"header" + version.encode("ascii"))
+            code, stdout, stderr = self.run_cli(
+                [
+                    "root-readiness",
+                    *TARGET,
+                    "--firmware-input",
+                    str(artifact),
+                    "--expected-sha256",
+                    "0" * 64,
+                ]
+            )
+        self.assertEqual((code, stderr), (1, ""))
+        self.assertIn("SHA-256 match: False", stdout)
+        self.assertIn("does not match the expected SHA-256", stdout)
+
+    def test_root_readiness_reports_exact_build_mismatch(self) -> None:
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "firmware.bin"
+            artifact.write_bytes(b"header H3600P V9.0 TTN.9_250626")
+            code, stdout, stderr = self.run_cli(
+                [
+                    "root-readiness",
+                    *TARGET,
+                    "--firmware-input",
+                    str(artifact),
+                ]
+            )
+        self.assertEqual((code, stderr), (1, ""))
+        self.assertIn("Exact build match: False", stdout)
+        self.assertIn("does not prove the exact catalog build", stdout)
+
+    def test_root_readiness_allows_review_only_when_all_catalog_gates_pass(self) -> None:
+        recipe = find_recipe(
+            "turk-telekom",
+            "H3600P",
+            "V9.0",
+            "H3600P V9.0 TTN.10_260210",
+        )
+        version = "H3600P V9.0 TTN.10_260210"
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "firmware.bin"
+            artifact.write_bytes(b"header" + version.encode("ascii"))
+            with patch(
+                "cpe_access_atlas.cli._recipe_from_args",
+                return_value=replace(
+                    recipe,
+                    status="verified",
+                    blockers=(),
+                    hardware_revision_status="exact",
+                    access={**recipe.access, "local_root_shell": "verified"},
+                ),
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "root-readiness",
+                        *TARGET,
+                        "--firmware-input",
+                        str(artifact),
+                    ]
+                )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Decision: REVIEW REQUIRED", stdout)
+        self.assertIn("SHA-256 match: None", stdout)
+        self.assertIn("No device connection", stdout)
 
     def test_apply_requires_authorization_and_still_refuses(self) -> None:
         code, _, stderr = self.run_cli(["apply", *TARGET])

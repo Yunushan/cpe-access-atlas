@@ -42,9 +42,11 @@
     "No public, reproducible privileged-access workflow is verified on this exact firmware.",
     "Community reports state that the older WAN-side TR-069/DHCP method is patched.",
     "The offline codec is experimental; exact TTN.10 field semantics, encryption inputs, firmware acceptance, and recovery remain unverified.",
+    "Public H3600P hardware research places the per-device configuration-encryption passphrase in a personalization area; exact TTN.10 accessibility and a read-only observation path are unverified.",
     "No official public downgrade image or recovery-tested downgrade path was found.",
-    "The newer H3600P guide found during review identifies TTN.8_250626, not this TTN.10 build.",
-    "The available guide relies on an unverified third-party VM and provides no exact-build artifact hash or recovery proof."
+    "A February 2026 guide claims Türk Telekom H3600P applicability but does not identify this exact build; a follow-up reports failure on TTN.8_250626.",
+    "The available guide relies on an unverified third-party VM and provides no exact-build artifact hash or recovery proof.",
+    "A newer public H298A CWMP proof-of-concept hard-codes H298A-specific paths and has no exact H3600P TTN.10 validation."
   ],
   "evidence": [
     {
@@ -68,7 +70,7 @@
       "url": "https://techolay.net/sosyal/konu/zte-zxhn-h3600p-v9-routerda-root-erisimi-nasil-alinir.204807/"
     },
     {
-      "title": "H3600P guide documenting a different TTN.8_250626 build",
+      "title": "H3600P guide claiming Türk Telekom applicability without exact-build proof",
       "url": "https://techolay.net/sosyal/konu/turk-telekom-superonline-icin-zte-h3600p-nasil-rootlanir.181032/"
     },
     {
@@ -82,6 +84,10 @@
     {
       "title": "Digi H3600P hardware research with newer-firmware warning",
       "url": "https://orca.pet/zteh3600p/"
+    },
+    {
+      "title": "H298A-only CWMP proof-of-concept reviewed as a cross-model lead",
+      "url": "https://github.com/Faharee/ZTE-H298A-Root"
     }
   ],
   "next_evidence": [
@@ -89,9 +95,11 @@
     "Exact local UI firmware string and non-secret page behavior after factory reset.",
     "Private SHA-256 hash and offline inspection of an exact TTN.10_260210 firmware artifact, if available.",
     "An exact-build parameter inventory showing whether the reported access-control paths exist.",
+    "A source-reviewed, isolated observation of the H3600P CWMP data model before any parameter is sent.",
+    "On a spare or recovery-tested unit, a read-only UART boot and non-secret personalization observation that establishes whether the exact build exposes a usable local recovery path.",
     "A recovery path tested before and after any privileged-access experiment.",
     "Sanitized protocol metadata proving the requested change and a separate login verification.",
     "Independent reproduction that preserves Internet, IPTV, VoIP, and WAN-management safety."
   ],
-  "last_reviewed": "2026-08-12"
+  "last_reviewed": "2026-08-13"
 }

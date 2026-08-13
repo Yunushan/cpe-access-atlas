@@ -12,6 +12,7 @@ import cpe_access_atlas.catalog as catalog
 from cpe_access_atlas.catalog import (
     CatalogError,
     find_recipe,
+    load_official_devices,
     load_providers,
     normalize,
     resolve_provider,
@@ -39,6 +40,26 @@ class CatalogTests(unittest.TestCase):
     def test_provider_alias_resolves(self) -> None:
         self.assertEqual(resolve_provider("TTNET").id, "turk-telekom")
         self.assertEqual(resolve_provider("Turksat Kablonet").id, "turksat-kablonet")
+
+    def test_official_device_inventory_is_separate_from_recipe_support(self) -> None:
+        devices = load_official_devices()
+        self.assertEqual(len(devices), 59)
+        self.assertIn(
+            ("turkcell-superonline", "ZTE", "H3600P"),
+            {(device.provider_id, device.vendor, device.model) for device in devices},
+        )
+        kablonet = [
+            device
+            for device in devices
+            if device.provider_id == "turksat-kablonet"
+            and device.model == "ZXHN F6600"
+        ]
+        self.assertEqual(len(kablonet), 1)
+        self.assertEqual(kablonet[0].network_technology, "GPON")
+        self.assertEqual(
+            kablonet[0].source_ids,
+            ("turksat-kablonet-devices", "turksat-kablo-devices"),
+        )
 
     def test_exact_h3600_recipe_matches_aliases(self) -> None:
         recipe = find_recipe(
@@ -90,7 +111,11 @@ class CatalogTests(unittest.TestCase):
     def test_source_and_packaged_schemas_match(self) -> None:
         source_root = Path(__file__).parents[1] / "schemas"
         package_root = resources.files("cpe_access_atlas").joinpath("data", "schemas")
-        for filename in ("recipe.schema.json", "providers.schema.json"):
+        for filename in (
+            "recipe.schema.json",
+            "providers.schema.json",
+            "device_inventory.schema.json",
+        ):
             with self.subTest(filename=filename):
                 source = json.loads((source_root / filename).read_text(encoding="utf-8"))
                 packaged = json.loads(
@@ -125,6 +150,35 @@ class CatalogTests(unittest.TestCase):
         payload["evidence"][0]["url"] = "http://example.test/insecure"
         with self.assertRaises(CatalogError):
             catalog._validate_payload(payload, "recipe.schema.json", "fixture")
+
+    def test_official_device_loader_rejects_unknown_source(self) -> None:
+        payload = catalog._load_json("device_inventory.json")
+        payload["providers"][0]["devices"][0]["source_ids"] = ["missing-source"]
+        with patch.object(catalog, "_load_json", return_value=payload):
+            with self.assertRaises(CatalogError):
+                load_official_devices()
+
+        duplicate_source_payload = catalog._load_json("device_inventory.json")
+        duplicate_source_payload["sources"].append(
+            dict(duplicate_source_payload["sources"][0])
+        )
+        with patch.object(catalog, "_load_json", return_value=duplicate_source_payload):
+            with self.assertRaises(CatalogError):
+                load_official_devices()
+
+        mismatched_count_payload = catalog._load_json("device_inventory.json")
+        mismatched_count_payload["sources"][0]["expected_device_count"] += 1
+        with patch.object(catalog, "_load_json", return_value=mismatched_count_payload):
+            with self.assertRaises(CatalogError):
+                load_official_devices()
+
+        duplicate_provider_payload = catalog._load_json("device_inventory.json")
+        duplicate_provider_payload["providers"].append(
+            dict(duplicate_provider_payload["providers"][0])
+        )
+        with patch.object(catalog, "_load_json", return_value=duplicate_provider_payload):
+            with self.assertRaises(CatalogError):
+                load_official_devices()
 
     def test_catalog_loader_reports_json_and_schema_errors(self) -> None:
         class BrokenResource:
@@ -207,6 +261,12 @@ class CatalogTests(unittest.TestCase):
             model="model-2",
             firmware="firmware-2",
         )
+        inventory_device = SimpleNamespace(
+            provider_id="missing-inventory-provider",
+            vendor="Vendor",
+            model="Model",
+            source_provider_ids=("other-provider",),
+        )
         with patch.object(
             catalog,
             "load_providers",
@@ -215,6 +275,10 @@ class CatalogTests(unittest.TestCase):
             catalog,
             "load_recipes",
             return_value=(recipe, recipe, known_mismatch),
+        ), patch.object(
+            catalog,
+            "load_official_devices",
+            return_value=(inventory_device, inventory_device),
         ):
             errors = catalog.validate_catalog()
         self.assertTrue(any("provider IDs are not unique" in error for error in errors))
@@ -223,6 +287,13 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(any("invalid status" in error for error in errors))
         self.assertTrue(any("duplicate exact target" in error for error in errors))
         self.assertTrue(any("provider name does not match" in error for error in errors))
+        self.assertTrue(
+            any("official device inventory: unknown provider" in error for error in errors)
+        )
+        self.assertTrue(any("source provider does not match" in error for error in errors))
+        self.assertTrue(
+            any("official device inventory: duplicate device" in error for error in errors)
+        )
 
     def test_verified_recipe_requires_exact_hardware_status(self) -> None:
         provider = catalog.Provider("isp", "ISP", (), "TR", "cataloged")

@@ -1,0 +1,531 @@
+{
+  "schema_version": 1,
+  "country": "TR",
+  "scope": "official-listing-only",
+  "notes": [
+    "A record proves only that an official provider page listed the device when reviewed.",
+    "A listing does not establish an exact ISP firmware, credentials, privileged access, root shell, bootloader access, or interchangeability.",
+    "No configuration backups, firmware images, credentials, serial numbers, MAC addresses, or subscriber identifiers are stored here."
+  ],
+  "sources": [
+    {
+      "id": "turk-telekom-modem-wifi",
+      "provider_id": "turk-telekom",
+      "title": "Türk Telekom Modem ve Wi-Fi",
+      "url": "https://bireysel.turktelekom.com.tr/cihazlar/modem-ve-internet",
+      "expected_device_count": 12,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "turk-telekom-hc220-g5",
+      "provider_id": "turk-telekom",
+      "title": "Türk Telekom TP-Link HC220-G5 Mesh WiFi product page",
+      "url": "https://bireysel.turktelekom.com.tr/cihazlar/modem-ve-internet/tp-link-hc220-g5-mesh-wifi",
+      "expected_device_count": 1,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "turk-telekom-mc12",
+      "provider_id": "turk-telekom",
+      "title": "Türk Telekom TP-Link MC12 Mesh WiFi product page",
+      "url": "https://bireysel.turktelekom.com.tr/cihazlar/modem-ve-internet/tp-link-mc12-mesh-wifi",
+      "expected_device_count": 1,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "turk-telekom-h196a",
+      "provider_id": "turk-telekom",
+      "title": "Türk Telekom ZTE ZXHN H196A Mesh WiFi product page",
+      "url": "https://bireysel.turktelekom.com.tr/cihazlar/modem-ve-internet/zte-zxhn-h196a-mesh-wifi",
+      "expected_device_count": 1,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "turk-telekom-tcl-mw42v",
+      "provider_id": "turk-telekom",
+      "title": "Türk Telekom TCL MW42V Mobil Modem product page",
+      "url": "https://bireysel.turktelekom.com.tr/cihazlar/modem-ve-internet/tcl-mw42v-mobil-modem",
+      "expected_device_count": 1,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "superonline-modemler",
+      "provider_id": "turkcell-superonline",
+      "title": "Turkcell Superonline Modemler",
+      "url": "https://www.superonline.net/kurumsal/yardim/modemler",
+      "expected_device_count": 32,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "turksat-kablonet-devices",
+      "provider_id": "turksat-kablonet",
+      "title": "Türksat Kablonet Cihazlar",
+      "url": "https://www.turksatkablonet.com/cihazlar",
+      "expected_device_count": 5,
+      "last_reviewed": "2026-08-13"
+    },
+    {
+      "id": "turksat-kablo-devices",
+      "provider_id": "turksat-kablonet",
+      "title": "Türksat Kablo Cihazlar",
+      "url": "https://www.turksatkablo.com.tr/yayin-akisi.aspx/inc/inc/userUpload/sayfa/formlar/Cihazlar",
+      "expected_device_count": 11,
+      "alternate_urls": [
+        "https://www.turksatkablo.com.tr/Cihazlar"
+      ],
+      "last_reviewed": "2026-08-13"
+    }
+  ],
+  "providers": [
+    {
+      "provider_id": "turk-telekom",
+      "devices": [
+        {
+          "vendor": "D-Link",
+          "model": "DVG X3030",
+          "official_name": "D-link DVG X3030 Wİ-Fİ 6 İkili Mesh",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "D-Link",
+          "model": "DWR930M",
+          "official_name": "DLINK DWR930M 4G/LTE MOBILE ROUTER BEYAZ",
+          "category": "mobile-modem",
+          "network_technology": "4G/LTE",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "ZXHN H1601-P",
+          "official_name": "ZTE ZXHN H1601-P Wi-Fi 6 AX3000 Premium VDSL Modem",
+          "category": "vdsl-modem",
+          "network_technology": "VDSL",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "Zyxel",
+          "model": "DX3300",
+          "official_name": "Zyxel DX3300 Wi-Fi 6 Premium VDSL Modem",
+          "category": "vdsl-modem",
+          "network_technology": "VDSL",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "DN8045X6-20",
+          "official_name": "Huawei DN8045X6-20 Wi-Fi 6 Premium VDSL Modem",
+          "category": "vdsl-modem",
+          "network_technology": "VDSL",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "TURBOBOX GO",
+          "official_name": "TP-LINK TURBOBOX GO MOBİL MODEM",
+          "category": "mobile-modem",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "RE705X",
+          "official_name": "TP-Link RE705X WiFİ 6 Repeater",
+          "category": "signal-extender",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "VX18",
+          "official_name": "TP-Link VX18 Wi-Fi 6 VDSL Modem",
+          "category": "vdsl-modem",
+          "network_technology": "VDSL",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "MX30",
+          "official_name": "TP-Link MX30 Wi-Fi 6 AX3000 Mesh Wi-Fi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "HX520",
+          "official_name": "TP-Link HX520 Wi-Fi 6 AX3000 Mesh Wi-Fi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "H3601P",
+          "official_name": "ZTE H3601P Wi-Fi 6 AX3000 Mesh WiFi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "MX18",
+          "official_name": "TP-Link MX18 Wi-Fi 6 Mesh Wi-Fi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-modem-wifi"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "HC220-G5",
+          "official_name": "TP-Link HC220-G5 Mesh WiFi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-hc220-g5"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "MC12",
+          "official_name": "TP-Link MC12 Mesh WiFi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-mc12"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "ZXHN H196A",
+          "official_name": "ZTE ZXHN H196A Mesh WiFi",
+          "category": "mesh-wifi",
+          "source_ids": ["turk-telekom-h196a"]
+        },
+        {
+          "vendor": "TCL",
+          "model": "MW42V",
+          "official_name": "TCL MW42V Mobil Modem",
+          "category": "mobile-modem",
+          "source_ids": ["turk-telekom-tcl-mw42v"]
+        }
+      ]
+    },
+    {
+      "provider_id": "turkcell-superonline",
+      "devices": [
+        {
+          "vendor": "ZTE",
+          "model": "MC8520B",
+          "official_name": "ZTE MC8520B 5G",
+          "category": "mobile-modem",
+          "network_technology": "5G",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "HG552e",
+          "official_name": "Huawei HG552e",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "AirTies",
+          "model": "Air 6271",
+          "official_name": "AirTies Air 6271",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "HG552d",
+          "official_name": "Huawei HG552d",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "H168A",
+          "official_name": "ZTE H168A",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "AirTies",
+          "model": "Air 6372",
+          "official_name": "AirTies Air 6372",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Zyxel",
+          "model": "EX3501",
+          "official_name": "ZYXEL EX3501",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "HG253/S",
+          "official_name": "Huawei HG253/S",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Nokia",
+          "model": "G-2426G-A",
+          "official_name": "Nokia G-2426G-A",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "H3600",
+          "official_name": "ZTE H3600",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "EX530v",
+          "official_name": "TP-LINK EX530v",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "H3600P",
+          "official_name": "ZTE H3600P",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "EB810v",
+          "official_name": "TP Link EB810v",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "H162-383",
+          "official_name": "Huawei H162-383 5G",
+          "category": "mobile-modem",
+          "network_technology": "5G",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Tilgin",
+          "model": "HGA1311",
+          "official_name": "Tilgin HGA1311",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Zyxel",
+          "model": "NR5313",
+          "official_name": "Zyxel NR5313 5G",
+          "category": "mobile-modem",
+          "network_technology": "5G",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Tilgin",
+          "model": "HGA1311 v2",
+          "official_name": "Tilgin HGA1311 v2",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "MF297D",
+          "official_name": "ZTE MF297D (CAT12)",
+          "category": "mobile-modem",
+          "network_technology": "CAT12",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Pirelli",
+          "model": "PRG E4202G",
+          "official_name": "Pirelli PRG E4202G",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Tozed",
+          "model": "ZLT S92",
+          "official_name": "Tozed ZLT S92 (CAT12)",
+          "category": "mobile-modem",
+          "network_technology": "CAT12",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Pirelli",
+          "model": "DRG A226G",
+          "official_name": "Pirelli DRG A226G",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "B618",
+          "official_name": "Huawei B618 (CAT11)",
+          "category": "mobile-modem",
+          "network_technology": "CAT11",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Tilgin",
+          "model": "HGA2301",
+          "official_name": "Tilgin HGA2301",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "B535",
+          "official_name": "Huawei B535 (CAT7)",
+          "category": "mobile-modem",
+          "network_technology": "CAT7",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Tilgin",
+          "model": "HGA1521",
+          "official_name": "Tilgin HGA1521",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "B525",
+          "official_name": "Huawei B525 (CAT6)",
+          "category": "mobile-modem",
+          "network_technology": "CAT6",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "HG658v2",
+          "official_name": "Huawei HG658v2",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "HG255s",
+          "official_name": "Huawei HG255s",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "ZXHN H267A",
+          "official_name": "Zte ZXHN H267A",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Huawei",
+          "model": "HG8245X6",
+          "official_name": "Huawei HG8245X6",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "Innbox",
+          "model": "F60",
+          "official_name": "Innbox F60",
+          "category": "not-specified",
+          "source_ids": ["superonline-modemler"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "MF286R",
+          "official_name": "ZTE MF286R (CAT6)",
+          "category": "mobile-modem",
+          "network_technology": "CAT6",
+          "source_ids": ["superonline-modemler"]
+        }
+      ]
+    },
+    {
+      "provider_id": "turksat-kablonet",
+      "devices": [
+        {
+          "vendor": "Huawei",
+          "model": "EG8247W",
+          "official_name": "Huawei - EG8247W Modem",
+          "category": "fiber-ont",
+          "network_technology": "GPON",
+          "source_ids": ["turksat-kablonet-devices", "turksat-kablo-devices"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "ZXHN F6600",
+          "official_name": "ZTE ZXHN - F6600 GPON Modem",
+          "category": "fiber-ont",
+          "network_technology": "GPON",
+          "source_ids": ["turksat-kablonet-devices", "turksat-kablo-devices"]
+        },
+        {
+          "vendor": "H&D",
+          "model": "NE1611C",
+          "official_name": "H&D NE1611C Modem",
+          "category": "docsis-modem",
+          "network_technology": "DOCSIS 3.0",
+          "source_ids": ["turksat-kablonet-devices", "turksat-kablo-devices"]
+        },
+        {
+          "vendor": "Netmaster",
+          "model": "Infinity 401",
+          "official_name": "Netmaster Infinity 401 Modem",
+          "category": "docsis-modem",
+          "network_technology": "DOCSIS 3.0",
+          "source_ids": ["turksat-kablonet-devices", "turksat-kablo-devices"]
+        },
+        {
+          "vendor": "Zyxel",
+          "model": "VMG3625-T50B",
+          "official_name": "Zyxel - VMG3625-T50B Modem",
+          "category": "vdsl-modem",
+          "network_technology": "VDSL",
+          "source_ids": ["turksat-kablonet-devices", "turksat-kablo-devices"]
+        },
+        {
+          "vendor": "Skyworth",
+          "model": "GN630V",
+          "official_name": "Skyworth GN630V Modem",
+          "category": "fiber-ont",
+          "network_technology": "GPON",
+          "source_ids": ["turksat-kablo-devices"]
+        },
+        {
+          "vendor": "ZTE",
+          "model": "ZXHN F1611A",
+          "official_name": "ZTE ZXHN F1611A Modem",
+          "category": "fiber-ont",
+          "network_technology": "GPON",
+          "source_ids": ["turksat-kablo-devices"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "VC220-G3U",
+          "official_name": "TP-LINK-VC220-G3U Modem",
+          "category": "vdsl-modem",
+          "network_technology": "VDSL",
+          "source_ids": ["turksat-kablo-devices"]
+        },
+        {
+          "vendor": "TP-Link",
+          "model": "HX520",
+          "official_name": "TP-LİNK HX520 2'li Mesh",
+          "category": "mesh-wifi",
+          "source_ids": ["turksat-kablo-devices"]
+        },
+        {
+          "vendor": "Mercusys",
+          "model": "Halo H60X",
+          "official_name": "MERCUSYS HALO H60X 2'li Mesh",
+          "category": "mesh-wifi",
+          "source_ids": ["turksat-kablo-devices"]
+        },
+        {
+          "vendor": "Mercusys",
+          "model": "Halo H80X",
+          "official_name": "MERCUSYS HALO H80X 2'li Mesh",
+          "category": "mesh-wifi",
+          "source_ids": ["turksat-kablo-devices"]
+        }
+      ]
+    }
+  ]
+}

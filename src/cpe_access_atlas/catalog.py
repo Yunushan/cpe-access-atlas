@@ -120,6 +120,53 @@ class Recipe:
         )
 
 
+@dataclass(frozen=True)
+class OfficialDevice:
+    """A device name published by an ISP, without an access-support claim."""
+
+    provider_id: str
+    vendor: str
+    model: str
+    official_name: str
+    category: str
+    network_technology: str | None
+    source_ids: tuple[str, ...]
+    source_provider_ids: tuple[str, ...]
+    source_urls: tuple[str, ...]
+
+    @classmethod
+    def from_dict(
+        cls,
+        provider_id: str,
+        item: dict[str, Any],
+        sources: dict[str, dict[str, Any]],
+    ) -> OfficialDevice:
+        source_ids = tuple(str(value) for value in item["source_ids"])
+        try:
+            source_records = tuple(sources[source_id] for source_id in source_ids)
+        except KeyError as exc:
+            raise CatalogError(
+                f"device inventory references unknown source {exc.args[0]!r}"
+            ) from exc
+        return cls(
+            provider_id=provider_id,
+            vendor=str(item["vendor"]),
+            model=str(item["model"]),
+            official_name=str(item["official_name"]),
+            category=str(item["category"]),
+            network_technology=(
+                str(item["network_technology"])
+                if "network_technology" in item
+                else None
+            ),
+            source_ids=source_ids,
+            source_provider_ids=tuple(
+                str(source["provider_id"]) for source in source_records
+            ),
+            source_urls=tuple(str(source["url"]) for source in source_records),
+        )
+
+
 def _load_json(relative_path: str) -> Any:
     data_root = resources.files("cpe_access_atlas").joinpath("data")
     return _read_json(data_root.joinpath(relative_path), relative_path)
@@ -187,6 +234,45 @@ def load_recipes() -> tuple[Recipe, ...]:
     return tuple(recipes)
 
 
+def load_official_devices() -> tuple[OfficialDevice, ...]:
+    """Load official ISP device listings separately from exact recipes."""
+
+    payload = _validate_payload(
+        _load_json("device_inventory.json"),
+        "device_inventory.schema.json",
+        "device_inventory.json",
+    )
+    source_items = payload["sources"]
+    source_ids = [str(item["id"]) for item in source_items]
+    if len(source_ids) != len(set(source_ids)):
+        raise CatalogError("official device source IDs are not unique")
+    sources = {str(item["id"]): item for item in source_items}
+    expected_source_counts = {
+        str(item["id"]): int(item["expected_device_count"])
+        for item in source_items
+    }
+    observed_source_counts = dict.fromkeys(source_ids, 0)
+    devices: list[OfficialDevice] = []
+    provider_group_ids = [str(provider["provider_id"]) for provider in payload["providers"]]
+    if len(provider_group_ids) != len(set(provider_group_ids)):
+        raise CatalogError("official device provider IDs are not unique")
+    for provider in payload["providers"]:
+        provider_id = str(provider["provider_id"])
+        for item in provider["devices"]:
+            device = OfficialDevice.from_dict(provider_id, item, sources)
+            devices.append(device)
+            for source_id in device.source_ids:
+                observed_source_counts[source_id] += 1
+    for source_id, expected_count in expected_source_counts.items():
+        observed_count = observed_source_counts[source_id]
+        if observed_count != expected_count:
+            raise CatalogError(
+                f"official device source {source_id!r} expects "
+                f"{expected_count} device(s), found {observed_count}"
+            )
+    return tuple(devices)
+
+
 def resolve_provider(value: str, providers: Iterable[Provider] | None = None) -> Provider:
     candidates = providers if providers is not None else load_providers()
     wanted = normalize(value)
@@ -231,6 +317,7 @@ def validate_catalog() -> list[str]:
     try:
         providers = load_providers()
         recipes = load_recipes()
+        official_devices = load_official_devices()
     except CatalogError as exc:
         return [str(exc)]
     provider_ids = [item.id for item in providers]
@@ -251,6 +338,32 @@ def validate_catalog() -> list[str]:
             if previous is not None and previous != provider.id:
                 errors.append(f"provider alias is ambiguous: {value!r}")
             provider_names[key] = provider.id
+
+    official_device_keys: set[tuple[str, str, str]] = set()
+    for device in official_devices:
+        if device.provider_id not in known_providers:
+            errors.append(
+                f"official device inventory: unknown provider {device.provider_id}"
+            )
+        if any(
+            source_provider != device.provider_id
+            for source_provider in device.source_provider_ids
+        ):
+            errors.append(
+                "official device inventory: source provider does not match "
+                f"{device.provider_id}/{device.model}"
+            )
+        device_key = (
+            normalize(device.provider_id),
+            normalize(device.vendor),
+            normalize(device.model),
+        )
+        if device_key in official_device_keys:
+            errors.append(
+                "official device inventory: duplicate device "
+                f"{device.provider_id}/{device.vendor} {device.model}"
+            )
+        official_device_keys.add(device_key)
 
     valid_statuses = {"researching", "experimental", "verified", "stable", "blocked"}
     target_keys: set[tuple[str, str, str, str]] = set()
