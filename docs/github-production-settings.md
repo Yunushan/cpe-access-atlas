@@ -15,7 +15,7 @@ Protect `main` with:
 - conversation resolution required;
 - force-pushes and branch deletion disabled;
 - required checks for every CI matrix job, `package-smoke`, `dependency-audit`,
-  `dependency-review`, and CodeQL `analyze`.
+  `dependency-review`, CodeQL `analyze`, and secret-scan `gitleaks`.
 
 The CI matrix checks are:
 
@@ -55,6 +55,19 @@ test (macos-latest, 3.14)
 
 ## Read-only evidence checks
 
+Run the repository's read-only audit from an authenticated GitHub CLI session
+with administrator-visible repository access:
+
+```shell
+python scripts/check_github_production_settings.py \
+  --repo Yunushan/cpe-access-atlas
+```
+
+The command never writes to GitHub. It reports `PASS`, `FAIL`, or
+`UNVERIFIED`; a missing administrator permission is intentionally not treated
+as proof that a control is disabled. Use `--json` when retaining an audit
+record.
+
 From an authenticated GitHub CLI session with repository-admin visibility:
 
 ```shell
@@ -68,5 +81,8 @@ gh api repos/Yunushan/cpe-access-atlas
 The final audit should show branch protection or an enforced ruleset, at least
 one published release, a protected release-tag policy, enabled Dependabot
 security updates, restricted Actions permissions with SHA-pinning enforcement,
-zero open CodeQL alerts, and successful CI, security, and CodeQL runs for the
-merged commit.
+zero open CodeQL alerts, and successful CI, security, CodeQL, package-smoke,
+dependency-audit, and secret-scan check runs for the merged commit. On a push,
+the dependency-review check may be skipped because it is pull-request-only;
+the branch policy must still require it for pull requests. The latest release
+must also use an annotated tag whose commit is reachable from `main`.

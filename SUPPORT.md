@@ -35,7 +35,7 @@ stable until its hardware verification status is `exact`.
 
 ### Why it is not marked supported
 
-As of 2026-08-13:
+As of 2026-08-15:
 
 - the archived community tool states that newer firmware is unsupported and
   limits its working range to older builds;

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import re
 import struct
 import zlib
@@ -220,9 +221,13 @@ def buggy_sha256(message: bytes) -> bytes:
         raise ConfigError("key-derivation input must be bytes")
     last_chunk_length = len(message) % 64
     if last_chunk_length <= 55:
-        import hashlib
-
-        return hashlib.sha256(message).digest()
+        # This is a compatibility digest for the vendor's key derivation, not
+        # password storage or password verification.  Do not replace it with
+        # a different KDF: the exact bytes must match the firmware behavior.
+        # Explicitly mark this as non-security use for FIPS-aware runtimes and
+        # static analyzers; the digest is only a vendor-compatibility value.
+        # codeql[py/weak-sensitive-data-hashing]
+        return hashlib.sha256(message, usedforsecurity=False).digest()
     packed_length = struct.pack(">Q", 8 * len(message))
     if last_chunk_length == 56:
         return _sha256_raw_digest(message + packed_length)

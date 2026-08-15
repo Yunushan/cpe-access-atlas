@@ -4,7 +4,21 @@ All notable changes are documented here.
 
 ## Unreleased
 
-No unreleased changes yet.
+- Added a read-only GitHub production-settings audit script that distinguishes
+  disabled controls from administrator permissions that are not visible.
+- The audit now verifies every CI matrix check plus package smoke, dependency
+  audit/review, CodeQL, and secret-scan check runs, and requires `gitleaks` in
+  the protected-branch check set, instead of only checking workflow-level
+  success.
+- The release audit now verifies that the latest release uses an annotated tag
+  whose commit is reachable from `main`.
+- Pinned the pre-commit Ruff and mypy repositories to immutable commit SHAs,
+  matching the workflow action supply-chain policy.
+- Made the GitHub audit's CLI adapter explicitly UTF-8 and fail-safe on
+  Windows, where repository metadata can contain non-CP1252 characters.
+- Documented the narrowly scoped CodeQL exception for the firmware-compatible
+  SHA-256 derivation path, and marked the call as non-security use for
+  FIPS-aware runtimes; it is not password storage or verification.
 
 ## 0.3.0 - 2026-08-15
 

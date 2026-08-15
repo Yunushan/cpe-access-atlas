@@ -67,7 +67,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
 | Linux root shell | Not supported |
-| Last evidence review | 2026-08-13 |
+| Last evidence review | 2026-08-15 |
 
 Public community evidence says the older provisioning interception workflow
 does not work on this build. No official firmware image, safe downgrade path,
@@ -304,7 +304,9 @@ See [SECURITY.md](SECURITY.md).
 
 Repository administrators should apply the [GitHub production settings
 checklist](docs/github-production-settings.md) before declaring a release
-production-ready.
+production-ready. The checklist includes the read-only
+`scripts/check_github_production_settings.py` audit for retaining evidence of
+the administrator-visible controls.
 
 ## Research sources
 
