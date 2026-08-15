@@ -42,6 +42,10 @@ jobs:
       - name: Compile
         run: python -m compileall -q src
       - name: CLI reference is up to date
+        # argparse's help formatting differs across Python versions, so this
+        # generated doc is only guaranteed to match on the same interpreter
+        # used to generate it; check it once rather than on every matrix cell.
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
         run: python scripts/generate_cli_reference.py --check
       - name: Test
         run: python -m coverage run -m unittest discover -s tests -v
