@@ -16,6 +16,11 @@ from generate_cli_reference import _OUTPUT_PATH, render  # noqa: E402
 
 
 class CliReferenceTests(unittest.TestCase):
+    @unittest.skipUnless(
+        sys.version_info[:2] == (3, 14),
+        "argparse help formatting differs across Python versions; "
+        "the committed reference is generated from Python 3.14",
+    )
     def test_generated_reference_matches_committed_doc(self) -> None:
         self.assertTrue(_OUTPUT_PATH.exists(), f"{_OUTPUT_PATH} is missing; run the generator")
         committed = _OUTPUT_PATH.read_text(encoding="utf-8")
