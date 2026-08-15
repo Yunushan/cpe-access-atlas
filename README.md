@@ -89,6 +89,9 @@ cpe-atlas recipes
 cpe-atlas validate
 ```
 
+See [the full CLI reference](docs/cli-reference.md) for every command and
+option, generated directly from the CLI so it cannot drift out of date.
+
 `cpe-atlas devices` lists model names found on official Turkish ISP device
 pages. These are public listing records only; they do not imply firmware
 compatibility, privileged access, root access, or support for every ISP-issued
@@ -218,7 +221,7 @@ prove that the firmware accepts the file, enables a Linux UID 0 shell, or has a
 recoverable rollback path. Keep the original backup and every generated file
 private; do not upload them to GitHub or include them in bug reports.
 
-The `apply` command is deliberately fail-closed in version 0.2.0. Even after
+The `apply` command is deliberately fail-closed in version 0.3.0. Even after
 ownership acknowledgement it refuses this blocked recipe and makes no device
 change.
 

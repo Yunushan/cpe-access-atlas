@@ -18,13 +18,31 @@ import zlib
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Protocol
 from xml.etree import ElementTree as ET
 
+
+class _CipherContext(Protocol):
+    """Shape of an AES-CBC cipher context used for both directions."""
+
+    def decrypt(self, data: bytes) -> bytes: ...
+
+    def encrypt(self, data: bytes) -> bytes: ...
+
+
+class _CipherModule(Protocol):
+    """Shape of the subset of `Crypto.Cipher.AES` this module relies on."""
+
+    MODE_CBC: int
+
+    def new(self, key: bytes, mode: int, iv: bytes) -> _CipherContext: ...
+
+
+AES: _CipherModule | None
 try:
-    from Crypto.Cipher import AES
+    from Crypto.Cipher import AES  # type: ignore[assignment]
 except ImportError:  # pragma: no cover - exercised by installation diagnostics
-    AES = None  # type: ignore[assignment]
+    AES = None
 
 
 class ConfigError(ValueError):
@@ -213,7 +231,7 @@ def buggy_sha256(message: bytes) -> bytes:
     return _sha256_raw_digest(message)
 
 
-def _require_aes() -> object:
+def _require_aes() -> _CipherModule:
     if AES is None:
         raise ConfigError(
             "AES support is unavailable; install the package with its runtime dependencies"
@@ -222,11 +240,7 @@ def _require_aes() -> object:
 
 
 def _validate_device_inputs(device_key: str, serial: str, mac: str) -> None:
-    if (
-        not isinstance(device_key, str)
-        or len(device_key) != 32
-        or not device_key.isascii()
-    ):
+    if not isinstance(device_key, str) or len(device_key) != 32 or not device_key.isascii():
         raise ConfigError("H3600P device encryption passphrase must be exactly 32 characters")
     if not isinstance(serial, str) or not _SERIAL_PATTERN.fullmatch(serial.upper()):
         raise ConfigError(
@@ -267,7 +281,7 @@ def _decode_base64_wrapper(data: bytes) -> tuple[bytes, bool]:
     return data, False
 
 
-def _read_chunks(stream: BinaryIO, decryptor: object | None = None) -> bytes:
+def _read_chunks(stream: BinaryIO, decryptor: _CipherContext | None = None) -> bytes:
     chunks: list[bytes] = []
     while True:
         header = stream.read(_CHUNK_HEADER_SIZE)
@@ -279,9 +293,7 @@ def _read_chunks(stream: BinaryIO, decryptor: object | None = None) -> bytes:
         if encrypted_length > _MAX_COMPRESSED_BYTES:
             raise ConfigError("configuration chunk exceeds the safety size limit")
         if plain_length > _MAX_COMPRESSED_BYTES:
-            raise ConfigError(
-                "configuration chunk plaintext length exceeds the safety size limit"
-            )
+            raise ConfigError("configuration chunk plaintext length exceeds the safety size limit")
         if more not in (0, 1):
             raise ConfigError("configuration chunk continuation flag is invalid")
         chunk = stream.read(encrypted_length)
@@ -309,9 +321,7 @@ def _decode_compressed(data: bytes) -> bytes:
         duplicate_length,
         expected_crc,
         header_crc,
-    ) = struct.unpack(
-        ">7I", header[:28]
-    )
+    ) = struct.unpack(">7I", header[:28])
     if magic != PAYLOAD_MAGIC or version != 0:
         raise ConfigError("configuration does not contain a recognized compressed payload")
     if expected_length != duplicate_length:
@@ -369,8 +379,9 @@ def _decode_compressed(data: bytes) -> bytes:
     return bytes(output)
 
 
-def decode_config(data: bytes, *, device_key: str | None = None, serial: str | None = None,
-                  mac: str | None = None) -> DecodedConfig:
+def decode_config(
+    data: bytes, *, device_key: str | None = None, serial: str | None = None, mac: str | None = None
+) -> DecodedConfig:
     """Decode a private H3600P config without logging or writing its XML."""
 
     binary, base64_wrapped = _decode_base64_wrapper(data)
@@ -436,10 +447,16 @@ def _encode_compressed(xml: bytes) -> bytes:
     return header + chunk
 
 
-def encode_config(xml: bytes, *, signature: str = H3600P_SIGNATURE,
-                  base64_wrap: bool = True, encrypted: bool = False,
-                  device_key: str | None = None, serial: str | None = None,
-                  mac: str | None = None) -> bytes:
+def encode_config(
+    xml: bytes,
+    *,
+    signature: str = H3600P_SIGNATURE,
+    base64_wrap: bool = True,
+    encrypted: bool = False,
+    device_key: str | None = None,
+    serial: str | None = None,
+    mac: str | None = None,
+) -> bytes:
     """Encode XML as an offline H3600P artifact.
 
     The default is the unencrypted compressed form documented by the public
@@ -489,10 +506,7 @@ def _find_or_create_ssh_table(root: ET.Element) -> tuple[ET.Element, ET.Element]
     if table is None:
         table = ET.SubElement(root, "Tbl", {"name": "SSHCfg", "RowCount": "1"})
     rows = table.findall("Row")
-    if rows:
-        row = rows[0]
-    else:
-        row = ET.SubElement(table, "Row", {"No": "0"})
+    row = rows[0] if rows else ET.SubElement(table, "Row", {"No": "0"})
     table.set("RowCount", "1")
     return table, row
 
@@ -500,11 +514,7 @@ def _find_or_create_ssh_table(root: ET.Element) -> tuple[ET.Element, ET.Element]
 def patch_root_ssh(xml: bytes, password: str, username: str = "admin") -> bytes:
     """Enable an SSH root-shell profile in a local XML configuration."""
 
-    if (
-        not isinstance(password, str)
-        or not 8 <= len(password) <= 128
-        or not password.isprintable()
-    ):
+    if not isinstance(password, str) or not 8 <= len(password) <= 128 or not password.isprintable():
         raise ConfigError("SSH password must contain 8-128 characters")
     if (
         not isinstance(username, str)
@@ -517,7 +527,10 @@ def patch_root_ssh(xml: bytes, password: str, username: str = "admin") -> bytes:
         raise ConfigError("configuration XML exceeds the safety size limit")
     _reject_unsafe_xml(xml)
     try:
-        root = ET.fromstring(xml)
+        # _reject_unsafe_xml already rejects DOCTYPE/ENTITY declarations above,
+        # which removes the XXE/entity-expansion risk stdlib ElementTree carries;
+        # a defusedxml dependency is not needed for this pre-filtered input.
+        root = ET.fromstring(xml)  # noqa: S314
     except ET.ParseError as exc:
         raise ConfigError("configuration XML is invalid") from exc
     if root.tag != "DB":
@@ -537,7 +550,9 @@ def patch_root_ssh(xml: bytes, password: str, username: str = "admin") -> bytes:
             field = ET.SubElement(row, "DM", {"name": name, "val": value})
         else:
             field.set("val", value)
-    result = ET.tostring(root, encoding="utf-8")
+    # ET.tostring's overloads type this as Any for a non-literal `encoding`
+    # argument; passing anything other than "unicode" always yields bytes.
+    result: bytes = ET.tostring(root, encoding="utf-8")
     return result
 
 

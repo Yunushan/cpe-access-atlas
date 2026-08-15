@@ -16,8 +16,7 @@ class RedactionTests(unittest.TestCase):
 
     def test_redacts_mac_subscriber_and_public_ip(self) -> None:
         output = redact_text(
-            "mac=AA:BB:CC:DD:EE:FF user=subscriber@example.net "
-            "public=8.8.8.8 local=192.168.1.1"
+            "mac=AA:BB:CC:DD:EE:FF user=subscriber@example.net public=8.8.8.8 local=192.168.1.1"
         )
         self.assertIn("[REDACTED-MAC]", output)
         self.assertIn("[REDACTED-SUBSCRIBER-ID]", output)
@@ -50,9 +49,7 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(output.count("[REDACTED]"), 5)
 
     def test_redacts_nonstandard_authorization_headers(self) -> None:
-        output = redact_text(
-            'Authorization: Digest username="alice", nonce="sensitive-value"\n'
-        )
+        output = redact_text('Authorization: Digest username="alice", nonce="sensitive-value"\n')
         self.assertNotIn("sensitive-value", output)
         self.assertIn("Authorization: [REDACTED]", output)
 

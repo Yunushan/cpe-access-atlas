@@ -51,8 +51,7 @@ class CatalogTests(unittest.TestCase):
         kablonet = [
             device
             for device in devices
-            if device.provider_id == "turksat-kablonet"
-            and device.model == "ZXHN F6600"
+            if device.provider_id == "turksat-kablonet" and device.model == "ZXHN F6600"
         ]
         self.assertEqual(len(kablonet), 1)
         self.assertEqual(kablonet[0].network_technology, "GPON")
@@ -118,9 +117,7 @@ class CatalogTests(unittest.TestCase):
         ):
             with self.subTest(filename=filename):
                 source = json.loads((source_root / filename).read_text(encoding="utf-8"))
-                packaged = json.loads(
-                    package_root.joinpath(filename).read_text(encoding="utf-8")
-                )
+                packaged = json.loads(package_root.joinpath(filename).read_text(encoding="utf-8"))
                 self.assertEqual(source, packaged)
 
     def test_unknown_and_ambiguous_provider_are_rejected(self) -> None:
@@ -144,9 +141,7 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaises(CatalogError):
                 catalog._validate_payload({}, "broken.schema.json", "fixture")
 
-        payload = catalog._load_json(
-            "recipes/tr_turk_telekom_zte_h3600p_ttn10_260210.json"
-        )
+        payload = catalog._load_json("recipes/tr_turk_telekom_zte_h3600p_ttn10_260210.json")
         payload["evidence"][0]["url"] = "http://example.test/insecure"
         with self.assertRaises(CatalogError):
             catalog._validate_payload(payload, "recipe.schema.json", "fixture")
@@ -159,9 +154,7 @@ class CatalogTests(unittest.TestCase):
                 load_official_devices()
 
         duplicate_source_payload = catalog._load_json("device_inventory.json")
-        duplicate_source_payload["sources"].append(
-            dict(duplicate_source_payload["sources"][0])
-        )
+        duplicate_source_payload["sources"].append(dict(duplicate_source_payload["sources"][0]))
         with patch.object(catalog, "_load_json", return_value=duplicate_source_payload):
             with self.assertRaises(CatalogError):
                 load_official_devices()
@@ -223,8 +216,9 @@ class CatalogTests(unittest.TestCase):
         matching = SimpleNamespace(
             matches=lambda *_args: True,
         )
-        with patch.object(catalog, "resolve_provider", return_value=provider), patch.object(
-            catalog, "load_recipes", return_value=(matching, matching)
+        with (
+            patch.object(catalog, "resolve_provider", return_value=provider),
+            patch.object(catalog, "load_recipes", return_value=(matching, matching)),
         ):
             with self.assertRaises(CatalogError):
                 catalog.find_recipe("isp", "model", "hardware", "firmware")
@@ -267,18 +261,22 @@ class CatalogTests(unittest.TestCase):
             model="Model",
             source_provider_ids=("other-provider",),
         )
-        with patch.object(
-            catalog,
-            "load_providers",
-            return_value=(provider, duplicate_provider, colliding_provider),
-        ), patch.object(
-            catalog,
-            "load_recipes",
-            return_value=(recipe, recipe, known_mismatch),
-        ), patch.object(
-            catalog,
-            "load_official_devices",
-            return_value=(inventory_device, inventory_device),
+        with (
+            patch.object(
+                catalog,
+                "load_providers",
+                return_value=(provider, duplicate_provider, colliding_provider),
+            ),
+            patch.object(
+                catalog,
+                "load_recipes",
+                return_value=(recipe, recipe, known_mismatch),
+            ),
+            patch.object(
+                catalog,
+                "load_official_devices",
+                return_value=(inventory_device, inventory_device),
+            ),
         ):
             errors = catalog.validate_catalog()
         self.assertTrue(any("provider IDs are not unique" in error for error in errors))
@@ -310,8 +308,9 @@ class CatalogTests(unittest.TestCase):
             model="model",
             firmware="firmware",
         )
-        with patch.object(catalog, "load_providers", return_value=(provider,)), patch.object(
-            catalog, "load_recipes", return_value=(recipe,)
+        with (
+            patch.object(catalog, "load_providers", return_value=(provider,)),
+            patch.object(catalog, "load_recipes", return_value=(recipe,)),
         ):
             errors = catalog.validate_catalog()
         self.assertTrue(any("resolved hardware revision" in error for error in errors))

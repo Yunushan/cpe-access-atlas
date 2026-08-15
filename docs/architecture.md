@@ -26,7 +26,7 @@ CLI
    IPv6 ULA literal. Hostnames, ranges, CIDRs, and target lists are rejected.
 5. **No discovery or guessing.** The project does not scan a LAN, enumerate
    remote devices, or try passwords.
-6. **Plan before mutation.** Version 0.2.0 includes no mutating adapter. The
+6. **Plan before mutation.** Version 0.3.0 includes no mutating adapter. The
    `apply` entry point exists to demonstrate and test the refusal path.
 7. **Schema before load.** Bundled JSON is validated against packaged JSON
    Schemas before it is converted into typed records.

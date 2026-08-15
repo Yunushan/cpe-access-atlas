@@ -4,6 +4,49 @@ All notable changes are documented here.
 
 ## Unreleased
 
+No unreleased changes yet.
+
+## 0.3.0 - 2026-08-15
+
+### Added
+
+- Added researching-status recipe stubs for every device in the official
+  device inventory (Türk Telekom, Turkcell Superonline, Türksat Kablonet)
+  that did not already have one, plus one researching-status stub each for
+  Millenicom and Vodafone Net; none make any access-level claim.
+- Added a generated CLI reference (`docs/cli-reference.md`), produced by
+  `scripts/generate_cli_reference.py` directly from the `argparse`
+  definition and checked for staleness in CI and at release time.
+- Added `CODE_OF_CONDUCT.md` and a `.github/workflows/dco.yml` workflow that
+  requires a Developer Certificate of Origin `Signed-off-by` trailer on
+  every commit in a pull request.
+- Added `.github/workflows/secret-scan.yml` (gitleaks) running on every push
+  and pull request, plus a `.gitleaks.toml` allowlist scoped to synthetic
+  test fixtures.
+- Added `.pre-commit-config.yaml` mirroring the CI lint, format, type-check,
+  and catalog-validation steps for local development.
+- Added a `hypothesis`-based property test suite
+  (`tests/test_fuzz_properties.py`) that fuzzes `config.py`'s binary
+  container decoder and `redaction.py`'s regex-based redaction with
+  randomized and adversarial input to catch crashes that example-based
+  tests would not think to construct.
+- Marked the package `py.typed` and added a `[tool.mypy]` strict
+  configuration, enforced in CI and at release time; introduced small
+  `Protocol` types for the optional AES cipher dependency in place of a
+  bare `object` return type.
+
+### Changed
+
+- Expanded the `ruff` lint rule set from `E, F, I, UP, B` to also include
+  `S` (bandit-equivalent security rules), `RUF`, `SIM`, `C4`, `PTH`, `A`,
+  and `ARG`, and fixed the resulting findings in `cli.py`, `config.py`,
+  `private_files.py`, and `redaction.py`.
+- Enforced `ruff format --check` in CI and at release time, after
+  reformatting the full source and test tree.
+- Fixed a latent bug where `main()` would raise `TypeError` if argparse's
+  `SystemExit.code` were `None` or a non-integer value on some Python
+  versions; added regression tests for both cases.
+
 ### Security and delivery
 
 - Added the read-only `root-readiness` gate for exact-build firmware evidence;

@@ -209,9 +209,7 @@ class ConfigTests(unittest.TestCase):
             decode_config(struct.pack(">3I", 0x04030201, 0, len(signature)) + signature)
         with self.assertRaisesRegex(ConfigError, "payload magic"):
             decode_config(
-                struct.pack(">3I", 0x04030201, 0, len(signature))
-                + signature
-                + b"\x00" * 60
+                struct.pack(">3I", 0x04030201, 0, len(signature)) + signature + b"\x00" * 60
             )
         with self.assertRaisesRegex(ConfigError, "unsupported encrypted"):
             decode_config(
@@ -270,9 +268,7 @@ class ConfigTests(unittest.TestCase):
             inspect_config(struct.pack(">3I", magic, 0, len(signature)) + signature)
         with self.assertRaisesRegex(ConfigError, "payload magic"):
             inspect_config(
-                struct.pack(">3I", magic, 0, len(signature))
-                + signature
-                + struct.pack(">2I", 0, 4)
+                struct.pack(">3I", magic, 0, len(signature)) + signature + struct.pack(">2I", 0, 4)
             )
 
     def test_device_input_types_are_rejected(self) -> None:
@@ -285,12 +281,7 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             _read_chunks(BytesIO(struct.pack(">3I", 1, 16 * 1024 * 1024 + 16, 0)))
         with self.assertRaisesRegex(ConfigError, "plaintext length"):
-            _read_chunks(
-                BytesIO(
-                    struct.pack(">3I", 16 * 1024 * 1024 + 1, 16, 0)
-                    + b"x" * 16
-                )
-            )
+            _read_chunks(BytesIO(struct.pack(">3I", 16 * 1024 * 1024 + 1, 16, 0) + b"x" * 16))
 
     def test_input_and_size_limits_are_rejected(self) -> None:
         with self.assertRaisesRegex(ConfigError, "must be bytes"):
@@ -306,16 +297,19 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "safety size limit"):
             patch_root_ssh(oversized_xml, "DummyPass123")
 
-        oversized_header = struct.pack(
-            ">7I",
-            0x01020304,
-            0,
-            8 * 1024 * 1024 + 1,
-            1,
-            8 * 1024 * 1024 + 1,
-            0,
-            0,
-        ) + b"\x00" * 32
+        oversized_header = (
+            struct.pack(
+                ">7I",
+                0x01020304,
+                0,
+                8 * 1024 * 1024 + 1,
+                1,
+                8 * 1024 * 1024 + 1,
+                0,
+                0,
+            )
+            + b"\x00" * 32
+        )
         with self.assertRaisesRegex(ConfigError, "safety size limit"):
             decode_config(oversized_header)
 
@@ -345,18 +339,14 @@ class ConfigTests(unittest.TestCase):
                 + struct.pack(
                     ">3I",
                     plain_length,
-                    len(compressed)
-                    if chunk_compressed_length is None
-                    else chunk_compressed_length,
+                    len(compressed) if chunk_compressed_length is None else chunk_compressed_length,
                     0,
                 )
                 + compressed
             )
 
         with self.assertRaisesRegex(ConfigError, "safety size limit"):
-            decode_config(
-                compressed_container(1, 16 * 1024 * 1024 + 1, 1, b"x")
-            )
+            decode_config(compressed_container(1, 16 * 1024 * 1024 + 1, 1, b"x"))
         with self.assertRaisesRegex(ConfigError, "safety size limit"):
             decode_config(
                 compressed_container(
@@ -368,9 +358,7 @@ class ConfigTests(unittest.TestCase):
                 )
             )
         with self.assertRaisesRegex(ConfigError, "safety size limit"):
-            decode_config(
-                compressed_container(1, 1, 16 * 1024 * 1024 + 1, b"x")
-            )
+            decode_config(compressed_container(1, 1, 16 * 1024 * 1024 + 1, b"x"))
 
         expanded = zlib.compress(b"x" * (8 * 1024 * 1024 + 1))
         with self.assertRaisesRegex(ConfigError, "safety size limit"):

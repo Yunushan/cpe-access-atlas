@@ -1,4 +1,4 @@
-# Generated from a clean Python 3.14 environment on 2026-08-12.
+# Generated from a clean Python 3.14 environment on 2026-08-15.
 # The local project is installed separately with --no-deps in CI.
 attrs==26.1.0
 boolean.py==5.0
@@ -12,6 +12,7 @@ cyclonedx-python-lib==11.11.2
 defusedxml==0.7.1
 docutils==0.23
 filelock==3.32.2
+hypothesis==6.165.9
 id==1.6.1
 idna==3.18
 jaraco.classes==3.4.0
@@ -25,6 +26,8 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
 more-itertools==11.1.0
 msgpack==1.2.1
+mypy==1.20.2
+mypy_extensions==1.1.0
 nh3==0.3.6
 packageurl-python==0.17.6
 packaging==26.3
@@ -51,4 +54,5 @@ sortedcontainers==2.4.0
 tomli==2.4.1
 tomli_w==1.2.0
 twine==6.2.0
+types-jsonschema==4.26.0.20260518
 urllib3==2.7.0

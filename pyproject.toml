@@ -48,6 +48,8 @@ dev = [
   "build>=1.2,<2",
   "coverage>=7.6,<8",
   "ruff>=0.8,<1",
+  "mypy>=1.14,<2",
+  "hypothesis>=6.112,<7",
 ]
 
 [project.scripts]
@@ -65,6 +67,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 cpe_access_atlas = [
+  "py.typed",
   "data/*.json",
   "data/recipes/*.json",
   "data/schemas/*.json"
@@ -75,7 +78,18 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "S", "RUF", "SIM", "C4", "PTH", "A", "ARG"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101/S105/S106/S108: assert/hardcoded-secret-look-alike/temp-dir findings on
+#   intentional test fixtures, not real secrets or production temp-file usage.
+# S104/S314: tests deliberately exercise 0.0.0.0 rejection and parse trusted,
+#   test-authored XML fixtures rather than externally supplied XML.
+# SIM117: nested `with unittest.mock.patch(...)` + `with self.assertRaises(...)`
+#   is the repository's consistent test idiom; combining them would reduce
+#   readability without fixing a bug.
+# ARG001/ARG002: unused fixture/mock arguments are expected in test doubles.
+"tests/*" = ["S101", "S104", "S105", "S106", "S108", "S314", "SIM117", "ARG001", "ARG002"]
 
 [tool.coverage.run]
 branch = true
@@ -86,3 +100,13 @@ exclude_also = [
   "if __name__ == .__main__.:",
 ]
 fail_under = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_reexport = true
+show_error_codes = true
+files = ["src"]

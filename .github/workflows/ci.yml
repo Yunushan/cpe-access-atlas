@@ -34,9 +34,15 @@ jobs:
       - name: Check installed dependency consistency
         run: python -m pip check
       - name: Lint
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests scripts
+      - name: Format check
+        run: python -m ruff format --check src tests scripts
+      - name: Type check
+        run: python -m mypy src
       - name: Compile
         run: python -m compileall -q src
+      - name: CLI reference is up to date
+        run: python scripts/generate_cli_reference.py --check
       - name: Test
         run: python -m coverage run -m unittest discover -s tests -v
       - name: Coverage

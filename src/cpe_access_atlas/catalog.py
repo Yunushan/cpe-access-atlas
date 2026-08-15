@@ -155,14 +155,10 @@ class OfficialDevice:
             official_name=str(item["official_name"]),
             category=str(item["category"]),
             network_technology=(
-                str(item["network_technology"])
-                if "network_technology" in item
-                else None
+                str(item["network_technology"]) if "network_technology" in item else None
             ),
             source_ids=source_ids,
-            source_provider_ids=tuple(
-                str(source["provider_id"]) for source in source_records
-            ),
+            source_provider_ids=tuple(str(source["provider_id"]) for source in source_records),
             source_urls=tuple(str(source["url"]) for source in source_records),
         )
 
@@ -248,8 +244,7 @@ def load_official_devices() -> tuple[OfficialDevice, ...]:
         raise CatalogError("official device source IDs are not unique")
     sources = {str(item["id"]): item for item in source_items}
     expected_source_counts = {
-        str(item["id"]): int(item["expected_device_count"])
-        for item in source_items
+        str(item["id"]): int(item["expected_device_count"]) for item in source_items
     }
     observed_source_counts = dict.fromkeys(source_ids, 0)
     devices: list[OfficialDevice] = []
@@ -342,12 +337,9 @@ def validate_catalog() -> list[str]:
     official_device_keys: set[tuple[str, str, str]] = set()
     for device in official_devices:
         if device.provider_id not in known_providers:
-            errors.append(
-                f"official device inventory: unknown provider {device.provider_id}"
-            )
+            errors.append(f"official device inventory: unknown provider {device.provider_id}")
         if any(
-            source_provider != device.provider_id
-            for source_provider in device.source_provider_ids
+            source_provider != device.provider_id for source_provider in device.source_provider_ids
         ):
             errors.append(
                 "official device inventory: source provider does not match "

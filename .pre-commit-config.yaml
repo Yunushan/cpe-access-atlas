@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Local development hook set. Install with:
+#   python -m pip install pre-commit
+#   pre-commit install
+#   pre-commit install --hook-type commit-msg
+#
+# These hooks mirror the checks enforced in .github/workflows/ci.yml so
+# issues are caught before a commit is pushed, not just in CI.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      - id: ruff
+        name: ruff lint
+        args: ["--fix"]
+      - id: ruff-format
+        name: ruff format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.20.2
+    hooks:
+      - id: mypy
+        name: mypy (strict)
+        additional_dependencies: ["types-jsonschema==4.26.0.20260518"]
+        args: ["src"]
+        pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: cpe-atlas-validate
+        name: cpe-atlas validate
+        entry: cpe-atlas
+        args: ["validate"]
+        language: system
+        pass_filenames: false
+        always_run: true

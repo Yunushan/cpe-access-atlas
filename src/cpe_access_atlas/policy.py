@@ -14,8 +14,7 @@ class PolicyError(ValueError):
 
 
 _IPV4_PRIVATE = tuple(
-    ipaddress.ip_network(value)
-    for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
 _IPV6_ULA = ipaddress.ip_network("fc00::/7")
 

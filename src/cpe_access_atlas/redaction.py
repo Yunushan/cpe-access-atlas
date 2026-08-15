@@ -6,8 +6,10 @@ from __future__ import annotations
 import ipaddress
 import re
 
+# The pattern below matches secret *field names* (e.g. "password", "api_key")
+# for redaction purposes; it is not a literal hardcoded secret.
 _SECRET_NAME = (
-    r"(?:password|passwd|passphrase|secret|secret[-_]?key|token|cookie|"
+    r"(?:password|passwd|passphrase|secret|secret[-_]?key|token|cookie|"  # noqa: S105
     r"api[-_]?key|auth[-_]?token|access[-_]?token|refresh[-_]?token|"
     r"private[-_]?key|pppoe[-_]?password|sip[-_]?password|acs[-_]?password)"
 )
@@ -15,16 +17,14 @@ _SECRET_KEY = (
     r"(?P<key>[\"']?\b(?:[A-Za-z0-9]+[-_])?"
     rf"{_SECRET_NAME}[\"']?)"
 )
-_SECRET_SEPARATOR = r"(?P<separator>\s*[:=]\s*)"
+_SECRET_SEPARATOR = r"(?P<separator>\s*[:=]\s*)"  # noqa: S105 -- regex fragment, not a credential
 _SECRET_ASSIGNMENT_DOUBLE = re.compile(
     rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}\"(?:\\.|[^\"\\\r\n])*\""
 )
 _SECRET_ASSIGNMENT_SINGLE = re.compile(
     rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}'(?:\\.|[^'\\\r\n])*'"
 )
-_SECRET_ASSIGNMENT_UNQUOTED = re.compile(
-    rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}[^\s,;}}&\"']+"
-)
+_SECRET_ASSIGNMENT_UNQUOTED = re.compile(rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}[^\s,;}}&\"']+")
 _AUTHORIZATION = re.compile(
     r"(?i)(?P<key>[\"']?authorization[\"']?)"
     r"(?P<separator>\s*[:=]\s*)"
@@ -88,12 +88,8 @@ def redact_text(value: str) -> str:
     value = _AUTHORIZATION_OTHER.sub(_replace_other_authorization, value)
     value = _BEARER.sub("Bearer [REDACTED]", value)
     value = _BASIC.sub("Basic [REDACTED]", value)
-    value = _SECRET_ASSIGNMENT_DOUBLE.sub(
-        lambda match: _replace_quoted_secret(match, '"'), value
-    )
-    value = _SECRET_ASSIGNMENT_SINGLE.sub(
-        lambda match: _replace_quoted_secret(match, "'"), value
-    )
+    value = _SECRET_ASSIGNMENT_DOUBLE.sub(lambda match: _replace_quoted_secret(match, '"'), value)
+    value = _SECRET_ASSIGNMENT_SINGLE.sub(lambda match: _replace_quoted_secret(match, "'"), value)
     value = _SECRET_ASSIGNMENT_UNQUOTED.sub(_replace_secret_assignment, value)
     value = _MAC.sub("[REDACTED-MAC]", value)
     value = _SUBSCRIBER_ID.sub("[REDACTED-SUBSCRIBER-ID]", value)

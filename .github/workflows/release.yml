@@ -67,7 +67,10 @@ jobs:
           fi
       - name: Validate source
         run: |
-          python -m ruff check src tests
+          python -m ruff check src tests scripts
+          python -m ruff format --check src tests scripts
+          python -m mypy src
+          python scripts/generate_cli_reference.py --check
           python -m coverage run -m unittest discover -s tests -v
           python -m coverage report -m
           cpe-atlas validate

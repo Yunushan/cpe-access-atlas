@@ -30,9 +30,7 @@ class FirmwareInspection:
 
 _CHUNK_SIZE = 1024 * 1024
 _SCAN_OVERLAP = 256
-_VERSION_PATTERN = re.compile(
-    rb"(?i)H3600P\s+V9\.0\s+TTN\.\d+_\d{6}"
-)
+_VERSION_PATTERN = re.compile(rb"(?i)H3600P\s+V9\.0\s+TTN\.\d+_\d{6}")
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 _MARKERS = (
     ("uImage", b"\x27\x05\x19\x56"),
@@ -59,8 +57,7 @@ def _validate_arguments(
     ):
         raise FirmwareInspectionError("expected firmware version must be a non-empty string")
     if expected_sha256 is not None and (
-        not isinstance(expected_sha256, str)
-        or _SHA256_PATTERN.fullmatch(expected_sha256) is None
+        not isinstance(expected_sha256, str) or _SHA256_PATTERN.fullmatch(expected_sha256) is None
     ):
         raise FirmwareInspectionError("expected SHA-256 must be exactly 64 hexadecimal characters")
 
@@ -104,14 +101,10 @@ def inspect_firmware(
         raise FirmwareInspectionError(f"unable to read firmware artifact: {exc}") from exc
 
     detected_versions = tuple(sorted(versions))
-    exact_build_match = (
-        None if expected_version is None else expected_version in detected_versions
-    )
+    exact_build_match = None if expected_version is None else expected_version in detected_versions
     digest_hex = digest.hexdigest()
     sha256_match = (
-        None
-        if expected_sha256 is None
-        else digest_hex.casefold() == expected_sha256.casefold()
+        None if expected_sha256 is None else digest_hex.casefold() == expected_sha256.casefold()
     )
     return FirmwareInspection(
         path=str(source),

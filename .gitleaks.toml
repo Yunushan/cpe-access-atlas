@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: 0BSD
+# Gitleaks configuration for cpe-access-atlas.
+#
+# This project intentionally stores no real credentials, firmware images, or
+# subscriber data (see SECURITY.md and .gitignore). This config extends the
+# built-in default ruleset and only allowlists paths that are known, by
+# review, to contain synthetic test fixtures rather than real secrets.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures and generated placeholder data, not real secrets"
+paths = [
+  '''tests/.*''',
+]

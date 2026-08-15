@@ -41,16 +41,33 @@ class CliTests(unittest.TestCase):
     def test_stdio_encoding_configuration_is_best_effort(self) -> None:
         stdout = SimpleNamespace(reconfigure=Mock())
         stderr = SimpleNamespace(reconfigure=Mock())
-        with patch("cpe_access_atlas.cli.sys.stdout", stdout), patch(
-            "cpe_access_atlas.cli.sys.stderr", stderr
+        with (
+            patch("cpe_access_atlas.cli.sys.stdout", stdout),
+            patch("cpe_access_atlas.cli.sys.stderr", stderr),
         ):
             _configure_stdio()
-        stdout.reconfigure.assert_called_once_with(
-            encoding="utf-8", errors="backslashreplace"
-        )
-        stderr.reconfigure.assert_called_once_with(
-            encoding="utf-8", errors="backslashreplace"
-        )
+        stdout.reconfigure.assert_called_once_with(encoding="utf-8", errors="backslashreplace")
+        stderr.reconfigure.assert_called_once_with(encoding="utf-8", errors="backslashreplace")
+
+    def test_stdio_reconfigure_failure_is_ignored(self) -> None:
+        stdout = SimpleNamespace(reconfigure=Mock(side_effect=OSError("no tty")))
+        stderr = SimpleNamespace(reconfigure=Mock(side_effect=ValueError("closed")))
+        with (
+            patch("cpe_access_atlas.cli.sys.stdout", stdout),
+            patch("cpe_access_atlas.cli.sys.stderr", stderr),
+        ):
+            _configure_stdio()
+        stdout.reconfigure.assert_called_once()
+        stderr.reconfigure.assert_called_once()
+
+    def test_stdio_streams_without_reconfigure_are_skipped(self) -> None:
+        stdout = SimpleNamespace()
+        stderr = SimpleNamespace()
+        with (
+            patch("cpe_access_atlas.cli.sys.stdout", stdout),
+            patch("cpe_access_atlas.cli.sys.stderr", stderr),
+        ):
+            _configure_stdio()
 
     def test_status_reports_blocked_and_no_change(self) -> None:
         code, stdout, stderr = self.run_cli(["status", *TARGET])
@@ -82,9 +99,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("Official listings only", stdout)
         self.assertIn("H3600P", stdout)
 
-        code, stdout, stderr = self.run_cli(
-            ["devices", "--isp", "Turkcell Superonline", "--json"]
-        )
+        code, stdout, stderr = self.run_cli(["devices", "--isp", "Turkcell Superonline", "--json"])
         self.assertEqual((code, stderr), (0, ""))
         payload = json.loads(stdout)
         self.assertEqual({item["provider_id"] for item in payload}, {"turkcell-superonline"})
@@ -236,9 +251,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("acknowledgement", stderr)
 
-        code, _, stderr = self.run_cli(
-            ["apply", *TARGET, "--i-own-or-administer-this-device"]
-        )
+        code, _, stderr = self.run_cli(["apply", *TARGET, "--i-own-or-administer-this-device"])
         self.assertEqual(code, 3)
         self.assertIn("no verified apply adapter", stderr)
         self.assertIn("No device change was attempted", stderr)
@@ -559,9 +572,7 @@ class CliTests(unittest.TestCase):
             "cpe_access_atlas.cli.probe_tcp_ports",
             return_value={80: True, 443: False},
         ) as probe:
-            code, stdout, stderr = self.run_cli(
-                ["doctor", "--host", "192.168.1.1", "--probe"]
-            )
+            code, stdout, stderr = self.run_cli(["doctor", "--host", "192.168.1.1", "--probe"])
         self.assertEqual((code, stderr), (0, ""))
         probe.assert_called_once()
         self.assertIn("tcp/80: open", stdout)
@@ -637,9 +648,7 @@ class CliTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "redacted.txt"
             with patch("cpe_access_atlas.cli.sys.stdin", StringIO("token=secret")):
-                code, stdout, stderr = self.run_cli(
-                    ["redact", "--output", str(output)]
-                )
+                code, stdout, stderr = self.run_cli(["redact", "--output", str(output)])
             self.assertEqual((code, stderr), (0, ""))
             self.assertNotIn("secret", stdout)
             self.assertNotIn("secret", output.read_text(encoding="utf-8"))
@@ -676,9 +685,7 @@ class CliTests(unittest.TestCase):
             artifact = Path(directory) / "firmware.bin"
             artifact.write_bytes(b"header\x27\x05\x19\x56" + version.encode("ascii"))
 
-            code, stdout, stderr = self.run_cli(
-                ["firmware-inspect", "--input", str(artifact)]
-            )
+            code, stdout, stderr = self.run_cli(["firmware-inspect", "--input", str(artifact)])
             self.assertEqual((code, stderr), (0, ""))
             self.assertIn("Exact build match: not checked", stdout)
             self.assertIn("No firmware code was executed or modified", stdout)
@@ -732,9 +739,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("SHA-256 match:     no", stdout)
 
     def test_firmware_inspection_errors_are_controlled(self) -> None:
-        code, stdout, stderr = self.run_cli(
-            ["firmware-inspect", "--input", "does-not-exist.bin"]
-        )
+        code, stdout, stderr = self.run_cli(["firmware-inspect", "--input", "does-not-exist.bin"])
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("firmware artifact does not exist", stderr)
 
@@ -776,7 +781,21 @@ class CliTests(unittest.TestCase):
     def test_version_is_a_successful_parser_exit(self) -> None:
         code, stdout, stderr = self.run_cli(["--version"])
         self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(stdout.strip(), "0.2.0")
+        self.assertEqual(stdout.strip(), "0.3.0")
+
+    def test_parser_exit_with_no_code_is_treated_as_success(self) -> None:
+        with patch(
+            "cpe_access_atlas.cli.build_parser",
+            return_value=SimpleNamespace(parse_args=Mock(side_effect=SystemExit(None))),
+        ):
+            self.assertEqual(main(["validate"]), 0)
+
+    def test_parser_exit_with_non_int_code_is_a_controlled_error(self) -> None:
+        with patch(
+            "cpe_access_atlas.cli.build_parser",
+            return_value=SimpleNamespace(parse_args=Mock(side_effect=SystemExit("boom"))),
+        ):
+            self.assertEqual(main(["validate"]), 1)
 
     def test_module_entrypoint_propagates_exit_code(self) -> None:
         with patch("cpe_access_atlas.cli.main", return_value=7):

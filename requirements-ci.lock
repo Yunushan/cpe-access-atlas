@@ -1,11 +1,14 @@
-# Generated from a clean Python 3.14 environment on 2026-08-12.
+# Generated from a clean Python 3.14 environment on 2026-08-15.
 # The local project is installed separately with --no-deps in CI.
 attrs==26.1.0
 build==1.5.0
 colorama==0.4.6
 coverage==7.15.4
+hypothesis==6.165.9
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+mypy==1.20.2
+mypy_extensions==1.1.0
 packaging==26.3
 pycryptodome==3.23.0
 pyproject_hooks==1.2.0
@@ -13,3 +16,5 @@ referencing==0.37.0
 rpds-py==2026.6.3
 ruff==0.16.2
 setuptools==84.0.0
+sortedcontainers==2.4.0
+types-jsonschema==4.26.0.20260518

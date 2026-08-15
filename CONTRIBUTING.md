@@ -1,7 +1,7 @@
 # Contributing
 
 Thank you for helping document owner-authorized access to ISP-provided
-equipment.
+equipment. Participation in this project is governed by `CODE_OF_CONDUCT.md`.
 
 ## Device recipe requirements
 
@@ -37,9 +37,27 @@ Use Python 3.11 or newer:
 python -m pip install -r requirements-ci.lock
 python -m pip install -e . --no-deps --no-build-isolation
 python -m ruff check src tests
+python -m ruff format --check src tests
+python -m mypy src
 python -m coverage run -m unittest discover -s tests -v
 python -m coverage report -m
 cpe-atlas validate
+```
+
+Optionally install the local pre-commit hooks, which run the same checks
+before each commit:
+
+```shell
+python -m pip install pre-commit
+pre-commit install
+```
+
+Every commit in a pull request must include a Developer Certificate of
+Origin (DCO) sign-off, enforced by `.github/workflows/dco.yml`. Add it
+automatically with:
+
+```shell
+git commit --signoff -m "Your commit message"
 ```
 
 The CI, security, release, runtime-SBOM, and artifact-build environments use the

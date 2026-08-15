@@ -89,7 +89,7 @@ Versionsprüfung für private Firmwaredateien. `config-generate` ist ein
 Offline-Konfigurationswerkzeug und kein Root-Exploit oder Flasher; erzeugte
 Dateien und vorhandene Backups müssen privat bleiben.
 
-Der Befehl `apply` arbeitet in Version 0.2.0 absichtlich nach dem
+Der Befehl `apply` arbeitet in Version 0.3.0 absichtlich nach dem
 Fail-Closed-Prinzip und ändert bei dieser blockierten Firmware nichts.
 
 ## Sicherheit und Berechtigung

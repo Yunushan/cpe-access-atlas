@@ -19,7 +19,7 @@ def _restrict_permissions(path: Path) -> None:
     owner-only discretionary ACL.
     """
 
-    os.chmod(path, _PRIVATE_MODE)
+    path.chmod(_PRIVATE_MODE)
 
 
 def write_private_bytes(
@@ -58,7 +58,7 @@ def write_private_bytes(
             os.fsync(stream.fileno())
         if target.exists() and not replace:
             raise FileExistsError(target)
-        os.replace(temporary, target)
+        temporary.replace(target)
         temporary = None
         _restrict_permissions(target)
     finally:

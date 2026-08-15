@@ -153,8 +153,7 @@ def command_devices(args: argparse.Namespace) -> int:
         print("No official device listings found for the selected provider.")
     for device in devices:
         print(
-            f"{device.provider_id:<24}  {device.vendor:<11}  "
-            f"{device.model:<20}  {device.category}"
+            f"{device.provider_id:<24}  {device.vendor:<11}  {device.model:<20}  {device.category}"
         )
     print("Official listings only; this command makes no firmware or access-support claim.")
     return 0
@@ -231,10 +230,7 @@ def command_root_readiness(args: argparse.Namespace) -> int:
     artifact_identity_verified = (
         inspection is not None
         and inspection.exact_build_match is True
-        and (
-            inspection.expected_sha256 is None
-            or inspection.sha256_match is True
-        )
+        and (inspection.expected_sha256 is None or inspection.sha256_match is True)
     )
 
     blockers = list(recipe.blockers)
@@ -357,11 +353,8 @@ def command_config_generate(args: argparse.Namespace) -> int:
         source_label = "private configuration baseline"
         private_config = read_private_config(args.input_config)
         private_config_encrypted = inspect_config(private_config).encrypted
-        if private_config_encrypted:
-            if not args.serial or not args.mac:
-                raise ConfigError(
-                    "encrypted input requires --serial and --mac for local decryption"
-                )
+        if private_config_encrypted and (not args.serial or not args.mac):
+            raise ConfigError("encrypted input requires --serial and --mac for local decryption")
         source_xml = None
     elif args.input_xml:
         source_label = "private XML baseline"
@@ -372,16 +365,13 @@ def command_config_generate(args: argparse.Namespace) -> int:
     else:
         source_xml = None
 
-    encrypted_output = args.encrypted or (
-        private_config_encrypted and not args.allow_unencrypted
-    )
+    encrypted_output = args.encrypted or (private_config_encrypted and not args.allow_unencrypted)
     if not encrypted_output and not args.allow_unencrypted:
         raise ConfigError(
             "unencrypted output requires explicit --allow-unencrypted acknowledgement"
         )
-    if encrypted_output:
-        if not args.serial or not args.mac:
-            raise ConfigError("encrypted output requires --serial and --mac")
+    if encrypted_output and (not args.serial or not args.mac):
+        raise ConfigError("encrypted output requires --serial and --mac")
 
     ssh_password = _read_secret(
         args,
@@ -488,11 +478,7 @@ def command_redact(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 4
-    value = (
-        Path(args.input).read_text(encoding="utf-8")
-        if args.input
-        else sys.stdin.read()
-    )
+    value = Path(args.input).read_text(encoding="utf-8") if args.input else sys.stdin.read()
     content = redact_text(value)
     output = Path(args.output)
     if output.exists() and not args.force:
@@ -532,10 +518,7 @@ def command_firmware_inspect(args: argparse.Namespace) -> int:
         print(f"Artifact:       {inspection.path}")
         print(f"Size:           {inspection.size} bytes")
         print(f"SHA-256:        {inspection.sha256}")
-        print(
-            "Version strings: "
-            + (", ".join(inspection.version_strings) or "none detected")
-        )
+        print("Version strings: " + (", ".join(inspection.version_strings) or "none detected"))
         print("Markers:        " + (", ".join(inspection.markers) or "none detected"))
         version_match_label = {
             None: "not checked",
@@ -741,8 +724,11 @@ def _configure_stdio() -> None:
     """Prefer UTF-8 output while leaving test and embedded streams untouched."""
 
     for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
         try:
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            reconfigure(encoding="utf-8", errors="backslashreplace")
         except (AttributeError, OSError, ValueError):
             continue
 
@@ -753,7 +739,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
-        return int(exc.code)
+        code = exc.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        return 1
     try:
         return int(args.func(args))
     except (CatalogError, ConfigError, FirmwareInspectionError, PolicyError) as exc:

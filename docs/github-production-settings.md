@@ -51,7 +51,7 @@ test (macos-latest, 3.14)
   or a monitored security address.
 - Configure a `release` environment with required reviewers before allowing the
   release workflow's write permissions to publish artifacts.
-- Publish and verify the first release from a protected `v0.2.0` tag.
+- Publish and verify the first release from a protected `v0.3.0` tag.
 
 ## Read-only evidence checks
 

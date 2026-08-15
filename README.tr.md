@@ -123,7 +123,7 @@ konfigürasyon üretmez ve hiçbir şey flash'lamaz. `cpe-atlas firmware-inspect
 yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
 Yalnızca açıkça belirtilen portları kontrol etmek için `--probe` eklenebilir.
-`apply` komutu 0.2.0 sürümünde kasıtlı olarak kapalıdır; sahiplik onayı verilse
+`apply` komutu 0.3.0 sürümünde kasıtlı olarak kapalıdır; sahiplik onayı verilse
 bile bu engelli tarifte hiçbir değişiklik yapmaz.
 
 ## Erişim terimleri
