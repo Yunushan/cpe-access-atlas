@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "tr.turk-telekom.zte.zxhn-h196a.researching-hw-fw-unresolved",
+  "country": "TR",
+  "status": "researching",
+  "confidence": "low",
+  "isp": {
+    "id": "turk-telekom",
+    "name": "Türk Telekom"
+  },
+  "device": {
+    "vendor": "ZTE",
+    "model": "ZXHN H196A",
+    "aliases": [
+      "ZTE ZXHN H196A",
+      "ZTE ZXHN H196A Mesh WiFi"
+    ],
+    "hardware_revision": "unresolved",
+    "hardware_revision_status": "unresolved"
+  },
+  "firmware": {
+    "display": "unresolved",
+    "match_policy": "exact"
+  },
+  "access": {
+    "standard_web_admin": "not-researched",
+    "privileged_web_admin": "not-researched",
+    "local_root_shell": "not-researched",
+    "bootloader": "not-researched"
+  },
+  "capabilities": [],
+  "blockers": [
+    "No exact hardware revision has been identified for the Türk Telekom-provisioned ZTE ZXHN H196A.",
+    "No exact firmware build string has been identified for this target.",
+    "No authorized, reproducible access-method research has been performed on this exact target."
+  ],
+  "evidence": [
+    {
+      "title": "Türk Telekom official device listing including ZTE ZXHN H196A",
+      "url": "https://bireysel.turktelekom.com.tr/cihazlar/modem-ve-internet/zte-zxhn-h196a-mesh-wifi"
+    }
+  ],
+  "next_evidence": [
+    "An exact hardware-revision label read from a physically owned or authorized unit.",
+    "An exact local UI or CLI firmware version string for that unit.",
+    "Sanitized, non-mutating observations of standard and privileged web admin behavior on the exact target."
+  ],
+  "last_reviewed": "2026-08-15"
+}

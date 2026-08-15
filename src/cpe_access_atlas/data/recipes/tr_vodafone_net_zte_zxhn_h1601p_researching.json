@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "tr.vodafone-net.zte.zxhn-h1601p.researching-hw-fw-unresolved",
+  "country": "TR",
+  "status": "researching",
+  "confidence": "low",
+  "isp": {
+    "id": "vodafone-net",
+    "name": "Vodafone Net"
+  },
+  "device": {
+    "vendor": "ZTE",
+    "model": "ZXHN H1601-P",
+    "aliases": [
+      "ZTE ZXHN H1601-P",
+      "ZTE H1601-P",
+      "H1601-P"
+    ],
+    "hardware_revision": "unresolved",
+    "hardware_revision_status": "unresolved"
+  },
+  "firmware": {
+    "display": "unresolved",
+    "match_policy": "exact"
+  },
+  "access": {
+    "standard_web_admin": "not-researched",
+    "privileged_web_admin": "not-researched",
+    "local_root_shell": "not-researched",
+    "bootloader": "not-researched"
+  },
+  "capabilities": [],
+  "blockers": [
+    "This target is currently supported only by a customer forum/complaint report, not an official Vodafone Net device page; the exact ISP provisioning of this model is unconfirmed.",
+    "No exact hardware revision has been identified for the Vodafone Net-provisioned unit.",
+    "No exact firmware build string has been identified for this target.",
+    "No authorized, reproducible access-method research has been performed on this exact target.",
+    "The same model is officially listed for Türk Telekom in this catalog's device inventory; whether Vodafone Net ships an identical board and firmware family is unconfirmed."
+  ],
+  "evidence": [
+    {
+      "title": "Vodafone Net customer report identifying a ZTE ZXHN H1601-P modem",
+      "url": "https://www.sikayetvar.com/vodafone-net/zte-modem"
+    }
+  ],
+  "next_evidence": [
+    "An official Vodafone Net device page or documentation confirming this model is provisioned by Vodafone Net.",
+    "An exact hardware-revision label read from a physically owned or authorized Vodafone Net-provisioned unit.",
+    "An exact local UI firmware version string for that unit.",
+    "Sanitized, non-mutating observations of standard and privileged web admin behavior on the exact target."
+  ],
+  "last_reviewed": "2026-08-15"
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "tr.millenicom.tp-link.td-w9970.researching-hw-fw-unresolved",
+  "country": "TR",
+  "status": "researching",
+  "confidence": "low",
+  "isp": {
+    "id": "millenicom",
+    "name": "Millenicom"
+  },
+  "device": {
+    "vendor": "TP-Link",
+    "model": "TD-W9970",
+    "aliases": [
+      "TP-Link TD-W9970",
+      "TP-LINK TD-W9970"
+    ],
+    "hardware_revision": "unresolved",
+    "hardware_revision_status": "unresolved"
+  },
+  "firmware": {
+    "display": "unresolved",
+    "match_policy": "exact"
+  },
+  "access": {
+    "standard_web_admin": "not-researched",
+    "privileged_web_admin": "not-researched",
+    "local_root_shell": "not-researched",
+    "bootloader": "not-researched"
+  },
+  "capabilities": [],
+  "blockers": [
+    "No exact hardware revision has been identified for the Millenicom-provisioned TD-W9970.",
+    "No exact firmware build string has been identified for this target.",
+    "No authorized, reproducible access-method research has been performed on this exact target."
+  ],
+  "evidence": [
+    {
+      "title": "Millenicom official support hub listing a TP-Link TD-W9970 setup guide",
+      "url": "https://www.milleni.com.tr/eviniz-icin/destek"
+    }
+  ],
+  "next_evidence": [
+    "An exact hardware-revision label read from a physically owned or authorized Millenicom-provisioned unit.",
+    "An exact local UI firmware version string for that unit.",
+    "Sanitized, non-mutating observations of standard and privileged web admin behavior on the exact target."
+  ],
+  "last_reviewed": "2026-08-15"
+}

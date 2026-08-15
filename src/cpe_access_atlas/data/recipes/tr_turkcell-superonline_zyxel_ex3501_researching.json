@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "tr.turkcell-superonline.zyxel.ex3501.researching-hw-fw-unresolved",
+  "country": "TR",
+  "status": "researching",
+  "confidence": "low",
+  "isp": {
+    "id": "turkcell-superonline",
+    "name": "Turkcell Superonline"
+  },
+  "device": {
+    "vendor": "Zyxel",
+    "model": "EX3501",
+    "aliases": [
+      "ZYXEL EX3501",
+      "Zyxel EX3501"
+    ],
+    "hardware_revision": "unresolved",
+    "hardware_revision_status": "unresolved"
+  },
+  "firmware": {
+    "display": "unresolved",
+    "match_policy": "exact"
+  },
+  "access": {
+    "standard_web_admin": "not-researched",
+    "privileged_web_admin": "not-researched",
+    "local_root_shell": "not-researched",
+    "bootloader": "not-researched"
+  },
+  "capabilities": [],
+  "blockers": [
+    "No exact hardware revision has been identified for the Turkcell Superonline-provisioned Zyxel EX3501.",
+    "No exact firmware build string has been identified for this target.",
+    "No authorized, reproducible access-method research has been performed on this exact target."
+  ],
+  "evidence": [
+    {
+      "title": "Turkcell Superonline official device listing including Zyxel EX3501",
+      "url": "https://www.superonline.net/kurumsal/yardim/modemler"
+    }
+  ],
+  "next_evidence": [
+    "An exact hardware-revision label read from a physically owned or authorized unit.",
+    "An exact local UI or CLI firmware version string for that unit.",
+    "Sanitized, non-mutating observations of standard and privileged web admin behavior on the exact target."
+  ],
+  "last_reviewed": "2026-08-15"
+}

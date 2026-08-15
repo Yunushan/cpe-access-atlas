@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "tr.turksat-kablonet.zte.zxhn-f6600.researching-hw-fw-unresolved",
+  "country": "TR",
+  "status": "researching",
+  "confidence": "low",
+  "isp": {
+    "id": "turksat-kablonet",
+    "name": "Türksat Kablonet"
+  },
+  "device": {
+    "vendor": "ZTE",
+    "model": "ZXHN F6600",
+    "aliases": [
+      "ZTE ZXHN - F6600 GPON Modem",
+      "ZTE ZXHN F6600"
+    ],
+    "hardware_revision": "unresolved",
+    "hardware_revision_status": "unresolved"
+  },
+  "firmware": {
+    "display": "unresolved",
+    "match_policy": "exact"
+  },
+  "access": {
+    "standard_web_admin": "not-researched",
+    "privileged_web_admin": "not-researched",
+    "local_root_shell": "not-researched",
+    "bootloader": "not-researched"
+  },
+  "capabilities": [],
+  "blockers": [
+    "No exact hardware revision has been identified for the Türksat Kablonet-provisioned ZTE ZXHN F6600.",
+    "No exact firmware build string has been identified for this target.",
+    "No authorized, reproducible access-method research has been performed on this exact target."
+  ],
+  "evidence": [
+    {
+      "title": "Türksat Kablonet official device listing including ZTE ZXHN F6600",
+      "url": "https://www.turksatkablonet.com/cihazlar"
+    },
+    {
+      "title": "Türksat Kablonet official device listing including ZTE ZXHN F6600",
+      "url": "https://www.turksatkablo.com.tr/yayin-akisi.aspx/inc/inc/userUpload/sayfa/formlar/Cihazlar"
+    }
+  ],
+  "next_evidence": [
+    "An exact hardware-revision label read from a physically owned or authorized unit.",
+    "An exact local UI or CLI firmware version string for that unit.",
+    "Sanitized, non-mutating observations of standard and privileged web admin behavior on the exact target."
+  ],
+  "last_reviewed": "2026-08-15"
+}
