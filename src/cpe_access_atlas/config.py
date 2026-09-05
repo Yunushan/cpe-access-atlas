@@ -16,6 +16,7 @@ import hashlib
 import re
 import struct
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -100,7 +101,7 @@ _ROUND_CONSTANTS = (
     0x14292967,
     0x27B70A85,
     0x2E1B2138,
-    0x4D2C6DFB,
+    0x4D2C6DFC,
     0x53380D13,
     0x650A7354,
     0x766A0ABB,
@@ -260,7 +261,7 @@ def _derive_h3600p_keys(device_key: str, serial: str, mac: str) -> tuple[bytes, 
     _validate_device_inputs(device_key, serial, mac)
     serial = serial.upper()
     mac = mac.lower()
-    key_seed = f"{device_key}{serial}Mcd5c46".encode("ascii")
+    key_seed = f"{device_key}{serial}Mcd5c46e".encode("ascii")
     iv_seed = f"G21b667b{mac}{device_key}".encode("ascii")
     return buggy_sha256(key_seed), buggy_sha256(iv_seed)[:16]
 
@@ -287,7 +288,9 @@ def _decode_base64_wrapper(data: bytes) -> tuple[bytes, bool]:
     return data, False
 
 
-def _read_chunks(stream: BinaryIO, decryptor: _CipherContext | None = None) -> bytes:
+def _read_chunks(
+    stream: BinaryIO, decryptor_factory: Callable[[], _CipherContext] | None = None
+) -> bytes:
     chunks: list[bytes] = []
     total_length = 0
     while True:
@@ -309,8 +312,10 @@ def _read_chunks(stream: BinaryIO, decryptor: _CipherContext | None = None) -> b
         chunk = stream.read(encrypted_length)
         if len(chunk) != encrypted_length:
             raise ConfigError("configuration chunk contents are truncated")
-        if decryptor is not None:
-            chunk = decryptor.decrypt(chunk)
+        if decryptor_factory is not None:
+            # The documented vendor format resets CBC to the derived IV for
+            # each chunk; ciphertext from the previous chunk is not its IV.
+            chunk = decryptor_factory().decrypt(chunk)
         if plain_length > len(chunk):
             raise ConfigError("configuration chunk plaintext length is invalid")
         chunks.append(chunk[:plain_length])
@@ -330,16 +335,16 @@ def _decode_compressed(data: bytes) -> bytes:
         version,
         expected_length,
         expected_compressed_length,
-        duplicate_length,
+        chunk_capacity,
         expected_crc,
         header_crc,
     ) = struct.unpack(">7I", header[:28])
     if magic != PAYLOAD_MAGIC or version != 0:
         raise ConfigError("configuration does not contain a recognized compressed payload")
-    if expected_length != duplicate_length:
-        raise ConfigError("compressed configuration length fields disagree")
     if expected_length > _MAX_XML_BYTES:
         raise ConfigError("compressed configuration XML exceeds the safety size limit")
+    if chunk_capacity > _MAX_XML_BYTES:
+        raise ConfigError("compressed configuration chunk capacity exceeds the safety size limit")
     if expected_compressed_length > _MAX_COMPRESSED_BYTES:
         raise ConfigError("compressed configuration exceeds the safety size limit")
     if zlib.crc32(header[:24]) & 0xFFFFFFFF != header_crc:
@@ -349,8 +354,10 @@ def _decode_compressed(data: bytes) -> bytes:
     compressed_crc = 0
     compressed_total = 0
     chunk_count = 0
+    final_chunk_offset = _HEADER_SIZE
     finished = False
     while stream.tell() < len(data) - _HEADER_SIZE:
+        final_chunk_offset = _HEADER_SIZE + stream.tell()
         chunk_header = stream.read(_CHUNK_HEADER_SIZE)
         if len(chunk_header) != _CHUNK_HEADER_SIZE:
             raise ConfigError("compressed configuration chunk header is truncated")
@@ -362,22 +369,26 @@ def _decode_compressed(data: bytes) -> bytes:
         remaining = min(expected_length, _MAX_XML_BYTES) - len(output)
         if plain_length > remaining:
             raise ConfigError("compressed configuration chunk length exceeds its total size limit")
-        if compressed_total + compressed_length > expected_compressed_length:
-            raise ConfigError("compressed configuration compressed length exceeds its header")
+        if plain_length > chunk_capacity:
+            raise ConfigError("compressed configuration chunk length exceeds its capacity")
+        if compressed_total + compressed_length > _MAX_COMPRESSED_BYTES:
+            raise ConfigError("compressed configuration chunk total exceeds the safety size limit")
         compressed = stream.read(compressed_length)
         if len(compressed) != compressed_length:
             raise ConfigError("compressed configuration chunk is truncated")
-        if more not in (0, 1):
+        # Public containers use either a boolean continuation or the absolute
+        # offset of the next chunk. Validate offsets, but never seek by them.
+        if more not in (0, 1, _HEADER_SIZE + stream.tell()):
             raise ConfigError("compressed configuration continuation flag is invalid")
         compressed_crc = zlib.crc32(compressed, compressed_crc) & 0xFFFFFFFF
         compressed_total += compressed_length
         chunk_count += 1
         try:
             decompressor = zlib.decompressobj()
-            plain = decompressor.decompress(compressed, remaining + 1)
+            plain = decompressor.decompress(compressed, min(remaining, chunk_capacity) + 1)
         except zlib.error as exc:
             raise ConfigError("compressed configuration data is invalid") from exc
-        if len(plain) > remaining or decompressor.unconsumed_tail:
+        if len(plain) > min(remaining, chunk_capacity) or decompressor.unconsumed_tail:
             raise ConfigError("compressed configuration data exceeds the safety size limit")
         if not decompressor.eof:
             raise ConfigError("compressed configuration data is invalid")
@@ -397,7 +408,9 @@ def _decode_compressed(data: bytes) -> bytes:
         raise ConfigError("compressed configuration has trailing data after its final chunk")
     if len(output) != expected_length:
         raise ConfigError("compressed configuration length does not match its header")
-    if compressed_total != expected_compressed_length:
+    # The H3600P single-chunk encoder stores compressed payload bytes here;
+    # the zcu chunked format stores the absolute start of its final chunk.
+    if expected_compressed_length not in (compressed_total, final_chunk_offset):
         raise ConfigError("compressed configuration compressed length does not match its header")
     if compressed_crc != expected_crc:
         raise ConfigError("compressed configuration checksum is invalid")
@@ -413,6 +426,8 @@ def decode_config(
     signature: str | None = None
     payload_type = 0
     encrypted = False
+    payload_offset = 0
+    compressed = binary
     if binary[:4] == struct.pack(">I", SIGNATURE_MAGIC):
         if len(binary) < 12:
             raise ConfigError("configuration signature header is truncated")
@@ -438,6 +453,15 @@ def decode_config(
         if payload_type != 4:
             raise ConfigError(f"unsupported encrypted H3600P payload type: {payload_type}")
         encrypted = True
+    elif binary[:8] == struct.pack(">2I", PAYLOAD_MAGIC, 4):
+        # The public H3600P format also omits the model-signature wrapper.
+        if len(binary) < _HEADER_SIZE:
+            raise ConfigError("configuration payload header is truncated")
+        payload_type = 4
+        encrypted = True
+    elif binary[:4] != struct.pack(">I", PAYLOAD_MAGIC):
+        raise ConfigError("file is not a supported H3600P config container")
+    if encrypted:
         stream = BytesIO(binary[payload_offset + _HEADER_SIZE :])
         if not device_key or not serial or not mac:
             raise ConfigError(
@@ -445,14 +469,9 @@ def decode_config(
             )
         key, iv = _derive_h3600p_keys(device_key, serial, mac)
         aes = _require_aes()
-        decrypted = _read_chunks(stream, aes.new(key, aes.MODE_CBC, iv=iv))
-        xml = _decode_compressed(decrypted)
-    elif binary[:4] == struct.pack(">I", PAYLOAD_MAGIC):
-        xml = _decode_compressed(binary)
-    else:
-        raise ConfigError("file is not a supported H3600P config container")
+        compressed = _read_chunks(stream, lambda: aes.new(key, aes.MODE_CBC, iv=iv))
     return DecodedConfig(
-        xml=xml,
+        xml=_decode_compressed(compressed),
         metadata=ConfigMetadata(signature, payload_type, base64_wrapped, encrypted),
     )
 
@@ -650,6 +669,8 @@ def inspect_config(data: bytes) -> ConfigMetadata:
         return ConfigMetadata(signature, payload_type, base64_wrapped, payload_type != 0)
     if binary[:8] == struct.pack(">2I", PAYLOAD_MAGIC, 0):
         return ConfigMetadata(None, 0, base64_wrapped, False)
+    if binary[:8] == struct.pack(">2I", PAYLOAD_MAGIC, 4):
+        return ConfigMetadata(None, 4, base64_wrapped, True)
     raise ConfigError("file is not a supported H3600P config container")
 
 
