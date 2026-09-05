@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import runpy
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -173,9 +174,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["decision"], "STOP")
         self.assertTrue(payload["checks"]["firmware_exact_build_match"])
         self.assertTrue(payload["checks"]["firmware_sha256_match"])
-        self.assertTrue(payload["checks"]["firmware_identity_verified"])
+        self.assertTrue(payload["checks"]["firmware_evidence_matches"])
+        self.assertFalse(payload["checks"]["firmware_identity_verified"])
         self.assertFalse(payload["device_io_attempted"])
         self.assertIn("firmware_artifact", payload)
+
+    def test_root_readiness_does_not_authenticate_a_version_string(self) -> None:
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "not-firmware.txt"
+            artifact.write_text("H3600P V9.0 TTN.10_260210", encoding="ascii")
+            code, stdout, stderr = self.run_cli(
+                ["root-readiness", *TARGET, "--firmware-input", str(artifact), "--json"]
+            )
+        self.assertEqual((code, stderr), (1, ""))
+        payload = json.loads(stdout)
+        self.assertTrue(payload["checks"]["firmware_evidence_matches"])
+        self.assertFalse(payload["checks"]["firmware_identity_verified"])
+        self.assertEqual(payload["firmware_artifact"]["markers"], [])
+        self.assertEqual(payload["decision"], "STOP")
+        self.assertFalse(payload["device_io_attempted"])
+
+    def test_root_readiness_rejects_a_hash_without_an_artifact(self) -> None:
+        code, stdout, stderr = self.run_cli(
+            ["root-readiness", *TARGET, "--expected-sha256", "0" * 64]
+        )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("--expected-sha256 requires --firmware-input", stderr)
 
     def test_root_readiness_reports_hash_mismatch(self) -> None:
         version = "H3600P V9.0 TTN.10_260210"
@@ -620,6 +644,24 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, stdout), (1, ""))
         self.assertIn("filesystem operation failed", stderr)
 
+    def test_report_template_preserves_a_concurrently_created_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "report.md"
+            real_link = os.link
+
+            def competing_link(source: Path, destination: Path) -> None:
+                destination.write_text("competing report", encoding="utf-8")
+                real_link(source, destination)
+
+            with patch("cpe_access_atlas.private_files.os.link", side_effect=competing_link):
+                code, stdout, stderr = self.run_cli(
+                    ["report-template", *TARGET, "--output", str(output)]
+                )
+            self.assertEqual((code, stdout), (4, ""))
+            self.assertIn("already exists", stderr)
+            self.assertEqual(output.read_text(encoding="utf-8"), "competing report")
+            self.assertEqual(list(Path(directory).glob(".report.md.*")), [])
+
     def test_redact_command_supports_stdin_and_files(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "source.txt"
@@ -678,6 +720,22 @@ class CliTests(unittest.TestCase):
                 )
         self.assertEqual((code, stdout), (1, ""))
         self.assertIn("filesystem operation failed", stderr)
+
+    def test_redact_bounds_file_and_stdin_reads_without_publishing(self) -> None:
+        with TemporaryDirectory() as directory:
+            source, output = Path(directory) / "source.txt", Path(directory) / "redacted.txt"
+            source.write_text("x" * 17, encoding="utf-8")
+            for input_args in ([], ["--input", str(source)]):
+                with (
+                    patch("cpe_access_atlas.cli.MAX_REPORT_CHARS", 16),
+                    patch("cpe_access_atlas.cli.sys.stdin", StringIO("x" * 17)),
+                ):
+                    code, stdout, stderr = self.run_cli(
+                        ["redact", *input_args, "--output", str(output)]
+                    )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertIn("safety size limit", stderr)
+                self.assertFalse(output.exists())
 
     def test_firmware_inspection_supports_text_json_and_exact_mismatch(self) -> None:
         version = "H3600P V9.0 TTN.10_260210"

@@ -4,6 +4,70 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Summarize GitHub CLI failures without copying public IPs, private paths, or
+  credential-bearing diagnostics into audit reports. Stop new requests within
+  an audit once an explicit GitHub rate limit is encountered, retaining only
+  already successful cached evidence and marking missing evidence UNVERIFIED.
+- Require same-commit reusable CI, dependency-audit, secret-scan, and CodeQL
+  workflows before publication, in addition to the twelve runtime SBOM jobs.
+  Full supported-matrix application tests can no longer race publication.
+- Verify the freshly built source archive's reviewed input inventory and bytes,
+  then run its bundled tests and unchanged coverage gate from its own extracted
+  source in both CI and release. Reject missing/extra/modified inputs and unsafe
+  archive entries before running test code; never use this as an untrusted-code
+  sandbox.
+- Build distributions using the hash-verified, preinstalled backend without a
+  second isolated dependency installation; disable pip index access for builds.
+- Include ignore and secret-scan configuration in the source distribution so
+  its bundled repository-control tests can run outside a Git checkout.
+- Validate GitHub collection totals, ruleset identities, workflow metadata, and
+  repository arguments; report malformed evidence instead of crashing. Paginate
+  alert inventories without printing secret-bearing alert fields.
+- Reject misspelled CLI-reference generator options before writing a document.
+- Include maintenance scripts in the existing 100% measured coverage gate and
+  strict type checking. Exercise the full read-only audit CLI with complete,
+  denied, malformed, paginated, and secret-bearing synthetic API responses.
+- Reject explicit pull-request bypass allowances in the GitHub policy audit;
+  require a common authorized release creator and restrict the release
+  environment to selected `v*` tags.
+- Audit the newest published release including prereleases, inspect declared
+  metadata at its resolved commit, require distinct complete environment-specific
+  artifact inventories, and compare release ancestry using immutable commit IDs.
+  Distinguish artifact metadata checks from independent download/provenance checks.
+- Create Windows private artifacts with a protected owner-only ACL before any
+  secret bytes are written. Verify native ACLs before writing and after atomic
+  publication/replacement, including under an Everyone-readable synthetic parent.
+- Distinguish firmware evidence matches from authenticated identity; reject an
+  expected firmware hash without an input artifact. The legacy JSON identity
+  flag remains false until trusted authentication exists.
+- Publish report templates atomically without overwriting racing destinations.
+- Scan XML redaction in a single forward pass, including nested secret elements,
+  CDATA, comments, and incomplete secret contents, avoiding repeated end-tag scans.
+- Avoid repeated subscriber-identifier scans within long dotted non-email text.
+- Inspect GitHub action selections, distinguish tag-creation authority from
+  immutable-tag protections, require identified independent release reviewers,
+  and check private vulnerability reporting explicitly. Correct the external
+  vulnerability-reporting fallback without soliciting public vulnerability data.
+- Reject configuration generation for incompatible device/codec combinations,
+  validate baseline signatures, and preserve SSH row counts and unrelated XML
+  settings. Exact TTN.10 firmware acceptance and recovery remain unverified.
+- Bound aggregate decompression and XML reads; reject DTDs in decoded XML,
+  excessive tree depth/node count, unsupported encodings, malformed chunk
+  termination, and trailing container data with controlled errors.
+- Redact whole cookie headers, supported XML credential fields, serial and
+  subscriber identifiers, and PEM private keys. Bound report input reads and
+  retain the requirement for manual review before sharing.
+- Use atomic no-overwrite publication for private local artifacts; concurrent
+  destination creation no longer overwrites another file without `--force`.
+- Replace platform-specific dependency snapshots with universal, hash-checked
+  locks; generate runtime SBOMs for every supported OS/Python combination.
+- Prevent release reruns from replacing published assets and mark releases of
+  Alpha/Beta package metadata as prereleases.
+- Scan test files with the normal secret-scanning rules instead of exempting
+  the entire tests directory. Add structured parser and redaction regressions.
+- Correct the GitHub audit to fetch complete rulesets, evaluate effective main
+  rules, use dedicated security-feature endpoints, and validate jobs in the
+  latest relevant workflow execution and attempt.
 - Added a read-only GitHub production-settings audit script that distinguishes
   disabled controls from administrator permissions that are not visible.
 - The audit now verifies every CI matrix check plus package smoke, dependency
@@ -16,9 +80,10 @@ All notable changes are documented here.
   matching the workflow action supply-chain policy.
 - Made the GitHub audit's CLI adapter explicitly UTF-8 and fail-safe on
   Windows, where repository metadata can contain non-CP1252 characters.
-- Documented the narrowly scoped CodeQL exception for the firmware-compatible
-  SHA-256 derivation path, and marked the call as non-security use for
-  FIPS-aware runtimes; it is not password storage or verification.
+- Correct the vendor-compatible key derivation's security characterization and
+  remove its misleading weak-hash suppression. Preserve its existing encrypted
+  output bytes and document its threat model without claiming exact-device
+  acceptance, modern password hardening, or authenticated encryption.
 
 ## 0.3.0 - 2026-08-15
 

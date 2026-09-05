@@ -8,16 +8,14 @@ import stat
 import tempfile
 from pathlib import Path
 
+from .windows_private import create_private_temp
+
 _PRIVATE_MODE = stat.S_IRUSR | stat.S_IWUSR
+_IS_WINDOWS = os.name == "nt"
 
 
 def _restrict_permissions(path: Path) -> None:
-    """Best-effort owner-only mode for a private local artifact.
-
-    POSIX systems enforce the mode bits. Windows keeps its directory ACL as
-    the authority because Python's mode emulation does not express an
-    owner-only discretionary ACL.
-    """
+    """POSIX mode restriction; Windows ACLs are installed at file creation."""
 
     path.chmod(_PRIVATE_MODE)
 
@@ -33,6 +31,10 @@ def write_private_bytes(
     The destination directory must already exist.  A temporary file in that
     directory is used so an interrupted write cannot leave a truncated
     credential-bearing artifact at the destination.
+
+    Publishing without replacement uses an atomic hard link, not a separate
+    existence check followed by replacement. Filesystems without hard-link
+    support fail closed; a private local NTFS/APFS/ext4 directory is suitable.
     """
 
     target = Path(path)
@@ -42,25 +44,33 @@ def write_private_bytes(
     temporary: Path | None = None
     descriptor: int | None = None
     try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{target.name}.",
-            dir=str(target.parent),
-        )
+        if _IS_WINDOWS:
+            descriptor, temporary_name = create_private_temp(target)
+        else:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{target.name}.",
+                dir=str(target.parent),
+            )
         temporary = Path(temporary_name)
-        _restrict_permissions(temporary)
+        if not _IS_WINDOWS:
+            _restrict_permissions(temporary)
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = None
             # This deliberate sink is restricted to explicit local artifacts;
-            # callers never print the content and the file is mode-restricted.
+            # callers never print the content and the file is permission-restricted.
             # codeql[py/clear-text-storage-sensitive-data]
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        if target.exists() and not replace:
-            raise FileExistsError(target)
-        temporary.replace(target)
-        temporary = None
-        _restrict_permissions(target)
+        if replace:
+            temporary.replace(target)
+            temporary = None
+        else:
+            # The filesystem rejects an occupied name atomically, including a
+            # file or symlink created since the initial user-friendly check.
+            # Both names refer to the already flushed, permission-restricted
+            # inode; finally removes only our temporary name.
+            os.link(temporary, target)
     finally:
         if descriptor is not None:
             os.close(descriptor)

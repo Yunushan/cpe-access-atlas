@@ -47,6 +47,34 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             buggy_sha256("not-bytes")  # type: ignore[arg-type]
 
+    def test_standard_digest_path_declares_security_sensitive_use(self) -> None:
+        expected = hashlib.sha256(b"a" * 55).digest()
+        with patch("cpe_access_atlas.config.hashlib.sha256", wraps=hashlib.sha256) as digest:
+            self.assertEqual(buggy_sha256(b"a" * 55), expected)
+        digest.assert_called_once_with(b"a" * 55, usedforsecurity=True)
+
+    def test_security_characterization_change_preserves_encrypted_artifact_bytes(self) -> None:
+        # Synthetic golden outputs captured before correcting usedforsecurity.
+        # Exercise standard derivation and both vendor-bug padding branches.
+        # These are compatibility regressions, NOT exact-device acceptance proof.
+        expected = {
+            8: "04c248c11287da14766972a8c12fc5dcf6649bc897203703d5df399173c2f688",
+            14: "71c72505e48d3b041599539d069f343fed88122b00be3fc01f7261086432333b",
+            15: "87809a90e737c43c9398abfc19b6c5619217f4d62b5dee7629a9b340b7c76e03",
+            32: "2e5da6492d186a0b86899f3b8423150544059b9d73c4b8087640051571f8f267",
+        }
+        for length, digest in expected.items():
+            with self.subTest(serial_suffix_length=length):
+                artifact = encode_config(
+                    b"<DB/>",
+                    encrypted=True,
+                    base64_wrap=False,
+                    device_key=KEY,
+                    serial="ZTE" + "1" * length,
+                    mac=MAC,
+                )
+                self.assertEqual(hashlib.sha256(artifact).hexdigest(), digest)
+
     def test_unencrypted_base64_round_trip_and_metadata(self) -> None:
         xml = default_root_xml("DummyPass123")
         artifact = encode_config(xml)

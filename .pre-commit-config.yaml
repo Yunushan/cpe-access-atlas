@@ -22,8 +22,10 @@ repos:
     hooks:
       - id: mypy
         name: mypy (strict)
-        additional_dependencies: ["types-jsonschema==4.26.0.20260518"]
-        args: ["src"]
+        additional_dependencies:
+          - "types-jsonschema==4.26.0.20260518"
+          - "pycryptodome==3.23.0"
+        args: ["src", "scripts"]
         pass_filenames: false
 
   - repo: local

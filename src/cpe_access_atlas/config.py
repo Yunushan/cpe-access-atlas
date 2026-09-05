@@ -4,7 +4,7 @@
 This module never connects to a router.  It can decode a private H3600P
 configuration, patch only the SSH privilege fields, and emit the compressed
 configuration container used by the public H3600P research.  The exact
-Turk Telekom build in the catalog remains experimental: producing an artifact
+Turk Telekom build in the catalog remains blocked: producing an artifact
 does not prove that the device will accept it or that recovery is available.
 """
 
@@ -61,6 +61,9 @@ _BASE64_PATTERN = re.compile(rb"^[A-Za-z0-9+/=]+$")
 _MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 _MAX_XML_BYTES = 8 * 1024 * 1024
 _MAX_COMPRESSED_BYTES = 16 * 1024 * 1024
+_MAX_XML_DEPTH = 128
+_MAX_XML_ELEMENTS = 100_000
+_MAX_SIGNATURE_BYTES = 128
 
 _ROUND_CONSTANTS = (
     0x428A2F98,
@@ -221,13 +224,11 @@ def buggy_sha256(message: bytes) -> bytes:
         raise ConfigError("key-derivation input must be bytes")
     last_chunk_length = len(message) % 64
     if last_chunk_length <= 55:
-        # This is a compatibility digest for the vendor's key derivation, not
-        # password storage or password verification.  Do not replace it with
-        # a different KDF: the exact bytes must match the firmware behavior.
-        # Explicitly mark this as non-security use for FIPS-aware runtimes and
-        # static analyzers; the digest is only a vendor-compatibility value.
-        # codeql[py/weak-sensitive-data-hashing]
-        return hashlib.sha256(message, usedforsecurity=False).digest()
+        # This compatibility digest feeds the vendor's encryption key/IV
+        # derivation: it IS security-sensitive, despite its compatibility role.
+        # Preserve the required bytes, not a claim of modern password-hardening
+        # or authenticated encryption. See docs/config-cryptography.md.
+        return hashlib.sha256(message, usedforsecurity=True).digest()
     packed_length = struct.pack(">Q", 8 * len(message))
     if last_chunk_length == 56:
         return _sha256_raw_digest(message + packed_length)
@@ -288,6 +289,7 @@ def _decode_base64_wrapper(data: bytes) -> tuple[bytes, bool]:
 
 def _read_chunks(stream: BinaryIO, decryptor: _CipherContext | None = None) -> bytes:
     chunks: list[bytes] = []
+    total_length = 0
     while True:
         header = stream.read(_CHUNK_HEADER_SIZE)
         if len(header) != _CHUNK_HEADER_SIZE:
@@ -299,6 +301,9 @@ def _read_chunks(stream: BinaryIO, decryptor: _CipherContext | None = None) -> b
             raise ConfigError("configuration chunk exceeds the safety size limit")
         if plain_length > _MAX_COMPRESSED_BYTES:
             raise ConfigError("configuration chunk plaintext length exceeds the safety size limit")
+        total_length += plain_length
+        if total_length > _MAX_COMPRESSED_BYTES:
+            raise ConfigError("configuration chunk total exceeds the safety size limit")
         if more not in (0, 1):
             raise ConfigError("configuration chunk continuation flag is invalid")
         chunk = stream.read(encrypted_length)
@@ -311,6 +316,8 @@ def _read_chunks(stream: BinaryIO, decryptor: _CipherContext | None = None) -> b
         chunks.append(chunk[:plain_length])
         if more == 0:
             break
+    if stream.read(1):
+        raise ConfigError("configuration has trailing data after its final encrypted chunk")
     return b"".join(chunks)
 
 
@@ -342,6 +349,7 @@ def _decode_compressed(data: bytes) -> bytes:
     compressed_crc = 0
     compressed_total = 0
     chunk_count = 0
+    finished = False
     while stream.tell() < len(data) - _HEADER_SIZE:
         chunk_header = stream.read(_CHUNK_HEADER_SIZE)
         if len(chunk_header) != _CHUNK_HEADER_SIZE:
@@ -351,6 +359,11 @@ def _decode_compressed(data: bytes) -> bytes:
             raise ConfigError("compressed configuration chunk exceeds the safety size limit")
         if plain_length > _MAX_XML_BYTES:
             raise ConfigError("compressed configuration chunk XML exceeds the safety size limit")
+        remaining = min(expected_length, _MAX_XML_BYTES) - len(output)
+        if plain_length > remaining:
+            raise ConfigError("compressed configuration chunk length exceeds its total size limit")
+        if compressed_total + compressed_length > expected_compressed_length:
+            raise ConfigError("compressed configuration compressed length exceeds its header")
         compressed = stream.read(compressed_length)
         if len(compressed) != compressed_length:
             raise ConfigError("compressed configuration chunk is truncated")
@@ -361,20 +374,27 @@ def _decode_compressed(data: bytes) -> bytes:
         chunk_count += 1
         try:
             decompressor = zlib.decompressobj()
-            plain = decompressor.decompress(compressed, _MAX_XML_BYTES + 1)
+            plain = decompressor.decompress(compressed, remaining + 1)
         except zlib.error as exc:
             raise ConfigError("compressed configuration data is invalid") from exc
-        if len(plain) > _MAX_XML_BYTES or decompressor.unconsumed_tail:
+        if len(plain) > remaining or decompressor.unconsumed_tail:
             raise ConfigError("compressed configuration data exceeds the safety size limit")
         if not decompressor.eof:
             raise ConfigError("compressed configuration data is invalid")
+        if decompressor.unused_data:
+            raise ConfigError("compressed configuration chunk contains trailing data")
         if len(plain) != plain_length:
             raise ConfigError("compressed configuration chunk length is invalid")
         output.extend(plain)
         if more == 0:
+            finished = True
             break
     if chunk_count == 0:
         raise ConfigError("compressed configuration has no data chunks")
+    if not finished:
+        raise ConfigError("compressed configuration continuation chunk header is missing")
+    if stream.read(1):
+        raise ConfigError("compressed configuration has trailing data after its final chunk")
     if len(output) != expected_length:
         raise ConfigError("compressed configuration length does not match its header")
     if compressed_total != expected_compressed_length:
@@ -397,6 +417,8 @@ def decode_config(
         if len(binary) < 12:
             raise ConfigError("configuration signature header is truncated")
         _, _, signature_length = struct.unpack(">3I", binary[:12])
+        if not 1 <= signature_length <= _MAX_SIGNATURE_BYTES:
+            raise ConfigError("configuration signature length is invalid")
         signature_bytes = binary[12 : 12 + signature_length]
         if len(signature_bytes) != signature_length:
             raise ConfigError("configuration signature is truncated")
@@ -473,7 +495,7 @@ def encode_config(
         raise ConfigError("configuration XML must be non-empty UTF-8 bytes")
     if len(xml) > _MAX_XML_BYTES:
         raise ConfigError("configuration XML exceeds the safety size limit")
-    if not isinstance(signature, str) or not signature:
+    if not isinstance(signature, str) or not 1 <= len(signature) <= _MAX_SIGNATURE_BYTES:
         raise ConfigError("configuration signature must be a non-empty ASCII string")
     try:
         signature_bytes = signature.encode("ascii")
@@ -497,22 +519,51 @@ def encode_config(
     return base64.b64encode(binary) if base64_wrap else binary
 
 
-def _reject_unsafe_xml(xml: bytes) -> None:
-    upper = xml.upper()
-    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
-        raise ConfigError("configuration XML may not contain external entities")
+class _ConfigTreeBuilder(ET.TreeBuilder):
+    """Reject DTDs in every encoding and bound tree construction before allocation."""
+
+    def __init__(self) -> None:
+        super().__init__(insert_comments=True, insert_pis=True)
+        self.depth = 0
+        self.elements = 0
+
+    def doctype(self, name: str, pubid: str | None, system: str | None) -> None:
+        del name, pubid, system
+        raise ConfigError("configuration XML may not contain DTDs or entities")
+
+    def _count_node(self) -> None:
+        self.elements += 1
+        if self.depth > _MAX_XML_DEPTH or self.elements > _MAX_XML_ELEMENTS:
+            raise ConfigError("configuration XML exceeds the nesting or element safety limit")
+
+    def start(self, tag: str, attrs: dict[str, str]) -> ET.Element:
+        self.depth += 1
+        self._count_node()
+        return super().start(tag, attrs)
+
+    def end(self, tag: str) -> ET.Element:
+        self.depth -= 1
+        return super().end(tag)
+
+    def comment(self, text: str | None) -> ET.Element:
+        self._count_node()
+        return super().comment(text)
+
+    def pi(self, target: str, text: str | None = None) -> ET.Element:
+        self._count_node()
+        return super().pi(target, text)
 
 
 def _find_or_create_ssh_table(root: ET.Element) -> tuple[ET.Element, ET.Element]:
-    table = next(
-        (item for item in root.findall("Tbl") if item.attrib.get("name") == "SSHCfg"),
-        None,
-    )
+    tables = [item for item in root.findall("Tbl") if item.attrib.get("name") == "SSHCfg"]
+    if len(tables) > 1:
+        raise ConfigError("configuration contains ambiguous duplicate SSH tables")
+    table = tables[0] if tables else None
     if table is None:
         table = ET.SubElement(root, "Tbl", {"name": "SSHCfg", "RowCount": "1"})
     rows = table.findall("Row")
     row = rows[0] if rows else ET.SubElement(table, "Row", {"No": "0"})
-    table.set("RowCount", "1")
+    table.set("RowCount", str(len(table.findall("Row"))))
     return table, row
 
 
@@ -530,13 +581,14 @@ def patch_root_ssh(xml: bytes, password: str, username: str = "admin") -> bytes:
         raise ConfigError("SSH username must contain 1-64 characters")
     if not isinstance(xml, bytes) or len(xml) > _MAX_XML_BYTES:
         raise ConfigError("configuration XML exceeds the safety size limit")
-    _reject_unsafe_xml(xml)
     try:
-        # _reject_unsafe_xml already rejects DOCTYPE/ENTITY declarations above,
-        # which removes the XXE/entity-expansion risk stdlib ElementTree carries;
-        # a defusedxml dependency is not needed for this pre-filtered input.
-        root = ET.fromstring(xml)  # noqa: S314
-    except ET.ParseError as exc:
+        # TreeBuilder.doctype rejects declarations after the parser has decoded
+        # the input, including UTF-16; start bounds tree depth and node count.
+        parser = ET.XMLParser(target=_ConfigTreeBuilder())  # noqa: S314
+        root = ET.fromstring(xml, parser=parser)  # noqa: S314
+    except ConfigError:
+        raise
+    except (ET.ParseError, LookupError, ValueError) as exc:
         raise ConfigError("configuration XML is invalid") from exc
     if root.tag != "DB":
         raise ConfigError("configuration XML root must be DB")
@@ -548,7 +600,12 @@ def patch_root_ssh(xml: bytes, password: str, username: str = "admin") -> bytes:
         "SSH_ProcType": "0",
         "SSH_Level": "1",
     }
-    fields = {item.attrib.get("name"): item for item in row.findall("DM")}
+    fields: dict[str | None, ET.Element] = {}
+    for item in row.findall("DM"):
+        name = item.attrib.get("name")
+        if name in values and name in fields:
+            raise ConfigError("configuration contains ambiguous duplicate SSH fields")
+        fields[name] = item
     for name, value in values.items():
         field = fields.get(name)
         if field is None:
@@ -558,6 +615,8 @@ def patch_root_ssh(xml: bytes, password: str, username: str = "admin") -> bytes:
     # ET.tostring's overloads type this as Any for a non-literal `encoding`
     # argument; passing anything other than "unicode" always yields bytes.
     result: bytes = ET.tostring(root, encoding="utf-8")
+    if len(result) > _MAX_XML_BYTES:
+        raise ConfigError("patched configuration XML exceeds the safety size limit")
     return result
 
 
@@ -575,6 +634,8 @@ def inspect_config(data: bytes) -> ConfigMetadata:
         if len(binary) < 12:
             raise ConfigError("configuration signature header is truncated")
         _, _, signature_length = struct.unpack(">3I", binary[:12])
+        if not 1 <= signature_length <= _MAX_SIGNATURE_BYTES:
+            raise ConfigError("configuration signature length is invalid")
         signature_bytes = binary[12 : 12 + signature_length]
         try:
             signature = signature_bytes.decode("ascii")
@@ -592,17 +653,19 @@ def inspect_config(data: bytes) -> ConfigMetadata:
     raise ConfigError("file is not a supported H3600P config container")
 
 
-def read_private_config(path: str | Path) -> bytes:
+def read_private_config(path: str | Path, *, xml: bool = False) -> bytes:
     """Read one private config artifact; no contents are logged by this module."""
 
     source = Path(path)
+    limit = _MAX_XML_BYTES if xml else _MAX_ARTIFACT_BYTES
+    label = "XML baseline" if xml else "configuration artifact"
     try:
         with source.open("rb") as stream:
-            data = stream.read(_MAX_ARTIFACT_BYTES + 1)
+            data = stream.read(limit + 1)
     except OSError as exc:
-        raise ConfigError("unable to read configuration artifact") from exc
+        raise ConfigError(f"unable to read {label}") from exc
     if not data:
         raise ConfigError("configuration artifact is empty")
-    if len(data) > _MAX_ARTIFACT_BYTES:
+    if len(data) > limit:
         raise ConfigError("configuration artifact exceeds the safety size limit")
     return data

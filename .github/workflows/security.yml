@@ -3,6 +3,7 @@ name: Security audit
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -25,7 +26,7 @@ jobs:
       - name: Create isolated audit environment
         run: |
           python -m venv "$RUNNER_TEMP/security-venv"
-          "$RUNNER_TEMP/security-venv/bin/python" -m pip install -r requirements-security.lock
+          "$RUNNER_TEMP/security-venv/bin/python" -m pip install --require-hashes -r requirements-security.lock
           "$RUNNER_TEMP/security-venv/bin/python" -m pip install -e . --no-deps --no-build-isolation
       - name: Check installed dependency consistency
         run: |
@@ -34,6 +35,10 @@ jobs:
         run: |
           "$RUNNER_TEMP/security-venv/bin/pip-audit" \
             -r requirements-security.lock \
+            -r requirements-ci.lock \
+            -r requirements-release.lock \
+            -r requirements-build.lock \
+            --require-hashes \
             --strict
 
   dependency-review:

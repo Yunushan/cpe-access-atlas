@@ -40,7 +40,7 @@ from .policy import (
     probe_tcp_ports,
 )
 from .private_files import write_private_bytes, write_private_text
-from .redaction import redact_text
+from .redaction import MAX_REPORT_CHARS, RedactionError, redact_text
 from .report import build_research_template
 
 
@@ -216,6 +216,8 @@ def command_root_readiness(args: argparse.Namespace) -> int:
     """
 
     recipe = _recipe_from_args(args)
+    if args.expected_sha256 and not args.firmware_input:
+        raise FirmwareInspectionError("--expected-sha256 requires --firmware-input")
     inspection = (
         inspect_firmware(args.firmware_input, recipe.firmware, args.expected_sha256)
         if args.firmware_input
@@ -227,7 +229,7 @@ def command_root_readiness(args: argparse.Namespace) -> int:
     ) in {"verified", "stable"}
     artifact_exact = None if inspection is None else inspection.exact_build_match
     artifact_hash = None if inspection is None else inspection.sha256_match
-    artifact_identity_verified = (
+    artifact_evidence_matches = (
         inspection is not None
         and inspection.exact_build_match is True
         and (inspection.expected_sha256 is None or inspection.sha256_match is True)
@@ -255,7 +257,10 @@ def command_root_readiness(args: argparse.Namespace) -> int:
             "firmware_artifact_supplied": inspection is not None,
             "firmware_exact_build_match": artifact_exact,
             "firmware_sha256_match": artifact_hash,
-            "firmware_identity_verified": artifact_identity_verified,
+            "firmware_evidence_matches": artifact_evidence_matches,
+            # Retained for JSON consumers, but never claim authenticity from
+            # embedded strings or a hash whose provenance we cannot verify.
+            "firmware_identity_verified": False,
         },
         "blockers": blockers,
         "required_before_any_mutation": [
@@ -289,6 +294,9 @@ def command_root_readiness(args: argparse.Namespace) -> int:
             print(f"Firmware artifact: {inspection.path}")
             print(f"Exact build match: {artifact_exact}")
             print(f"SHA-256 match: {artifact_hash}")
+            print(
+                "Evidence match only; firmware authenticity and flash compatibility are unverified."
+            )
         print("Blockers:")
         for blocker in blockers:
             print(f"  - {blocker}")
@@ -336,6 +344,16 @@ def command_config_generate(args: argparse.Namespace) -> int:
         )
         return 3
 
+    if (
+        recipe.vendor != "ZTE"
+        or recipe.model != "H3600P V9"
+        or recipe.hardware_revision != "V9.0"
+        or "offline-private-config-codec" not in recipe.capabilities
+    ):
+        raise ConfigError("no compatible offline configuration codec is registered for this target")
+    if args.signature != H3600P_SIGNATURE:
+        raise ConfigError("configuration signature must match the selected H3600P V9.0 codec")
+
     output = Path(args.output)
     if output.exists() and not args.force:
         print(
@@ -352,16 +370,16 @@ def command_config_generate(args: argparse.Namespace) -> int:
     if args.input_config:
         source_label = "private configuration baseline"
         private_config = read_private_config(args.input_config)
-        private_config_encrypted = inspect_config(private_config).encrypted
+        metadata = inspect_config(private_config)
+        if metadata.signature not in (None, H3600P_SIGNATURE):
+            raise ConfigError("configuration baseline signature does not match the selected codec")
+        private_config_encrypted = metadata.encrypted
         if private_config_encrypted and (not args.serial or not args.mac):
             raise ConfigError("encrypted input requires --serial and --mac for local decryption")
         source_xml = None
     elif args.input_xml:
         source_label = "private XML baseline"
-        try:
-            source_xml = Path(args.input_xml).read_bytes()
-        except OSError as exc:
-            raise ConfigError("unable to read XML baseline") from exc
+        source_xml = read_private_config(args.input_xml, xml=True)
     else:
         source_xml = None
 
@@ -466,7 +484,11 @@ def command_report_template(args: argparse.Namespace) -> int:
     if output.exists() and not args.force:
         print(f"Refused: {output} already exists; use --force to replace it.", file=sys.stderr)
         return 4
-    output.write_text(content, encoding="utf-8")
+    try:
+        write_private_text(output, content, replace=args.force)
+    except FileExistsError:
+        print(f"Refused: {output} already exists; use --force to replace it.", file=sys.stderr)
+        return 4
     print(f"Wrote sanitized research template: {output}")
     return 0
 
@@ -478,8 +500,6 @@ def command_redact(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 4
-    value = Path(args.input).read_text(encoding="utf-8") if args.input else sys.stdin.read()
-    content = redact_text(value)
     output = Path(args.output)
     if output.exists() and not args.force:
         print(
@@ -487,6 +507,14 @@ def command_redact(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 4
+    if args.input:
+        with Path(args.input).open(encoding="utf-8") as stream:
+            value = stream.read(MAX_REPORT_CHARS + 1)
+    else:
+        value = sys.stdin.read(MAX_REPORT_CHARS + 1)
+    if len(value) > MAX_REPORT_CHARS:
+        raise RedactionError("report exceeds the safety size limit")
+    content = redact_text(value)
     try:
         write_private_text(output, content, replace=args.force)
     except OSError as exc:
@@ -747,7 +775,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         return int(args.func(args))
-    except (CatalogError, ConfigError, FirmwareInspectionError, PolicyError) as exc:
+    except (CatalogError, ConfigError, FirmwareInspectionError, PolicyError, RedactionError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:

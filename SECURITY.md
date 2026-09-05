@@ -6,11 +6,16 @@ Do not publish an unpatched device vulnerability, working exploit, private
 configuration backup, subscriber credential, serial number, certificate,
 session cookie, or ISP management endpoint in a public issue.
 
-Until a private reporting address is configured, open a minimal [GitHub
-Security Advisory draft](https://github.com/Yunushan/cpe-access-atlas/security/advisories/new)
-in the repository after publication. Include only enough metadata to identify
-the affected project component; keep device secrets and ISP data out of the
-report.
+Use **Report a vulnerability** on the repository's
+[Security Advisories page](https://github.com/Yunushan/cpe-access-atlas/security/advisories)
+when private vulnerability reporting is enabled. External reporters cannot
+rely on a maintainer-only advisory-draft link as a confidential intake channel.
+
+If that button is unavailable, no private reporting address is currently
+advertised. Open an issue containing only a request for a private security
+contact, with **no vulnerability details, exploit, attachment, or device data**.
+Wait for a confidential channel before sending the report. Administrators must
+enable and test private reporting before designating a release production-ready.
 
 ## Supported project versions
 
