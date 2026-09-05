@@ -428,7 +428,9 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
     def test_malformed_effective_rule_identities_are_unverified_not_unhashable(self) -> None:
         for value in (None, {}, [], True, 0, "1"):
             records = complete_fixture()
-            records["rules/branches/main?per_page=100"] = [{"ruleset_id": value}]
+            records["rules/branches/main?per_page=100"] = [
+                {"type": "deletion", "ruleset_id": value}
+            ]
             records["branches/main/protection"] = (None, "HTTP 403")
             code, output, _, _ = self.run_cli(records)
             self.assertEqual(code, 1)

@@ -369,6 +369,8 @@ def _audit_branch_policy(
         effective_error
         or any(
             not isinstance(rule, dict)
+            or not isinstance(rule.get("type"), str)
+            or re.fullmatch(r"[a-z][a-z0-9_]*", rule["type"]) is None
             or (
                 rule.get("type") == "pull_request"
                 and (

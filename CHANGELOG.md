@@ -7,6 +7,8 @@ All notable changes are documented here.
 - Adopt the owner's solo-maintainer approval policy: keep PR/CI and protected
   release controls, but make another person's approval optional. Label audit
   results by policy and retain an opt-in independent-review profile.
+- Reject missing or malformed effective-rule types before a classic branch
+  policy can mask incomplete approval evidence in the solo-maintainer audit.
 - Distinguish present but incomplete main-branch rulesets from unavailable
   protection evidence in audit diagnostics, without treating either as passing.
 - Summarize GitHub CLI failures without copying public IPs, private paths, or

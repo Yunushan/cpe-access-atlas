@@ -235,6 +235,22 @@ class GitHubPolicyTests(unittest.TestCase):
             audit.STATUS_UNKNOWN,
         )
 
+    def test_solo_malformed_rule_types_cannot_pass_through_classic_protection(self) -> None:
+        entries = [{"ruleset_id": 1}]
+        entries.extend(
+            {"ruleset_id": 1, "type": value}
+            for value in (None, True, 1, [], {}, "", " ", " pull_request", "PULL_REQUEST")
+        )
+        for entry in entries:
+            with self.subTest(entry=entry):
+                api = branch_api(branch_protection(require_independent_review=False))
+                api.records["rules/branches/main?per_page=100"] = [entry]
+                result = audit._audit_branch_policy(
+                    api, [{"id": 1, "bypass_actors": []}], [], require_independent_review=False
+                )
+                self.assertEqual(result.status, audit.STATUS_UNKNOWN)
+                self.assertNotIn("branches/main/protection", api.calls)
+
     def test_solo_release_policy_omits_approvers_but_keeps_release_boundaries(self) -> None:
         baseline = environment(require_independent_review=False)
         self.assertEqual(
