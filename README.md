@@ -234,7 +234,7 @@ prove that the firmware accepts the file, enables a Linux UID 0 shell, or has a
 recoverable rollback path. Keep the original backup and every generated file
 private; do not upload them to GitHub or include them in bug reports.
 
-The `apply` command is deliberately fail-closed in version 0.3.0. Even after
+The `apply` command is deliberately fail-closed in this release. Even after
 ownership acknowledgement it refuses this blocked recipe and makes no device
 change.
 
