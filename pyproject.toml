@@ -93,7 +93,7 @@ select = ["E", "F", "I", "UP", "B", "S", "RUF", "SIM", "C4", "PTH", "A", "ARG"]
 
 [tool.coverage.run]
 branch = true
-source = ["src/cpe_access_atlas"]
+source = ["src/cpe_access_atlas", "scripts"]
 
 [tool.coverage.report]
 exclude_also = [
@@ -109,4 +109,4 @@ disallow_untyped_defs = true
 disallow_any_generics = true
 no_implicit_reexport = true
 show_error_codes = true
-files = ["src"]
+files = ["src", "scripts"]

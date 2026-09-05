@@ -36,10 +36,19 @@ CLI
 9. **Offline config boundaries.** The configuration codec reads and writes only
    user-supplied local artifacts. It never connects to, flashes, or changes a
    device, and generated SSH fields are not evidence of a root shell. Private
-   outputs are written atomically with restrictive local permissions where the
-   platform supports owner-only modes; Windows destination ACLs remain
-   authoritative. The CLI does not print credential-bearing configuration or
-   redaction output.
+   outputs are written atomically with owner-only POSIX modes or a protected
+   Windows ACL for the creating account. Windows creates the restrictive ACL
+   with the file, then verifies its owner, sole explicit access grant, and
+   persistent-filesystem ACL support through the open handle before writing.
+   Parent-directory grants are not inherited. The directory must nevertheless
+   remain private and under the user's control; same-account access, elevated
+   administrators, and untrusted storage providers are outside this protection.
+   The CLI does not print credential-bearing configuration or redaction output.
+
+The experimental codec reproduces vendor key derivation and AES-CBC container
+behavior; it is not a general-purpose secure backup format. See the
+[configuration cryptography threat model](config-cryptography.md) for the
+security-sensitive compatibility constraint and unresolved validation limits.
 
 ## Future adapter contract
 

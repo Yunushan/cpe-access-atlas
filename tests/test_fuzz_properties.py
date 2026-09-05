@@ -12,12 +12,21 @@ both are exercised here with wide, randomized inputs.
 from __future__ import annotations
 
 import contextlib
+import struct
 import unittest
+import zlib
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cpe_access_atlas.config import ConfigError, buggy_sha256, decode_config, inspect_config
+from cpe_access_atlas.config import (
+    PAYLOAD_MAGIC,
+    ConfigError,
+    buggy_sha256,
+    decode_config,
+    encode_config,
+    inspect_config,
+)
 from cpe_access_atlas.redaction import redact_text
 
 # Deadline disabled: these functions include intentional bounded work (zlib
@@ -31,6 +40,43 @@ _SUITE_SETTINGS = settings(
 
 
 class ConfigDecodingFuzzTests(unittest.TestCase):
+    @given(st.lists(st.binary(max_size=256), min_size=1, max_size=8))
+    @_SUITE_SETTINGS
+    def test_structured_multichunk_inputs_round_trip_and_require_a_final_chunk(
+        self, chunks: list[bytes]
+    ) -> None:
+        packed = [zlib.compress(chunk) for chunk in chunks]
+        plain_size, packed_data = sum(map(len, chunks)), b"".join(packed)
+        header = struct.pack(
+            ">6I",
+            PAYLOAD_MAGIC,
+            0,
+            plain_size,
+            len(packed_data),
+            plain_size,
+            zlib.crc32(packed_data),
+        )
+        prefix = header + struct.pack(">I", zlib.crc32(header)) + bytes(32)
+        body = b"".join(
+            struct.pack(">3I", len(plain), len(compressed), int(index < len(chunks) - 1))
+            + compressed
+            for index, (plain, compressed) in enumerate(zip(chunks, packed, strict=True))
+        )
+        self.assertEqual(decode_config(prefix + body).xml, b"".join(chunks))
+        with self.assertRaises(ConfigError):
+            decode_config(prefix + body + b"unexpected trailer")
+
+    @given(st.binary(min_size=1, max_size=2048))
+    @_SUITE_SETTINGS
+    def test_encrypted_structured_artifacts_round_trip_and_reject_truncation(
+        self, xml: bytes
+    ) -> None:
+        coordinates = {"device_key": "a" * 32, "serial": "ZTE12345678", "mac": "00:11:22:33:44:55"}
+        artifact = encode_config(xml, encrypted=True, base64_wrap=False, **coordinates)
+        self.assertEqual(decode_config(artifact, **coordinates).xml, xml)
+        with self.assertRaises(ConfigError):
+            decode_config(artifact[:-1], **coordinates)
+
     @given(st.binary(min_size=0, max_size=4096))
     @_SUITE_SETTINGS
     def test_decode_config_never_raises_an_uncontrolled_exception(self, data: bytes) -> None:
@@ -79,6 +125,22 @@ class ConfigDecodingFuzzTests(unittest.TestCase):
 
 
 class RedactionFuzzTests(unittest.TestCase):
+    @given(
+        st.lists(
+            st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789", min_size=8, max_size=32),
+            min_size=2,
+            max_size=8,
+        )
+    )
+    @_SUITE_SETTINGS
+    def test_every_cookie_value_is_removed_from_a_structured_header(
+        self, values: list[str]
+    ) -> None:
+        header = "Cookie: " + "; ".join(
+            f"cookie{index}={value}" for index, value in enumerate(values)
+        )
+        self.assertEqual(redact_text(header), "Cookie: [REDACTED]")
+
     @given(st.text(max_size=2000))
     @_SUITE_SETTINGS
     def test_redact_text_never_raises_on_arbitrary_unicode(self, value: str) -> None:

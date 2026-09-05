@@ -57,9 +57,11 @@ def render() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    check_only = "--check" in (argv if argv is not None else sys.argv[1:])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="check freshness without writing")
+    args = parser.parse_args(argv)
     rendered = render()
-    if check_only:
+    if args.check:
         current = _OUTPUT_PATH.read_text(encoding="utf-8") if _OUTPUT_PATH.exists() else ""
         if current != rendered:
             print(

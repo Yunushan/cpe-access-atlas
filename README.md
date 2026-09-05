@@ -70,8 +70,10 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Last evidence review | 2026-08-15 |
 
 Public community evidence says the older provisioning interception workflow
-does not work on this build. No official firmware image, safe downgrade path,
-configuration decoder, or independently verified replacement method was found.
+does not work on this build. No official firmware image, recovery-tested
+downgrade path, or independently verified replacement method was found. The
+experimental offline configuration codec below is not validated for firmware
+acceptance or recovery on this exact build.
 The exact record is included so the tool can identify the build and stop
 instead of doing something unsafe.
 
@@ -130,6 +132,10 @@ cpe-atlas root-readiness \
 ```
 
 This command only hashes and scans the optional firmware file as opaque bytes.
+Version strings and a user-supplied SHA-256 are evidence matches, not proof of
+vendor authenticity or flash compatibility. JSON reports expose this distinction
+as `firmware_evidence_matches`; the legacy `firmware_identity_verified` field
+remains false because this release has no trusted firmware-authentication path.
 It reports `STOP` unless the catalog has an exact hardware record, a verified
 exact-build root method, and the supplied artifact matches the requested build
 and optional private hash. It never reads configuration XML, connects to a
@@ -209,9 +215,16 @@ preserved by default; use `--encrypted` with the serial, MAC, and passphrase to
 request encrypted output from another baseline or a new template. Passphrases
 are read locally and never printed. Use `--input-xml` only with a private
 decoded XML baseline. `--raw` emits the raw binary container. Generated config
-files are atomically written with restrictive local permissions where the
-platform exposes owner-only modes; on Windows the destination directory's ACL
-remains authoritative. The destination directory must already exist.
+files are atomically written with owner-only POSIX permissions or an explicit,
+protected Windows ACL granted only to the creating account. On Windows, the
+ACL is installed at file creation and checked through the same open handle
+before any credential bytes are written; inherited group/Everyone grants are
+not retained. The destination directory must already exist, remain under your
+control, and support hard links for no-overwrite publication (for example,
+NTFS, APFS, or ext4). Windows also requires persistent ACL support. Unsupported
+filesystems fail closed. These protections do not isolate files from the same
+account, elevated administrators, or an untrusted storage provider; keep every
+artifact in a private, trusted local directory.
 
 This is an offline research tool, not a firmware image, root exploit, or device
 flasher. A no-input artifact uses a minimal template and does not preserve ISP
@@ -262,10 +275,14 @@ Before any future verified mutation:
 6. Use a unique password and keep WAN-side administration disabled.
 
 The report redactor is conservative assistance, not a proof of sanitization.
+It covers common text assignments, complete Cookie/Set-Cookie headers, quoted
+ZTE XML secret fields, serial/subscriber identifiers, and PEM private-key blocks.
+It accepts at most 8 Mi characters of UTF-8 report text; binary backups and
+unsupported or malformed formats are not safe to publish after redaction.
 It requires `--output`, never prints report contents to the terminal, and writes
-the result with restrictive local permissions where supported. On Windows,
-secure the destination directory's ACL and manually review every report,
-screenshot, capture, and exported text before sharing it.
+the result through the same owner-only artifact writer described above. Keep
+the destination directory private and under your control, and manually review
+every report, screenshot, capture, and exported text before sharing it.
 
 Modifying ISP-provided equipment can break connectivity, VoIP, IPTV, updates,
 remote support, warranty coverage, or contractual terms. Rented or loaned

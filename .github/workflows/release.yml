@@ -13,7 +13,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Local reusable workflows run from this release's exact source commit.
+  # Publication must not race independent push workflows or treat SBOMs as tests.
+  source-validation:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  dependency-validation:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  secret-validation:
+    uses: ./.github/workflows/secret-scan.yml
+    permissions:
+      contents: read
+
+  codeql-validation:
+    uses: ./.github/workflows/codeql.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  runtime-sbom:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install locked audit tooling
+        run: python -m pip install --require-hashes -r requirements-security.lock
+      - name: Generate environment-specific runtime SBOM
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_PYTHON: ${{ matrix.python }}
+        run: |
+          mkdir -p sbom
+          python -m pip_audit -r requirements-runtime.lock --require-hashes --strict \
+            --format cyclonedx-json \
+            --output "sbom/cpe-access-atlas-${RELEASE_TAG}-${TARGET_OS}-python${TARGET_PYTHON}-sbom.cdx.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-sbom-${{ matrix.os }}-python${{ matrix.python }}
+          path: sbom/*.json
+          if-no-files-found: error
+
   validate-release:
+    needs: [source-validation, dependency-validation, secret-validation, codeql-validation, runtime-sbom]
     timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
@@ -32,7 +92,7 @@ jobs:
           python-version: "3.14"
       - name: Install release tooling
         run: |
-          python -m pip install -r requirements-release.lock
+          python -m pip install --require-hashes -r requirements-release.lock
           python -m pip install -e . --no-deps --no-build-isolation
       - name: Verify tag matches package version
         env:
@@ -69,38 +129,42 @@ jobs:
         run: |
           python -m ruff check src tests scripts
           python -m ruff format --check src tests scripts
-          python -m mypy src
+          python -m mypy src scripts
           python scripts/generate_cli_reference.py --check
           python -m coverage run -m unittest discover -s tests -v
           python -m coverage report -m
           cpe-atlas validate
       - name: Build distributions
-        run: python -m build --wheel --sdist
+        # The release lock includes the build backend and its verified hashes.
+        # Do not resolve a second, unhashed backend in an isolated environment.
+        env:
+          PIP_NO_INDEX: "1"
+        run: python -m build --wheel --sdist --no-isolation
       - name: Check distribution metadata
         run: python -m twine check dist/*
+      - name: Test bundled source distribution
+        run: python scripts/check_sdist.py --dist-dir dist
       - name: Install wheel in a clean environment
         run: |
           python -m venv "$RUNNER_TEMP/release-wheel"
-          "$RUNNER_TEMP/release-wheel/bin/python" -m pip install -r requirements-runtime.lock
+          "$RUNNER_TEMP/release-wheel/bin/python" -m pip install --require-hashes -r requirements-runtime.lock
           "$RUNNER_TEMP/release-wheel/bin/python" -m pip install --no-deps dist/*.whl
           "$RUNNER_TEMP/release-wheel/bin/python" -m pip check
           "$RUNNER_TEMP/release-wheel/bin/cpe-atlas" validate
       - name: Install source distribution in a clean environment
         run: |
           python -m venv "$RUNNER_TEMP/release-sdist"
-          "$RUNNER_TEMP/release-sdist/bin/python" -m pip install -r requirements-runtime.lock
-          "$RUNNER_TEMP/release-sdist/bin/python" -m pip install -r requirements-build.lock
+          "$RUNNER_TEMP/release-sdist/bin/python" -m pip install --require-hashes -r requirements-runtime.lock
+          "$RUNNER_TEMP/release-sdist/bin/python" -m pip install --require-hashes -r requirements-build.lock
           "$RUNNER_TEMP/release-sdist/bin/python" -m pip install --no-deps --no-build-isolation dist/*.tar.gz
           "$RUNNER_TEMP/release-sdist/bin/python" -m pip check
           "$RUNNER_TEMP/release-sdist/bin/cpe-atlas" validate
-      - name: Generate runtime dependency SBOM
-        run: |
-          python -m venv "$RUNNER_TEMP/release-sbom"
-          "$RUNNER_TEMP/release-sbom/bin/python" -m pip install -r requirements-security.lock
-          "$RUNNER_TEMP/release-sbom/bin/python" -m pip_audit -r requirements-runtime.lock \
-            --format cyclonedx-json \
-            --strict \
-            --output "dist/cpe-access-atlas-${GITHUB_REF_NAME}-sbom.cdx.json"
+      - name: Collect runtime SBOMs for every supported environment
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtime-sbom-*
+          merge-multiple: true
+          path: dist
       - name: Create checksums
         run: sha256sum dist/*.whl dist/*.tar.gz dist/*.json > "dist/SHA256SUMS"
       - name: Attest release artifacts
@@ -117,8 +181,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-              --title "$GITHUB_REF_NAME" --generate-notes
+            echo "Release already exists; published artifacts will not be overwritten."
+            exit 1
           fi
+          prerelease="$(python -c 'import tomllib; from pathlib import Path; from packaging.version import Version; from cpe_access_atlas import __version__; c=tomllib.loads(Path("pyproject.toml").read_text())["project"]["classifiers"]; print(str(Version(__version__).is_prerelease or not any(x in c for x in ("Development Status :: 5 - Production/Stable", "Development Status :: 6 - Mature"))).lower())')"
+          release_args=(--repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
+          if [ "$prerelease" = "true" ]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* "${release_args[@]}"

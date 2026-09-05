@@ -34,15 +34,21 @@ enough.
 Use Python 3.11 or newer:
 
 ```shell
-python -m pip install -r requirements-ci.lock
+python -m pip install --require-hashes -r requirements-ci.lock
 python -m pip install -e . --no-deps --no-build-isolation
-python -m ruff check src tests
-python -m ruff format --check src tests
-python -m mypy src
+python -m ruff check src tests scripts
+python -m ruff format --check src tests scripts
+python -m mypy src scripts
 python -m coverage run -m unittest discover -s tests -v
 python -m coverage report -m
 cpe-atlas validate
 ```
+
+The 100% measured statement/branch coverage gate includes both the runtime and
+the maintenance scripts; strict type checking covers both as well. Coverage is
+not proof of complete security properties or real-device interoperability.
+The GitHub audit tests use synthetic API evidence and replace external process
+execution, so the test suite does not inspect or change your GitHub settings.
 
 Optionally install the local pre-commit hooks, which run the same checks
 before each commit:
@@ -62,9 +68,12 @@ git commit --signoff -m "Your commit message"
 
 The CI, security, release, runtime-SBOM, and artifact-build environments use the
 committed lock files. When updating tooling or runtime dependencies, regenerate
-the relevant lock file from a clean Python 3.14 environment, run the full
-validation suite, and record the reason in the pull request. Dependabot is
-configured to propose updates for these files.
+the relevant lock files with a universal resolver, preserving environment
+markers and package hashes. They cover Python 3.11–3.14 on Windows, Linux, and
+macOS; resolving only the maintainer's interpreter misses conditional
+dependencies. See [lock maintenance](docs/release.md#dependency-lock-maintenance).
+Run the full validation suite and record the reason in the pull request.
+Dependabot is configured to propose updates for these files.
 
 For a release candidate, use `requirements-release.lock`, build both wheel and
 sdist artifacts, run `python -m twine check dist/*`, and install each artifact
