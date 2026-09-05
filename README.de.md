@@ -91,7 +91,7 @@ Dateien und vorhandene Backups müssen privat bleiben.
 
 **Warnung:** Importieren Sie keine verschlüsselten Konfigurationsdateien, die
 mit v0.4.0a1 oder älter erzeugt wurden; die Schlüsselableitung war fehlerhaft.
-Bewahren Sie das Originalbackup privat auf. Die [noch unveröffentlichte Korrektur](docs/config-cryptography.md)
+Bewahren Sie das Originalbackup privat auf. Die [Korrektur in v0.4.0a2](docs/config-cryptography.md)
 belegt weder einen sicheren Import noch Root-Zugriff für die genaue Firmware.
 
 Der Befehl `apply` arbeitet in dieser Version absichtlich nach dem

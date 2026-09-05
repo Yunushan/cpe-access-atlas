@@ -92,7 +92,7 @@ doivent rester privés.
 
 **Attention :** n'importez pas de configurations chiffrées générées par
 v0.4.0a1 ou une version antérieure : la dérivation des clés était incorrecte.
-Gardez la sauvegarde originale privée. Le [correctif non encore publié](docs/config-cryptography.md)
+Gardez la sauvegarde originale privée. Le [correctif v0.4.0a2](docs/config-cryptography.md)
 ne prouve ni la sûreté de l'importation ni l'accès root sur ce firmware précis.
 
 Dans cette version, `apply` est volontairement fermé par défaut et ne

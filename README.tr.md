@@ -124,7 +124,7 @@ yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmal�
 
 **Uyarı:** v0.4.0a1 veya önceki sürümlerin oluşturduğu şifreli config dosyalarını
 modeme yüklemeyin; anahtar türetme hatalıydı. Orijinal yedeği gizli tutun.
-[Henüz yayımlanmamış düzeltme](docs/config-cryptography.md), tam firmware
+[v0.4.0a2 düzeltmesi](docs/config-cryptography.md), tam firmware
 sürümünde güvenli yükleme veya root erişimi kanıtı değildir.
 
 Yalnızca açıkça belirtilen portları kontrol etmek için `--probe` eklenebilir.

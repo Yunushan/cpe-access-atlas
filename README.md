@@ -196,7 +196,7 @@ Generate an offline configuration artifact for a device you own or administer:
 
 **Encrypted-codec warning:** do not import encrypted config artifacts generated
 by v0.4.0a1 or earlier; their key derivation was incorrect. Keep your original
-private modem backup. The [unreleased correction and reference tests](docs/config-cryptography.md)
+private modem backup. The [v0.4.0a2 correction and reference tests](docs/config-cryptography.md)
 do not establish safe import or root access on the exact target firmware.
 
 ```shell
