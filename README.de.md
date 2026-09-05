@@ -89,6 +89,11 @@ Versionsprüfung für private Firmwaredateien. `config-generate` ist ein
 Offline-Konfigurationswerkzeug und kein Root-Exploit oder Flasher; erzeugte
 Dateien und vorhandene Backups müssen privat bleiben.
 
+**Warnung:** Importieren Sie keine verschlüsselten Konfigurationsdateien, die
+mit v0.4.0a1 oder älter erzeugt wurden; die Schlüsselableitung war fehlerhaft.
+Bewahren Sie das Originalbackup privat auf. Die [noch unveröffentlichte Korrektur](docs/config-cryptography.md)
+belegt weder einen sicheren Import noch Root-Zugriff für die genaue Firmware.
+
 Der Befehl `apply` arbeitet in dieser Version absichtlich nach dem
 Fail-Closed-Prinzip und ändert bei dieser blockierten Firmware nichts.
 
