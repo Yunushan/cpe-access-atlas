@@ -22,7 +22,7 @@ pattern before publishing. Before creating a tag:
 
 The workflow rejects a tag unless it is annotated, exactly matches the package
 version, has a matching `CHANGELOG.md` heading, and points to a commit
-reachable from `main`, for example `v0.3.0` for package version `0.3.0`.
+reachable from `main`, for example `v0.4.0a1` for package version `0.4.0a1`.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all twelve

@@ -4,6 +4,15 @@ All notable changes are documented here.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.4.0a1 - 2026-09-05
+
+This is an experimental prerelease for offline research. Exact-device config
+acceptance, root access, flashing safety, and recovery remain unverified; the
+`apply` command remains fail-closed. Vendor-compatible cryptography retains its
+documented security limitations.
+
 - Adopt the owner's solo-maintainer approval policy: keep PR/CI and protected
   release controls, but make another person's approval optional. Label audit
   results by policy and retain an opt-in independent-review profile.
@@ -52,7 +61,7 @@ All notable changes are documented here.
   CDATA, comments, and incomplete secret contents, avoiding repeated end-tag scans.
 - Avoid repeated subscriber-identifier scans within long dotted non-email text.
 - Inspect GitHub action selections, distinguish tag-creation authority from
-  immutable-tag protections, require identified independent release reviewers,
+  immutable-tag protections, support optional independent release reviewers,
   and check private vulnerability reporting explicitly. Correct the external
   vulnerability-reporting fallback without soliciting public vulnerability data.
 - Reject configuration generation for incompatible device/codec combinations,
