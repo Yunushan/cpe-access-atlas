@@ -1,22 +1,27 @@
 # GitHub production settings
 
 The repository workflows provide the checks, but GitHub must enforce them at
-the repository boundary. An administrator should apply these settings before
-calling the project production-ready.
+the repository boundary. The owner has selected a **solo-maintainer policy**:
+another person's approval is not a mandatory merge or release gate. The owner
+can commit, push a feature branch, open a PR, and merge it after automated checks
+pass and conversations are resolved. Direct pushes to protected `main` remain
+restricted; this policy does not grant a bypass of CI or destructive protections.
 
 The release workflow now requires same-commit reusable CI and security workflows
 before publishing, including the full OS/Python application-test matrix. That
 dependency graph complements these repository controls; it does not protect
-branches/tags, supply an independent approver, or verify downloaded releases.
+branches/tags or verify downloaded releases. Independent review is useful when
+available, but its absence is not a solo-maintainer policy failure.
 
 ## `main` branch
 
 Protect `main` with:
 
 - pull requests required before merge;
-- at least one approving review, with stale approvals dismissed after new
-  commits;
-- code-owner review required;
+- zero required approving reviews;
+- code-owner and last-push approval requirements disabled, with no mandatory
+  team reviewers; CODEOWNERS may still identify the owner without blocking merges;
+- stale approvals dismissed if an optional review becomes outdated;
 - conversation resolution required;
 - force-pushes and branch deletion disabled;
 - no explicit users, teams, or apps allowed to bypass pull-request requirements;
@@ -65,13 +70,12 @@ test (macos-latest, 3.14)
   this setting for future workflows.
 - Configure private vulnerability reporting through GitHub Security Advisories
   or a monitored security address.
-- Configure a `release` environment with required reviewers before allowing the
-  release workflow's write permissions to publish artifacts.
-  Require a nonempty reviewer list, prevent self-review, and disable
-  administrator bypass. A real second eligible maintainer is needed for
-  independent review; the PR's code-owner policy must also allow that reviewer
-  to approve changes authored by the repository owner. Select deployment refs
+- Configure a `release` environment without mandatory reviewers. The owner
+  authorizes publication by creating the protected release tag after checking
+  the candidate. Disable administrator bypass and select deployment refs
   explicitly: allow tag pattern `v*` only, not unrestricted refs or branches.
+  Full same-commit CI, dependency/security checks, packaging validation, and
+  artifact provenance remain required by the workflow.
 - Publish a new version through the protected release process and independently
   verify its artifacts. The existing `v0.3.0` release predates these safeguards
   and must not be overwritten or treated as proof of the current working tree.
@@ -91,6 +95,27 @@ The command never writes to GitHub. It reports `PASS`, `FAIL`, or
 as proof that a control is disabled. Use `--json` when retaining an audit
 record.
 
+The default audit uses the solo-maintainer policy and labels branch/release
+results accordingly in both text and JSON. It requires explicit zero-approval,
+no-code-owner, and no-last-push-approval settings; unreadable evidence or another
+effective ruleset's approval requirement cannot silently pass. The release
+environment must have no required-reviewer rule while retaining its tag-only
+deployment policy and disabled administrator bypass. The script remains read-only.
+
+If a second eligible maintainer becomes available and the owner chooses a team
+policy, enable approving/code-owner reviews and independent release reviewers,
+then use the optional stricter audit:
+
+```shell
+python scripts/check_github_production_settings.py \
+  --repo Yunushan/cpe-access-atlas --require-independent-review
+```
+
+That profile requires approving/code-owner PR review and a nonempty release
+reviewer list with self-review prevention. It is not the current mandatory
+baseline, and neither profile certifies device compatibility or removes known
+security limitations. GitHub documents [zero-approval PR rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets).
+
 The published-release check selects the newest nondraft release by publication
 time, including prereleases. It resolves its annotated tag to a commit, reads
 the declared package version and maturity classifiers at that immutable commit
@@ -102,7 +127,8 @@ misnamed, or incomplete inventory records do not pass.
 
 This is an **inventory metadata check**, not verification of downloaded bytes
 or cryptographic provenance. A passing audit is not a production certificate:
-follow the independent published-artifact checks in `docs/release.md` as well.
+follow the published-artifact checks in `docs/release.md` as well. The owner can
+perform those checks in a clean environment; a second person is not required.
 
 The audit reads full ruleset details and effective rules for `main`, rather
 than interpreting ruleset-list summaries as policies. It checks Dependency

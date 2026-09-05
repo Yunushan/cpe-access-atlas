@@ -51,7 +51,7 @@ def tags(kinds: tuple[str, ...], bypass: list[object] | None = None) -> dict[str
     }
 
 
-def environment() -> dict[str, object]:
+def environment(*, require_independent_review: bool = True) -> dict[str, object]:
     return {
         "can_admins_bypass": False,
         "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
@@ -61,7 +61,9 @@ def environment() -> dict[str, object]:
                 "prevent_self_review": True,
                 "reviewers": [{"type": "User", "reviewer": {"id": 123}}],
             }
-        ],
+        ]
+        if require_independent_review
+        else [],
     }
 
 
@@ -77,11 +79,12 @@ def environment_api(value: object) -> Api:
     )
 
 
-def branch_protection() -> dict[str, object]:
+def branch_protection(*, require_independent_review: bool = True) -> dict[str, object]:
     return {
         "required_pull_request_reviews": {
-            "required_approving_review_count": 1,
-            "require_code_owner_reviews": True,
+            "required_approving_review_count": 1 if require_independent_review else 0,
+            "require_code_owner_reviews": require_independent_review,
+            "require_last_push_approval": False,
             "dismiss_stale_reviews": True,
             "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []},
         },
@@ -107,6 +110,161 @@ def branch_api(value: object) -> Api:
 
 
 class GitHubPolicyTests(unittest.TestCase):
+    def test_solo_classic_policy_keeps_checks_and_rejects_mandatory_approvers(self) -> None:
+        baseline = branch_protection(require_independent_review=False)
+        result = audit._audit_branch_policy(
+            branch_api(baseline), [], [], require_independent_review=False
+        )
+        self.assertEqual(result.status, audit.STATUS_PASS)
+        for field, value in (
+            ("required_approving_review_count", 1),
+            ("required_approving_review_count", True),
+            ("required_approving_review_count", -1),
+            ("require_code_owner_reviews", True),
+            ("require_code_owner_reviews", None),
+            ("require_last_push_approval", True),
+            ("require_last_push_approval", None),
+            ("required_reviewers", [{"id": 123}]),
+            ("required_reviewers", None),
+        ):
+            with self.subTest(field=field, value=value):
+                item = copy.deepcopy(baseline)
+                item["required_pull_request_reviews"][field] = value
+                self.assertEqual(
+                    audit._audit_branch_policy(
+                        branch_api(item), [], [], require_independent_review=False
+                    ).status,
+                    audit.STATUS_FAIL,
+                )
+        for field in ("allow_force_pushes", "allow_deletions", "enforce_admins"):
+            item = copy.deepcopy(baseline)
+            item[field]["enabled"] = not item[field]["enabled"]
+            self.assertEqual(
+                audit._audit_branch_policy(
+                    branch_api(item), [], [], require_independent_review=False
+                ).status,
+                audit.STATUS_FAIL,
+            )
+        item = copy.deepcopy(baseline)
+        item["required_status_checks"]["contexts"].pop()
+        self.assertEqual(
+            audit._audit_branch_policy(
+                branch_api(item), [], [], require_independent_review=False
+            ).status,
+            audit.STATUS_FAIL,
+        )
+
+    def test_solo_effective_rules_cannot_hide_another_mandatory_review_gate(self) -> None:
+        approval = {
+            "required_approving_review_count": 0,
+            "require_code_owner_review": False,
+            "require_last_push_approval": False,
+            "required_reviewers": [],
+            "dismiss_stale_reviews_on_push": True,
+            "required_review_thread_resolution": True,
+        }
+        rules = [
+            {"type": "deletion", "ruleset_id": 1},
+            {"type": "non_fast_forward", "ruleset_id": 1},
+            {"type": "pull_request", "ruleset_id": 1, "parameters": approval},
+            {
+                "type": "required_status_checks",
+                "ruleset_id": 1,
+                "parameters": {
+                    "strict_required_status_checks_policy": True,
+                    "required_status_checks": [
+                        {"context": name} for name in audit._REQUIRED_BRANCH_CHECKS
+                    ],
+                },
+            },
+        ]
+        api = branch_api((None, "Branch not protected (HTTP 404)"))
+        api.records["rules/branches/main?per_page=100"] = rules
+        details = [{"id": 1, "bypass_actors": []}]
+        self.assertEqual(
+            audit._audit_branch_policy(api, details, [], require_independent_review=False).status,
+            audit.STATUS_PASS,
+        )
+        self.assertIn("branches/main/protection", api.calls)
+        for protection, expected in (
+            (branch_protection(), audit.STATUS_UNKNOWN),
+            ((None, "HTTP 403"), audit.STATUS_UNKNOWN),
+            ((None, "HTTP 404"), audit.STATUS_UNKNOWN),
+            (None, audit.STATUS_UNKNOWN),
+            ({}, audit.STATUS_UNKNOWN),
+            ({"required_pull_request_reviews": "invalid"}, audit.STATUS_UNKNOWN),
+            ({"required_pull_request_reviews": None}, audit.STATUS_PASS),
+            (branch_protection(require_independent_review=False), audit.STATUS_PASS),
+        ):
+            api.records["branches/main/protection"] = protection
+            self.assertEqual(
+                audit._audit_branch_policy(
+                    api, details, [], require_independent_review=False
+                ).status,
+                expected,
+            )
+        # A sufficient classic policy cannot override a separate effective
+        # mandatory approval gate, regardless of which PR rule appears first.
+        api.records["branches/main/protection"] = branch_protection(
+            require_independent_review=False
+        )
+        for extra in (
+            None,
+            {"type": "pull_request", "parameters": None},
+            {
+                "type": "pull_request",
+                "parameters": {**approval, "require_last_push_approval": True},
+            },
+            {
+                "type": "pull_request",
+                "parameters": {**approval, "required_approving_review_count": 1},
+            },
+            {"type": "pull_request", "parameters": {**approval, "required_reviewers": [{}]}},
+        ):
+            for effective in ([*rules, extra], [extra, *rules]):
+                api.records["rules/branches/main?per_page=100"] = effective
+                self.assertEqual(
+                    audit._audit_branch_policy(
+                        api, details, [], require_independent_review=False
+                    ).status,
+                    audit.STATUS_UNKNOWN,
+                )
+        api.records["rules/branches/main?per_page=100"] = (None, "HTTP 403")
+        self.assertEqual(
+            audit._audit_branch_policy(api, details, [], require_independent_review=False).status,
+            audit.STATUS_UNKNOWN,
+        )
+
+    def test_solo_release_policy_omits_approvers_but_keeps_release_boundaries(self) -> None:
+        baseline = environment(require_independent_review=False)
+        self.assertEqual(
+            audit._audit_release_environment(
+                environment_api(baseline), require_independent_review=False
+            ).status,
+            audit.STATUS_PASS,
+        )
+        for value, expected in (
+            (environment(), audit.STATUS_FAIL),
+            ({**baseline, "can_admins_bypass": True}, audit.STATUS_FAIL),
+            ({**baseline, "deployment_branch_policy": None}, audit.STATUS_FAIL),
+            ({**baseline, "protection_rules": [None]}, audit.STATUS_UNKNOWN),
+            ({**baseline, "protection_rules": [{}]}, audit.STATUS_UNKNOWN),
+        ):
+            self.assertEqual(
+                audit._audit_release_environment(
+                    environment_api(value), require_independent_review=False
+                ).status,
+                expected,
+            )
+        api = environment_api(baseline)
+        api.records["environments/release/deployment-branch-policies?per_page=100"] = {
+            "branch_policies": [{"name": "v*", "type": "branch"}],
+        }
+        self.assertEqual(
+            audit._audit_release_environment(api, require_independent_review=False).status,
+            audit.STATUS_FAIL,
+        )
+
     def test_branch_protection_checks_every_explicit_pr_bypass(self) -> None:
         value = branch_protection()
         self.assertEqual(
@@ -181,7 +339,8 @@ class GitHubPolicyTests(unittest.TestCase):
 
     def test_incomplete_ruleset_diagnostic_does_not_claim_rules_are_absent(self) -> None:
         # Match the live ruleset-only repository: PRs/checks are enforced, but
-        # independent reviewer requirements are not configured yet. A 404 from
+        # independent review is optional under the solo-maintainer policy. This
+        # regression exercises the opt-in independent-review baseline. A 404 from
         # classic protection is not proof that effective rules are absent.
         rules = [
             {"type": "deletion", "ruleset_id": 1},

@@ -4,6 +4,9 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Adopt the owner's solo-maintainer approval policy: keep PR/CI and protected
+  release controls, but make another person's approval optional. Label audit
+  results by policy and retain an opt-in independent-review profile.
 - Distinguish present but incomplete main-branch rulesets from unavailable
   protection evidence in audit diagnostics, without treating either as passing.
 - Summarize GitHub CLI failures without copying public IPs, private paths, or

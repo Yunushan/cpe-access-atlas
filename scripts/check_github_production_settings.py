@@ -8,6 +8,11 @@ instead of making any write requests.  A missing permission is reported as
 Usage:
     python scripts/check_github_production_settings.py --repo OWNER/REPO
     python scripts/check_github_production_settings.py --repo OWNER/REPO --json
+    Add --require-independent-review to opt into a multi-maintainer policy.
+
+The default is the owner's solo-maintainer policy: automated gates remain
+required, but another person's approval is not mandatory. The optional strict
+profile checks independent PR and release approval instead.
 """
 
 from __future__ import annotations
@@ -107,6 +112,8 @@ def _request_failure(completed: subprocess.CompletedProcess[str]) -> tuple[str, 
     )
     if rate_limited:
         return "GitHub API rate limit reached; new requests deferred for this audit" + suffix, True
+    if status == "404" and "Branch not protected" in message:
+        return "Branch not protected" + suffix, False
     reasons = {
         "401": "GitHub authentication required",
         "403": "GitHub API access denied",
@@ -306,24 +313,36 @@ def _ruleset_parameters(ruleset: dict[str, Any], rule_type: str) -> dict[str, An
     return {}
 
 
-def _ruleset_has_required_branch_controls(ruleset: dict[str, Any]) -> bool:
+def _review_policy_matches(reviews: dict[str, Any], require_independent_review: bool) -> bool:
+    count = reviews.get("required_approving_review_count")
+    code_owner = reviews.get("require_code_owner_review", reviews.get("require_code_owner_reviews"))
+    if require_independent_review:
+        return type(count) is int and count >= 1 and code_owner is True
+    return (
+        type(count) is int
+        and count == 0
+        and code_owner is False
+        and reviews.get("require_last_push_approval") is False
+        # This optional ruleset field is absent from classic protection and
+        # older API responses. An explicit team gate must not be ignored.
+        and reviews.get("required_reviewers", []) == []
+    )
+
+
+def _ruleset_has_required_branch_controls(
+    ruleset: dict[str, Any], *, require_independent_review: bool = True
+) -> bool:
     pull_request = _ruleset_parameters(ruleset, "pull_request")
     status_checks = _ruleset_parameters(ruleset, "required_status_checks")
     required_checks = status_checks.get("required_status_checks")
     required_check_names = _status_check_names({"checks": required_checks})
-    required_reviews = pull_request.get("required_approving_review_count", 0)
-    code_owner = pull_request.get(
-        "require_code_owner_review", pull_request.get("require_code_owner_reviews")
-    )
     stale = pull_request.get(
         "dismiss_stale_reviews_on_push", pull_request.get("dismiss_stale_reviews")
     )
     conversation = pull_request.get("required_review_thread_resolution")
     strict_checks = status_checks.get("strict_required_status_checks_policy")
     return (
-        type(required_reviews) is int
-        and required_reviews >= 1
-        and code_owner is True
+        _review_policy_matches(pull_request, require_independent_review)
         and stale is True
         and conversation is True
         and strict_checks is True
@@ -334,12 +353,41 @@ def _ruleset_has_required_branch_controls(ruleset: dict[str, Any]) -> bool:
     )
 
 
-def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> CheckResult:
+def _audit_branch_policy(
+    api: GitHubApi,
+    rulesets: Any,
+    errors: list[str],
+    *,
+    require_independent_review: bool = True,
+) -> CheckResult:
     ruleset_detail = "complete effective-rules evidence was unavailable"
+    ruleset_verified = False
     effective, effective_error = _get_collection(api, "rules/branches/main")
     if effective_error:
         errors.append(f"effective main rules: {effective_error}")
-    elif effective:
+    if not require_independent_review and (
+        effective_error
+        or any(
+            not isinstance(rule, dict)
+            or (
+                rule.get("type") == "pull_request"
+                and (
+                    not isinstance(rule.get("parameters"), dict)
+                    or not _review_policy_matches(rule["parameters"], False)
+                )
+            )
+            for rule in effective or []
+        )
+    ):
+        # Every effective ruleset still applies alongside classic protection.
+        # A zero-approval first rule or classic fallback cannot cancel another
+        # rule's mandatory approver, and missing evidence cannot prove absence.
+        return CheckResult(
+            "main branch enforcement",
+            STATUS_UNKNOWN,
+            "effective main rules do not establish a policy without mandatory human approval",
+        )
+    if effective:
         ruleset_detail = "effective main rules exist, but their full details could not be verified"
         valid_ids = all(
             isinstance(rule, dict)
@@ -365,12 +413,16 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
                     actor for rule in details for actor in rule.get("bypass_actors", [])
                 ],
             }
-            if _ruleset_has_required_branch_controls(combined):
-                return CheckResult(
-                    "main branch enforcement",
-                    STATUS_PASS,
-                    "effective main rules enforce required controls without bypass actors",
-                )
+            if _ruleset_has_required_branch_controls(
+                combined, require_independent_review=require_independent_review
+            ):
+                if require_independent_review:
+                    return CheckResult(
+                        "main branch enforcement",
+                        STATUS_PASS,
+                        "effective main rules enforce required controls without bypass actors",
+                    )
+                ruleset_verified = True
             ruleset_detail = (
                 "effective main rules exist, but do not independently prove every required "
                 "review/check control without bypass actors"
@@ -378,6 +430,35 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
         else:
             errors.append("effective main rule details or bypass actors could not be verified")
     protection, error = api.get("branches/main/protection")
+    if ruleset_verified:
+        # In solo mode, absence of mandatory approval must also hold for
+        # classic protection. Rulesets and classic protection are cumulative.
+        reviews = (
+            protection.get("required_pull_request_reviews")
+            if isinstance(protection, dict)
+            else None
+        )
+        no_classic_approval = (
+            error is None
+            and isinstance(protection, dict)
+            and "required_pull_request_reviews" in protection
+            and (
+                reviews is None
+                or (isinstance(reviews, dict) and _review_policy_matches(reviews, False))
+            )
+        )
+        if (error and "Branch not protected" in error) or no_classic_approval:
+            return CheckResult(
+                "main branch enforcement",
+                STATUS_PASS,
+                "effective rules enforce PR/check controls without bypass actors "
+                "or mandatory approvers",
+            )
+        return CheckResult(
+            "main branch enforcement",
+            STATUS_UNKNOWN,
+            "rulesets meet the solo policy, but classic protection may still require approval",
+        )
     if error is None and isinstance(protection, dict):
         reviews = protection.get("required_pull_request_reviews") or {}
         statuses = protection.get("required_status_checks") or {}
@@ -387,7 +468,6 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
                 STATUS_FAIL,
                 "branch protection returned malformed review/check settings",
             )
-        required_reviews = reviews.get("required_approving_review_count", 0)
         required_check_names = _status_check_names(statuses)
         enforce_admins_data = protection.get("enforce_admins")
         force_push_data = protection.get("allow_force_pushes")
@@ -404,11 +484,9 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
             isinstance(conversation_data, dict) and conversation_data.get("enabled") is True
         )
         dismiss_stale = reviews.get("dismiss_stale_reviews") is True
-        code_owner = reviews.get("require_code_owner_reviews") is True
         missing_checks = sorted(_REQUIRED_BRANCH_CHECKS - required_check_names)
         if (
-            type(required_reviews) is int
-            and required_reviews >= 1
+            _review_policy_matches(reviews, require_independent_review)
             and statuses.get("strict") is True
             and not missing_checks
             and enforce_admins
@@ -416,7 +494,6 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
             and no_delete
             and conversation
             and dismiss_stale
-            and code_owner
         ):
             # Administrator enforcement does not remove explicit PR bypass
             # allowances. Missing details cannot establish a no-bypass policy.
@@ -551,7 +628,9 @@ def _audit_tag_policy(
     )
 
 
-def _audit_release_environment(api: GitHubApi) -> CheckResult:
+def _audit_release_environment(
+    api: GitHubApi, *, require_independent_review: bool = True
+) -> CheckResult:
     environment, error = api.get("environments/release")
     if error is not None:
         return CheckResult("release environment", STATUS_UNVERIFIED, error)
@@ -559,41 +638,56 @@ def _audit_release_environment(api: GitHubApi) -> CheckResult:
         return CheckResult("release environment", STATUS_UNVERIFIED, "invalid environment response")
     rules = environment.get("protection_rules")
     bypass = environment.get("can_admins_bypass")
-    if not isinstance(rules, list) or type(bypass) is not bool:
+    if (
+        not isinstance(rules, list)
+        or type(bypass) is not bool
+        or any(
+            not isinstance(rule, dict) or not isinstance(rule.get("type"), str) for rule in rules
+        )
+    ):
         return CheckResult("release environment", STATUS_UNKNOWN, "incomplete protection settings")
     reviewers = [
         rule
         for rule in rules
         if isinstance(rule, dict) and rule.get("type") == "required_reviewers"
     ]
-    if bypass or not reviewers:
+    if bypass or (require_independent_review and not reviewers):
         return CheckResult(
             "release environment",
             STATUS_FAIL,
-            "release requires reviewers and must disallow administrator bypass",
+            "release must disallow administrator bypass and meet the selected approval policy",
         )
-    if len(reviewers) != 1:
-        return CheckResult("release environment", STATUS_UNKNOWN, "ambiguous reviewer rules")
-    rule = reviewers[0]
-    members = rule.get("reviewers")
-    if not isinstance(members, list) or type(rule.get("prevent_self_review")) is not bool:
-        return CheckResult("release environment", STATUS_UNKNOWN, "reviewer details unavailable")
-    if not members or rule["prevent_self_review"] is False:
+    if not require_independent_review and reviewers:
         return CheckResult(
             "release environment",
             STATUS_FAIL,
-            "release needs a nonempty reviewer list and prevention of self-review",
+            "solo-maintainer releases must not require another person's approval",
         )
-    if any(
-        not isinstance(member, dict)
-        or not isinstance(member.get("type"), str)
-        or member["type"] not in {"User", "Team"}
-        or not isinstance(member.get("reviewer"), dict)
-        or type(member["reviewer"].get("id")) is not int
-        or member["reviewer"]["id"] < 1
-        for member in members
-    ):
-        return CheckResult("release environment", STATUS_UNKNOWN, "invalid reviewer identity")
+    if require_independent_review:
+        if len(reviewers) != 1:
+            return CheckResult("release environment", STATUS_UNKNOWN, "ambiguous reviewer rules")
+        rule = reviewers[0]
+        members = rule.get("reviewers")
+        if not isinstance(members, list) or type(rule.get("prevent_self_review")) is not bool:
+            return CheckResult(
+                "release environment", STATUS_UNKNOWN, "reviewer details unavailable"
+            )
+        if not members or rule["prevent_self_review"] is False:
+            return CheckResult(
+                "release environment",
+                STATUS_FAIL,
+                "release needs a nonempty reviewer list and prevention of self-review",
+            )
+        if any(
+            not isinstance(member, dict)
+            or not isinstance(member.get("type"), str)
+            or member["type"] not in {"User", "Team"}
+            or not isinstance(member.get("reviewer"), dict)
+            or type(member["reviewer"].get("id")) is not int
+            or member["reviewer"]["id"] < 1
+            for member in members
+        ):
+            return CheckResult("release environment", STATUS_UNKNOWN, "invalid reviewer identity")
     policy = environment.get("deployment_branch_policy")
     if policy is None and "deployment_branch_policy" in environment:
         return CheckResult("release environment", STATUS_FAIL, "deployment refs are unrestricted")
@@ -623,7 +717,7 @@ def _audit_release_environment(api: GitHubApi) -> CheckResult:
     return CheckResult(
         "release environment",
         STATUS_PASS,
-        "independent reviewers, no administrator bypass, and selected v* release tags are required",
+        "selected approval policy, no administrator bypass, and v* release tags are enforced",
     )
 
 
@@ -1205,7 +1299,7 @@ def _audit_current_checks(api: GitHubApi, head_sha: str) -> CheckResult:
     return CheckResult("current required checks", STATUS_FAIL, "; ".join(failures))
 
 
-def audit(repo: str) -> list[CheckResult]:
+def audit(repo: str, *, require_independent_review: bool = False) -> list[CheckResult]:
     api = GitHubApi(repo)
     errors: list[str] = []
     repo_data, repo_error = api.get("")
@@ -1232,7 +1326,11 @@ def audit(repo: str) -> list[CheckResult]:
         results.append(
             CheckResult("repository rulesets", STATUS_PASS, "all ruleset details were read")
         )
-    results.append(_audit_branch_policy(api, rulesets, errors))
+    results.append(
+        _audit_branch_policy(
+            api, rulesets, errors, require_independent_review=require_independent_review
+        )
+    )
     results.append(
         CheckResult("release tag enforcement", STATUS_UNVERIFIED, "; ".join(ruleset_errors))
         if ruleset_errors
@@ -1246,7 +1344,9 @@ def audit(repo: str) -> list[CheckResult]:
             else frozenset(),
         )
     )
-    results.append(_audit_release_environment(api))
+    results.append(
+        _audit_release_environment(api, require_independent_review=require_independent_review)
+    )
     results.append(_audit_actions_policy(api))
     results.extend(_audit_alerts(api))
     results.append(_audit_release(api))
@@ -1270,7 +1370,13 @@ def audit(repo: str) -> list[CheckResult]:
         results.append(_audit_current_checks(api, head_sha["sha"]))
     if errors:
         results.extend(CheckResult("audit diagnostics", STATUS_UNVERIFIED, item) for item in errors)
-    return results
+    profile = "independent-review" if require_independent_review else "solo-maintainer"
+    return [
+        CheckResult(result.name, result.status, f"{profile} policy: {result.detail}")
+        if result.name in {"main branch enforcement", "release environment"}
+        else result
+        for result in results
+    ]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1281,6 +1387,11 @@ def _parser() -> argparse.ArgumentParser:
         help="repository in OWNER/REPO form (defaults to GITHUB_REPOSITORY)",
     )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--require-independent-review",
+        action="store_true",
+        help="require independent PR/release approvals instead of the solo-maintainer default",
+    )
     return parser
 
 
@@ -1293,7 +1404,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print("--repo OWNER/REPO is required", file=sys.stderr)
         return 2
-    results = audit(args.repo)
+    results = audit(args.repo, require_independent_review=args.require_independent_review)
     if args.json:
         print(json.dumps([asdict(result) for result in results], indent=2))
     else:
