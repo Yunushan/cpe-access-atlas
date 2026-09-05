@@ -335,10 +335,12 @@ def _ruleset_has_required_branch_controls(ruleset: dict[str, Any]) -> bool:
 
 
 def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> CheckResult:
+    ruleset_detail = "complete effective-rules evidence was unavailable"
     effective, effective_error = _get_collection(api, "rules/branches/main")
     if effective_error:
         errors.append(f"effective main rules: {effective_error}")
     elif effective:
+        ruleset_detail = "effective main rules exist, but their full details could not be verified"
         valid_ids = all(
             isinstance(rule, dict)
             and type(rule.get("ruleset_id")) is int
@@ -369,6 +371,10 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
                     STATUS_PASS,
                     "effective main rules enforce required controls without bypass actors",
                 )
+            ruleset_detail = (
+                "effective main rules exist, but do not independently prove every required "
+                "review/check control without bypass actors"
+            )
         else:
             errors.append("effective main rule details or bypass actors could not be verified")
     protection, error = api.get("branches/main/protection")
@@ -460,8 +466,8 @@ def _audit_branch_policy(api: GitHubApi, rulesets: Any, errors: list[str]) -> Ch
         "main branch enforcement",
         STATUS_UNKNOWN,
         (
-            "administrator-visible branch protection was not available and no matching "
-            "ruleset was found"
+            f"complete main-branch enforcement could not be verified: {ruleset_detail}; "
+            "classic branch protection was unavailable or malformed"
         ),
     )
 

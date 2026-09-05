@@ -117,6 +117,11 @@ uses GET requests. Alert inventories are paginated; their output contains counts
 only, never secret-bearing payload fields, source excerpts, or paths. Review alert
 details through an authorized confidential channel.
 
+A missing or inaccessible classic branch-protection endpoint does not mean
+rulesets are absent. When effective rules are present but incomplete, the audit
+reports that distinction and keeps overall enforcement UNVERIFIED unless it
+can independently establish the complete baseline from available controls.
+
 Transport failures are also summarized from safe status metadata, not copied
 from raw stdout/stderr. GitHub rate-limit messages can contain the caller's
 public IP, and local launch errors can contain private paths. The audit reports

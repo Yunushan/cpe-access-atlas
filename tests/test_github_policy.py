@@ -179,6 +179,57 @@ class GitHubPolicyTests(unittest.TestCase):
         api.records["branches/main/protection"] = None
         self.assertEqual(audit._audit_branch_policy(api, [], []).status, audit.STATUS_UNKNOWN)
 
+    def test_incomplete_ruleset_diagnostic_does_not_claim_rules_are_absent(self) -> None:
+        # Match the live ruleset-only repository: PRs/checks are enforced, but
+        # independent reviewer requirements are not configured yet. A 404 from
+        # classic protection is not proof that effective rules are absent.
+        rules = [
+            {"type": "deletion", "ruleset_id": 1},
+            {"type": "non_fast_forward", "ruleset_id": 1},
+            {
+                "type": "pull_request",
+                "ruleset_id": 1,
+                "parameters": {
+                    "required_approving_review_count": 0,
+                    "require_code_owner_review": False,
+                    "dismiss_stale_reviews_on_push": True,
+                    "required_review_thread_resolution": True,
+                },
+            },
+            {
+                "type": "required_status_checks",
+                "ruleset_id": 1,
+                "parameters": {
+                    "strict_required_status_checks_policy": True,
+                    "required_status_checks": [
+                        {"context": name} for name in audit._REQUIRED_BRANCH_CHECKS
+                    ],
+                },
+            },
+        ]
+        for failure in ("HTTP 404", "HTTP 403", "HTTP 401"):
+            with self.subTest(failure=failure):
+                api = branch_api((None, failure))
+                api.records["branches/main"] = {"protected": True}
+                api.records["rules/branches/main?per_page=100"] = rules
+                diagnostics = []
+                result = audit._audit_branch_policy(
+                    api, [{"id": 1, "bypass_actors": []}], diagnostics
+                )
+                self.assertEqual(result.status, audit.STATUS_UNKNOWN)
+                self.assertIn("effective main rules exist", result.detail)
+                self.assertIn("do not independently prove", result.detail)
+                self.assertNotIn("no matching", result.detail)
+                self.assertIn(failure, diagnostics[-1])
+
+                # An independently sufficient classic policy must still pass;
+                # a partial ruleset is not automatically an overall failure.
+                api.records["branches/main/protection"] = branch_protection()
+                self.assertEqual(
+                    audit._audit_branch_policy(api, [{"id": 1, "bypass_actors": []}], []).status,
+                    audit.STATUS_PASS,
+                )
+
     def test_effective_branch_rules_require_full_details_and_no_bypass(self) -> None:
         rules = [
             {"type": "deletion", "ruleset_id": 1},
@@ -216,9 +267,10 @@ class GitHubPolicyTests(unittest.TestCase):
             [{"id": 1}],
             [{"id": 1, "bypass_actors": [{"actor_type": "RepositoryRole"}]}],
         ):
-            self.assertEqual(
-                audit._audit_branch_policy(api, details, []).status, audit.STATUS_UNKNOWN
-            )
+            result = audit._audit_branch_policy(api, details, [])
+            self.assertEqual(result.status, audit.STATUS_UNKNOWN)
+            self.assertIn("effective main rules exist", result.detail)
+            self.assertNotIn("no matching", result.detail)
 
     def test_actions_inspects_the_selection_not_only_its_mode(self) -> None:
         api = Api(actions())

@@ -4,6 +4,8 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Distinguish present but incomplete main-branch rulesets from unavailable
+  protection evidence in audit diagnostics, without treating either as passing.
 - Summarize GitHub CLI failures without copying public IPs, private paths, or
   credential-bearing diagnostics into audit reports. Stop new requests within
   an audit once an explicit GitHub rate limit is encountered, retaining only
