@@ -31,6 +31,13 @@ enough.
 
 ## Development
 
+This project currently has one maintainer. Push changes to a feature branch,
+open a pull request, and merge after required automated checks pass and review
+conversations are resolved. The maintainer may merge their own PR: another
+person's approval is optional, not mandatory. CODEOWNERS identifies ownership
+without requiring self-approval. Protected `main`, release-tag restrictions,
+and CI/security gates remain in place. See [repository policy](docs/github-production-settings.md).
+
 Use Python 3.11 or newer:
 
 ```shell

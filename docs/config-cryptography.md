@@ -59,10 +59,13 @@ implementation changes preserve the established local behavior. They do not
 demonstrate exact-device interoperability, a UID 0 login, WAN isolation, or a
 working recovery route. The current codec remains experimental for that reason.
 
-An independent cryptography/security review remains outstanding. Any scanner
+An independent cryptography/security review remains recommended when available,
+but is not a mandatory merge or release gate for the solo maintainer. The owner
+has accepted retaining this experimental vendor-format compatibility risk;
+acceptance is not remediation or proof of safe device behavior. Any scanner
 finding about vendor key derivation must be evaluated against this documented
 use, not silenced by changing a flag or labeling the data non-sensitive. Do not
 claim that removing a suppression resolves the underlying cryptographic risk.
-Record the review decision and limitations, preserve compatibility test vectors,
+Record the maintainer's assessment and limitations, preserve compatibility test vectors,
 and validate exact hardware and recovery separately before making a stable
 device-support claim.
