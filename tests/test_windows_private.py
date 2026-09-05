@@ -322,6 +322,31 @@ class WindowsCreationTests(unittest.TestCase):
             api.close.assert_not_called()
             api.free.assert_called_once()
 
+    def test_windows_error_code_takes_precedence_over_errno_on_every_platform(self) -> None:
+        # Windows maps winerror to a different errno; exercise that distinction
+        # explicitly even when the suite runs on Linux or macOS.
+        for code, calls in ((5, 1), (80, 32), (183, 32)):
+            with self.subTest(winerror=code):
+                api = self.fixture()
+                error = OSError(5, "synthetic Windows failure")
+                error.winerror = code
+                api.create = Mock(return_value=win._INVALID_HANDLE)
+                api.error = Mock(return_value=error)
+                with TemporaryDirectory() as directory:
+                    with patch.object(win, "_WindowsApi", return_value=api):
+                        with self.assertRaises(OSError) as raised:
+                            win.create_private_temp(Path(directory) / "artifact.bin")
+                    self.assertEqual(list(Path(directory).iterdir()), [])
+                if calls == 1:
+                    self.assertIs(raised.exception, error)
+                else:
+                    self.assertIsInstance(raised.exception, FileExistsError)
+                self.assertEqual(api.create.call_count, calls)
+                api.close.assert_not_called()
+                api.verify_private.assert_not_called()
+                api.adopt.assert_not_called()
+                api.free.assert_called_once()
+
     def test_alternate_streams_are_rejected_before_native_calls(self) -> None:
         with patch.object(win, "_WindowsApi") as api:
             with self.assertRaisesRegex(OSError, "Alternate data streams"):
