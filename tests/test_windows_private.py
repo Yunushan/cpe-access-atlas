@@ -15,6 +15,8 @@ from unittest.mock import Mock, patch
 from cpe_access_atlas import private_files
 from cpe_access_atlas import windows_private as win
 
+POWERSHELL_PROBE_TIMEOUT_SECONDS = 45
+
 
 def assign(pointer: object, ctype: object, value: object) -> None:
     ctypes.cast(pointer, ctypes.POINTER(ctype)).contents.value = value
@@ -362,14 +364,23 @@ class NativeWindowsPrivacyTests(unittest.TestCase):
         )
         # Only test-authored scripts are called; synthetic paths are environment
         # data, never executable interpolation. No user directory ACL is changed.
-        result = subprocess.run(  # noqa: S603
-            [str(executable), "-NoProfile", "-NonInteractive", "-Command", command],
-            env={**os.environ, **variables},
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        # A shared Windows runner exceeded the previous 15-second budget.
+        # Allow bounded startup/inspection headroom without retrying or accepting
+        # an unverified ACL. This is not a production-operation timeout.
+        try:
+            result = subprocess.run(  # noqa: S603
+                [str(executable), "-NoProfile", "-NonInteractive", "-Command", command],
+                env={**os.environ, **variables},
+                capture_output=True,
+                text=True,
+                timeout=POWERSHELL_PROBE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail(
+                "Native Windows ACL probe exceeded "
+                f"{POWERSHELL_PROBE_TIMEOUT_SECONDS}s; the ACL was not verified"
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip().splitlines()
 
@@ -388,7 +399,9 @@ class NativeWindowsPrivacyTests(unittest.TestCase):
             "[int]$rules[0].FileSystemRights",
             CPE_ATLAS_TEST_FILE=str(path),
         )
+        self.assertEqual(len(values), 8, "Expected eight independent ACL verification fields")
         self.assertEqual(values[:3], ["True", "1", "False"])
+        self.assertRegex(values[4], r"^S-1-\d+(?:-\d+)+$")
         self.assertEqual(values[3], values[4])
         self.assertEqual(values[5], values[4])
         self.assertEqual(values[6:], ["Allow", "2032127"])
@@ -437,3 +450,85 @@ class NativeWindowsPrivacyTests(unittest.TestCase):
             self.assert_private_acl(path)
             private_files.write_private_bytes(path, b"replacement", replace=True)
             self.assert_private_acl(path)
+
+
+class WindowsProbeHarnessTests(unittest.TestCase):
+    """Exercise the independent probe's failure policy on every CI platform."""
+
+    def setUp(self) -> None:
+        self.probe = NativeWindowsPrivacyTests()
+
+    def test_probe_uses_bounded_headroom_and_keeps_paths_out_of_commands(self) -> None:
+        command = "Write-Output $env:CPE_ATLAS_TEST_FILE"
+        synthetic_path = "synthetic path; 'quotes' & characters.txt"
+        result = subprocess.CompletedProcess([], 0, stdout="one\ntwo\n", stderr="")
+        with patch.dict(os.environ, {"SYSTEMROOT": "synthetic-system-root"}):
+            with patch.object(subprocess, "run", return_value=result) as run:
+                self.assertEqual(
+                    self.probe.powershell(command, CPE_ATLAS_TEST_FILE=synthetic_path),
+                    ["one", "two"],
+                )
+        run.assert_called_once()
+        expected = Path("synthetic-system-root") / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        self.assertEqual(
+            run.call_args.args[0],
+            [str(expected), "-NoProfile", "-NonInteractive", "-Command", command],
+        )
+        options = run.call_args.kwargs
+        self.assertEqual(options["env"]["CPE_ATLAS_TEST_FILE"], synthetic_path)
+        self.assertEqual(options["timeout"], 45)
+        self.assertTrue(options["capture_output"])
+        self.assertTrue(options["text"])
+        self.assertFalse(options["check"])
+        self.assertNotIn("shell", options)
+
+    def test_timeout_fails_without_retrying_or_certifying_permissions(self) -> None:
+        error = subprocess.TimeoutExpired("synthetic probe", POWERSHELL_PROBE_TIMEOUT_SECONDS)
+        with patch.dict(os.environ, {"SYSTEMROOT": "synthetic-system-root"}):
+            with patch.object(subprocess, "run", side_effect=error) as run:
+                with self.assertRaisesRegex(AssertionError, "45s; the ACL was not verified"):
+                    self.probe.powershell("synthetic probe")
+        run.assert_called_once()
+
+    def test_nonzero_exit_fails_even_if_stdout_looks_successful(self) -> None:
+        result = subprocess.CompletedProcess(
+            [], 1, stdout="True\n1\nFalse\n", stderr="synthetic access denied"
+        )
+        with patch.dict(os.environ, {"SYSTEMROOT": "synthetic-system-root"}):
+            with patch.object(subprocess, "run", return_value=result) as run:
+                with self.assertRaisesRegex(AssertionError, "synthetic access denied"):
+                    self.probe.powershell("synthetic probe")
+        run.assert_called_once()
+
+    def test_launch_failure_is_not_retried_or_ignored(self) -> None:
+        error = OSError("synthetic probe launch failure")
+        with patch.dict(os.environ, {"SYSTEMROOT": "synthetic-system-root"}):
+            with patch.object(subprocess, "run", side_effect=error) as run:
+                with self.assertRaises(OSError) as raised:
+                    self.probe.powershell("synthetic probe")
+        self.assertIs(raised.exception, error)
+        run.assert_called_once()
+
+    def test_acl_oracle_requires_every_independent_owner_only_field(self) -> None:
+        sid = NativeFixture.identity
+        correct = ["True", "1", "False", sid, sid, sid, "Allow", "2032127"]
+        with patch.object(self.probe, "powershell", return_value=correct):
+            self.probe.assert_private_acl("synthetic.txt")
+
+        invalid_results = [correct[:length] for length in range(len(correct))]
+        invalid_results.append([*correct, "unexpected field"])
+        for invalid_identity in ("", "not-a-sid", "S-1-5-18 trailing-data"):
+            invalid = correct.copy()
+            invalid[3:6] = [invalid_identity] * 3
+            invalid_results.append(invalid)
+        for index, replacement in enumerate(
+            ["False", "2", "True", "S-1-1-0", "S-1-1-0", "S-1-1-0", "Deny", "131209"]
+        ):
+            invalid = correct.copy()
+            invalid[index] = replacement
+            invalid_results.append(invalid)
+        for invalid in invalid_results:
+            with self.subTest(result=invalid):
+                with patch.object(self.probe, "powershell", return_value=invalid):
+                    with self.assertRaises(AssertionError):
+                        self.probe.assert_private_acl("synthetic.txt")
