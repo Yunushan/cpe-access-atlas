@@ -15,12 +15,14 @@ pattern before publishing. Before creating a tag:
    python -m twine check dist/*
    ```
 
-4. Create an annotated `vX.Y.Z` tag only after review and push it through the
-   repository's protected release process.
+4. Review the candidate yourself as the solo maintainer, then create an
+   annotated `vX.Y.Z` tag and push it through the protected release process.
+   A second person's approval is optional, not a required PR or release gate.
+   Automated checks and the protected tag/environment controls still apply.
 
 The workflow rejects a tag unless it is annotated, exactly matches the package
 version, has a matching `CHANGELOG.md` heading, and points to a commit
-reachable from `main`, for example `v0.3.0` for package version `0.3.0`.
+reachable from `main`, for example `v0.4.0a1` for package version `0.4.0a1`.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all twelve
@@ -35,7 +37,7 @@ Publishing permissions remain confined to the final release job. The reusable
 checks do not inherit release secrets, contents-write, attestation-write, or
 OIDC permissions; only CodeQL gets the security-events permission needed to
 upload its analysis. Successful analysis is not proof of an empty alert
-inventory: maintainers must still review open security findings independently.
+inventory: the maintainer must still inspect and assess open security findings.
 See [GitHub's reusable workflow reference](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
 
 Distribution builds reuse the backend already installed from the hash-verified
@@ -89,7 +91,13 @@ removed after validation cannot be silently recreated by the release command.
 Existing published assets are never overwritten by a rerun: release a new version when
 artifacts change. The existing v0.3.0 release predates these safeguards.
 
-## Independent published-artifact verification
+## Published-artifact verification
+
+The solo maintainer may perform this verification. Use a fresh environment and
+compare the downloaded artifacts against the reviewed source and trusted
+provenance; "independent verification" here means evidence separate from the
+build's own success report, not a mandatory second person. External review is
+welcome when available but is not required to publish under this policy.
 
 Record the approved release commit from the reviewed source, not just a later
 lookup of a mutable tag. Download the published assets into a new isolated
@@ -152,8 +160,8 @@ all active dependencies must also have exact, hashed lock entries.
 
 Repository administrators should also keep these GitHub controls enabled:
 
-- required pull-request review and passing CI, security, and CodeQL checks on
-  `main`;
+- pull requests and passing CI, security, and CodeQL checks on `main`, with
+  zero mandatory approvals under the solo-maintainer policy;
 - signed or verified release tags and no direct pushes to `main`;
 - Dependabot security updates and alerts;
 - secret scanning and push protection;

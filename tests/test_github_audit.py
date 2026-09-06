@@ -26,11 +26,12 @@ ALERT_ENDPOINTS = (
 )
 
 
-def complete_fixture() -> dict[str, object]:
+def complete_fixture(*, require_independent_review: bool = False) -> dict[str, object]:
     from tests.test_github_policy import environment
 
-    release_environment = environment()
-    release_environment["protection_rules"][0]["reviewers"][0]["reviewer"]["id"] = 456
+    release_environment = environment(require_independent_review=require_independent_review)
+    if require_independent_review:
+        release_environment["protection_rules"][0]["reviewers"][0]["reviewer"]["id"] = 456
     immutable = {"id": 1, **tags(("update", "deletion"))}
     creator = {
         "id": 2,
@@ -56,7 +57,9 @@ def complete_fixture() -> dict[str, object]:
         "rulesets/1": immutable,
         "rulesets/2": creator,
         "rules/branches/main?per_page=100": [],
-        "branches/main/protection": branch_protection(),
+        "branches/main/protection": branch_protection(
+            require_independent_review=require_independent_review
+        ),
         "branches/main": {"protected": True},
         **{endpoint: [] for endpoint in ALERT_ENDPOINTS},
     }
@@ -120,6 +123,11 @@ class GitHubTransportTests(unittest.TestCase):
             (f"{private} (HTTP 401)", "authentication required (HTTP 401)", False),
             (f"{private} (HTTP 403)", "access denied (HTTP 403)", False),
             (f"{private} (HTTP 404)", "unavailable or inaccessible (HTTP 404)", False),
+            (
+                f"Branch not protected {private} (HTTP 404)",
+                "Branch not protected (HTTP 404)",
+                False,
+            ),
             (f"{private} (HTTP 503)", "server error (HTTP 503)", False),
             (f"{private} (HTTP 422)", "request failed (HTTP 422)", False),
             (f"{private} HTTP 999", "request failed (exit 1)", False),
@@ -333,6 +341,27 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         self.assertIn("current required checks", output)
         self.assertEqual(error, "")
 
+    def test_independent_review_is_explicit_opt_in_and_profiles_are_labelled(self) -> None:
+        for independent in (False, True):
+            arguments = ["--json"]
+            if independent:
+                arguments.append("--require-independent-review")
+            records = complete_fixture(require_independent_review=independent)
+            code, output, _, _ = self.run_cli(records, arguments)
+            self.assertEqual(code, 0, output)
+            results = {item["name"]: item for item in json.loads(output)}
+            profile = "independent-review" if independent else "solo-maintainer"
+            for name in ("main branch enforcement", "release environment"):
+                self.assertIn(profile, results[name]["detail"])
+            # The opposite policy must not silently pass: solo operation
+            # rejects mandatory approvers; independent mode requires them.
+            opposite = complete_fixture(require_independent_review=not independent)
+            code, output, _, _ = self.run_cli(opposite, arguments)
+            self.assertEqual(code, 1, output)
+            results = {item["name"]: item for item in json.loads(output)}
+            for name in ("main branch enforcement", "release environment"):
+                self.assertNotEqual(results[name]["status"], audit.STATUS_PASS)
+
     def test_denial_of_each_required_endpoint_cannot_produce_an_all_passing_audit(self) -> None:
         baseline = complete_fixture()
         _, _, _, endpoints = self.run_cli(baseline)
@@ -399,7 +428,9 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
     def test_malformed_effective_rule_identities_are_unverified_not_unhashable(self) -> None:
         for value in (None, {}, [], True, 0, "1"):
             records = complete_fixture()
-            records["rules/branches/main?per_page=100"] = [{"ruleset_id": value}]
+            records["rules/branches/main?per_page=100"] = [
+                {"type": "deletion", "ruleset_id": value}
+            ]
             records["branches/main/protection"] = (None, "HTTP 403")
             code, output, _, _ = self.run_cli(records)
             self.assertEqual(code, 1)

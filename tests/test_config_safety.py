@@ -101,7 +101,7 @@ class ConfigSafetyTests(unittest.TestCase):
         struct.pack_into(
             ">I", short_compressed_budget, 24, zlib.crc32(short_compressed_budget[:24])
         )
-        with self.assertRaisesRegex(ConfigError, "compressed length exceeds"):
+        with self.assertRaisesRegex(ConfigError, "compressed length does not match"):
             decode_config(bytes(short_compressed_budget))
 
         extra_zlib_data = bytearray(raw + b"x")

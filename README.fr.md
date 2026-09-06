@@ -90,7 +90,12 @@ de la version d'un firmware privé. `config-generate` est un outil hors ligne,
 pas un exploit root ni un flasheur ; les fichiers générés et les sauvegardes
 doivent rester privés.
 
-Dans la version 0.3.0, `apply` est volontairement fermé par défaut et ne
+**Attention :** n'importez pas de configurations chiffrées générées par
+v0.4.0a1 ou une version antérieure : la dérivation des clés était incorrecte.
+Gardez la sauvegarde originale privée. Le [correctif v0.4.0a2](docs/config-cryptography.md)
+ne prouve ni la sûreté de l'importation ni l'accès root sur ce firmware précis.
+
+Dans cette version, `apply` est volontairement fermé par défaut et ne
 modifie pas cette cible bloquée.
 
 ## Sécurité et autorisation
