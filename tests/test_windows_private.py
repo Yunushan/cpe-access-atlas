@@ -401,6 +401,7 @@ class NativeWindowsPrivacyTests(unittest.TestCase):
         )
         self.assertEqual(len(values), 8, "Expected eight independent ACL verification fields")
         self.assertEqual(values[:3], ["True", "1", "False"])
+        self.assertRegex(values[4], r"^S-1-\d+(?:-\d+)+$")
         self.assertEqual(values[3], values[4])
         self.assertEqual(values[5], values[4])
         self.assertEqual(values[6:], ["Allow", "2032127"])
@@ -516,6 +517,10 @@ class WindowsProbeHarnessTests(unittest.TestCase):
 
         invalid_results = [correct[:length] for length in range(len(correct))]
         invalid_results.append([*correct, "unexpected field"])
+        for invalid_identity in ("", "not-a-sid", "S-1-5-18 trailing-data"):
+            invalid = correct.copy()
+            invalid[3:6] = [invalid_identity] * 3
+            invalid_results.append(invalid)
         for index, replacement in enumerate(
             ["False", "2", "True", "S-1-1-0", "S-1-1-0", "S-1-1-0", "Deny", "131209"]
         ):
