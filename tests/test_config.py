@@ -38,11 +38,11 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             buggy_sha256(b"a" * 56).hex(),
-            "aa114fea373c70a351c18d9d5f0e3336ed78e99a92e682cacd31ca7d896fb185",
+            "5e8af709cc57a501191fff4f65fa12203aecf76f80a44afc77519b039a056c1e",
         )
         self.assertEqual(
             buggy_sha256(b"a" * 57).hex(),
-            "038be71d33942b35fd2ca81759444e05800fe7a03bd315f8f156d88a4ad18c2f",
+            "f31175a9bb104cc8c4e5479ee5b5191c6826ee70a26bb5b9cb3f3990ebb5b4a4",
         )
         with self.assertRaises(ConfigError):
             buggy_sha256("not-bytes")  # type: ignore[arg-type]
@@ -53,15 +53,17 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(buggy_sha256(b"a" * 55), expected)
         digest.assert_called_once_with(b"a" * 55, usedforsecurity=True)
 
-    def test_security_characterization_change_preserves_encrypted_artifact_bytes(self) -> None:
-        # Synthetic golden outputs captured before correcting usedforsecurity.
-        # Exercise standard derivation and both vendor-bug padding branches.
-        # These are compatibility regressions, NOT exact-device acceptance proof.
+    def test_encrypted_artifact_matches_reference_derived_vectors(self) -> None:
+        # Derived from the reviewed public ztetool.py, not encode_config.
+        # Historical self-generated vectors preserved SHA/key-suffix typos.
+        # See docs/config-cryptography.md; these are NOT device-acceptance proof.
         expected = {
-            8: "04c248c11287da14766972a8c12fc5dcf6649bc897203703d5df399173c2f688",
-            14: "71c72505e48d3b041599539d069f343fed88122b00be3fc01f7261086432333b",
-            15: "87809a90e737c43c9398abfc19b6c5619217f4d62b5dee7629a9b340b7c76e03",
-            32: "2e5da6492d186a0b86899f3b8423150544059b9d73c4b8087640051571f8f267",
+            8: "6d256b70b86ab4d8f293c6f7e2ea90ab03fdb52a6e5236e48db1f15c67a46c4d",
+            12: "bd028dcf936b827e91cc14f66164c1a70233bdb8be67bc7d89ce25b81a35b998",
+            13: "194a933f02e09da5e190f93cbcb9cdd7f680b614d0bf8b4c6e7e21eed400a084",
+            14: "682859e247ba2a2fe9d48c6a42c67401c3f6479051c54bb9e48bb98fef066dd7",
+            15: "95f088acc048113f18b388ebdfaf7935310eade5fb22313677dc985b6412887f",
+            32: "31993442034c1b10b20a317972b9b50024374235e41f543b795b150082166c27",
         }
         for length, digest in expected.items():
             with self.subTest(serial_suffix_length=length):
@@ -162,8 +164,9 @@ class ConfigTests(unittest.TestCase):
             decode_config(bytes(invalid_plain_length))
 
         invalid_header_lengths = bytearray(raw)
-        struct.pack_into(">I", invalid_header_lengths, 16, len(xml) + 1)
-        with self.assertRaisesRegex(ConfigError, "fields disagree"):
+        struct.pack_into(">I", invalid_header_lengths, 16, len(xml) - 1)
+        struct.pack_into(">I", invalid_header_lengths, 24, zlib.crc32(invalid_header_lengths[:24]))
+        with self.assertRaisesRegex(ConfigError, "exceeds its capacity"):
             decode_config(bytes(invalid_header_lengths))
 
         invalid_output_length = bytearray(raw)

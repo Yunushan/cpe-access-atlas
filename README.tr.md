@@ -122,8 +122,13 @@ konfigürasyon üretmez ve hiçbir şey flash'lamaz. `cpe-atlas firmware-inspect
 `config-generate` çevrimdışı bir araştırma aracıdır; root açığı veya firmware
 yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
+**Uyarı:** v0.4.0a1 veya önceki sürümlerin oluşturduğu şifreli config dosyalarını
+modeme yüklemeyin; anahtar türetme hatalıydı. Orijinal yedeği gizli tutun.
+[v0.4.0a2 düzeltmesi](docs/config-cryptography.md), tam firmware
+sürümünde güvenli yükleme veya root erişimi kanıtı değildir.
+
 Yalnızca açıkça belirtilen portları kontrol etmek için `--probe` eklenebilir.
-`apply` komutu 0.3.0 sürümünde kasıtlı olarak kapalıdır; sahiplik onayı verilse
+`apply` komutu bu sürümde kasıtlı olarak kapalıdır; sahiplik onayı verilse
 bile bu engelli tarifte hiçbir değişiklik yapmaz.
 
 ## Erişim terimleri

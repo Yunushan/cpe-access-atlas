@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from xml.etree import ElementTree as ET
 
+from cpe_access_atlas import __version__
 from cpe_access_atlas.catalog import find_recipe
 from cpe_access_atlas.cli import _configure_stdio, main
 from cpe_access_atlas.config import decode_config, default_root_xml, encode_config
@@ -839,7 +840,7 @@ class CliTests(unittest.TestCase):
     def test_version_is_a_successful_parser_exit(self) -> None:
         code, stdout, stderr = self.run_cli(["--version"])
         self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(stdout.strip(), "0.3.0")
+        self.assertEqual(stdout.strip(), __version__)
 
     def test_parser_exit_with_no_code_is_treated_as_success(self) -> None:
         with patch(
