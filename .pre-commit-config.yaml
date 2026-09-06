@@ -18,7 +18,7 @@ repos:
         name: ruff format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: fc0f09a29bb495f4a91f00266155d6282d52485d # v1.20.2
+    rev: 7ff8d35ae36a7d2b968f2f90b4c723e292e594ee # v2.3.1
     hooks:
       - id: mypy
         name: mypy (strict)

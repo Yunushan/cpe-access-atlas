@@ -11,6 +11,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from packaging.requirements import Requirement
+
 from scripts import check_github_production_settings as github_audit
 
 ROOT = Path(__file__).parents[1]
@@ -142,6 +144,30 @@ class RepositoryControlTests(unittest.TestCase):
         ci = (ROOT / "requirements-ci.lock").read_text(encoding="utf-8")
         self.assertIn("pathspec==", ci)
         self.assertIn("librt==", ci)
+
+    def test_mypy_requirement_locks_and_hook_select_the_same_supported_version(self) -> None:
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        requirement = next(
+            Requirement(value)
+            for value in project["project"]["optional-dependencies"]["dev"]
+            if Requirement(value).name == "mypy"
+        )
+        versions = []
+        for name in ("ci", "release"):
+            lock = (ROOT / f"requirements-{name}.lock").read_text(encoding="utf-8")
+            match = re.search(r"(?m)^mypy==([^\s;]+)", lock)
+            self.assertIsNotNone(match, f"{name} must pin the type checker")
+            versions.append(match.group(1))
+            self.assertIn(match.group(1), requirement.specifier)
+        self.assertEqual(versions[0], versions[1])
+        hooks = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        hook = re.search(
+            r"repo: https://github\.com/pre-commit/mirrors-mypy\n"
+            r"\s+rev: [0-9a-f]{40} # v([^\s]+)",
+            hooks,
+        )
+        self.assertIsNotNone(hook, "mypy hook must have a pinned revision and version")
+        self.assertEqual(hook.group(1), versions[0])
 
     def test_release_sbom_matrix_and_non_overwriting_publication(self) -> None:
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
