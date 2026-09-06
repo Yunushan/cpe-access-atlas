@@ -40,11 +40,13 @@ jobs:
 
   runtime-sbom:
     timeout-minutes: 15
+    env:
+      RUNTIME_DEPENDENCIES: ${{ github.workspace }}/.tmp/runtime-dependencies
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,6 +55,15 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: ${{ matrix.python == '3.15' }}
+      - name: Install runtime inventory with the target interpreter
+        run: python -m pip install --require-hashes --target "${{ env.RUNTIME_DEPENDENCIES }}" -r requirements-runtime.lock
+      # pip-api 0.0.34 (used by pip-audit) imports sre_constants, removed in 3.15.
+      # Resolve/install with the target above; audit its metadata using 3.14.
+      # Do not resolve the runtime lock again under the audit interpreter.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
       - name: Install locked audit tooling
         run: python -m pip install --require-hashes -r requirements-security.lock
       - name: Generate environment-specific runtime SBOM
@@ -63,9 +74,32 @@ jobs:
           TARGET_PYTHON: ${{ matrix.python }}
         run: |
           mkdir -p sbom
-          python -m pip_audit -r requirements-runtime.lock --require-hashes --strict \
+          python -m pip_audit --path "$RUNTIME_DEPENDENCIES" --strict \
             --format cyclonedx-json \
             --output "sbom/cpe-access-atlas-${RELEASE_TAG}-${TARGET_OS}-python${TARGET_PYTHON}-sbom.cdx.json"
+      - name: Verify SBOM matches the target inventory
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          from importlib.metadata import distributions
+          from pathlib import Path
+
+          def identity(name, version):
+              return re.sub(r"[-_.]+", "-", name).lower(), version
+
+          expected = {
+              identity(dist.metadata["Name"], dist.version)
+              for dist in distributions(path=[os.environ["RUNTIME_DEPENDENCIES"]])
+          }
+          artifacts = list(Path("sbom").glob("*.cdx.json"))
+          if not expected or len(artifacts) != 1:
+              raise RuntimeError("Expected a nonempty target inventory and exactly one SBOM")
+          components = json.loads(artifacts[0].read_text(encoding="utf-8"))["components"]
+          actual = [identity(item["name"], item["version"]) for item in components]
+          if len(actual) != len(expected) or set(actual) != expected:
+              raise RuntimeError("SBOM does not exactly match target runtime dependencies")
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-sbom-${{ matrix.os }}-python${{ matrix.python }}

@@ -2,6 +2,22 @@
 
 All notable changes are documented here.
 
+## Unreleased
+
+- Add standard CPython 3.15 to package classifiers, the Windows/Linux/macOS
+  test matrix, and release SBOM requirements. Use prerelease fallback until
+  final is available; current local validation uses Python 3.15.0rc2.
+- Build, archive-test, and clean-install wheel/sdist artifacts in every 3.15
+  CI job. Preserve Python 3.11–3.14 support and the canonical 3.14 CLI reference.
+- Update hash-locked msgpack to 1.2.2 for Python 3.15 binary-wheel availability
+  in audit/release tooling. Keep other dependency pins unchanged.
+- Separate target-runtime inventory installation from the Python 3.14 audit
+  host to handle pip-api's upstream 3.15 incompatibility. Require each SBOM
+  to match its actual target inventory exactly; keep vulnerability gates strict.
+- Require the new 3.15 checks in the repository-policy audit and verify all
+  18 assets for releases declaring five Python versions, while preserving
+  the historical inventory requirements of older releases.
+
 ## 0.4.0a2 - 2026-09-05
 
 Corrective experimental prerelease. Do not import encrypted configurations

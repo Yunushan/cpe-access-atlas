@@ -217,7 +217,7 @@ class GitHubReleaseTests(unittest.TestCase):
             (metadata().replace('version = "0.4.0"', "dynamic = false"), audit.STATUS_UNKNOWN),
             (metadata().replace(ALPHA, "Development Status :: 7 - Inactive"), audit.STATUS_UNKNOWN),
             (metadata().replace(ALPHA, ALPHA + '", "' + STABLE), audit.STATUS_UNKNOWN),
-            (metadata().replace("Python :: 3.14", "Python :: 3.15"), audit.STATUS_UNKNOWN),
+            (metadata().replace("Python :: 3.14", "Python :: 3.16"), audit.STATUS_UNKNOWN),
             (
                 '[project]\nname="cpe-access-atlas"\nversion="0.4.0"\nclassifiers=false',
                 audit.STATUS_UNKNOWN,
@@ -278,6 +278,34 @@ class GitHubReleaseTests(unittest.TestCase):
             result = audit._audit_release(Api(records))
             self.assertEqual(result.status, audit.STATUS_FAIL)
             self.assertIn(removed["name"], result.detail)
+
+    def test_python315_release_requires_all_eighteen_assets_but_older_releases_do_not(self) -> None:
+        records = fixture()
+        text = metadata().replace(
+            '"Programming Language :: Python :: 3.14"]',
+            '"Programming Language :: Python :: 3.14", "Programming Language :: Python :: 3.15"]',
+        )
+        records[f"contents/pyproject.toml?ref={COMMIT}"] = content(text)
+        self.assertEqual(audit._audit_release(Api(records)).status, audit.STATUS_FAIL)
+        assets = records["releases/2/assets?per_page=100"]
+        for index, system in enumerate(("ubuntu-latest", "windows-latest", "macos-latest"), 16):
+            assets.append(
+                {
+                    **assets[0],
+                    "id": index,
+                    "name": f"cpe-access-atlas-v0.4.0-{system}-python3.15-sbom.cdx.json",
+                }
+            )
+        result = audit._audit_release(Api(records))
+        self.assertEqual(result.status, audit.STATUS_PASS)
+        self.assertIn("18 required asset", result.detail)
+        for index in range(15, 18):
+            incomplete = copy.deepcopy(records)
+            removed = incomplete["releases/2/assets?per_page=100"].pop(index)
+            result = audit._audit_release(Api(incomplete))
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn(removed["name"], result.detail)
+        self.assertEqual(audit._audit_release(Api(fixture())).status, audit.STATUS_PASS)
 
     def test_assets_must_be_nonempty_uploaded_distinct_and_digest_identified(self) -> None:
         for key, value in (
