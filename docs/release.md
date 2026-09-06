@@ -25,13 +25,32 @@ version, has a matching `CHANGELOG.md` heading, and points to a commit
 reachable from `main`, for example `v0.4.0a1` for package version `0.4.0a1`.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, and
-CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all twelve
+CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen
 supported OS/Python test jobs and package-smoke. Local workflow references
 resolve at the same commit as the release caller, so another commit's green
 checks or independent push workflows cannot satisfy this dependency graph.
 No publishing job runs if a prerequisite workflow fails or is cancelled.
 The pull-request-only dependency-review job remains intentionally skipped on
 release-tag pushes; dependency-audit still runs and is required.
+
+Python 3.15 is included in both matrices, with prerelease fallback until final
+is available. Each 3.15 CI job also builds wheel/sdist artifacts, tests the
+bundled source archive, and installs both artifacts into separate clean virtual
+environments before isolated CLI validation outside the checkout. No 3.15
+failure is optional. The canonical documentation and publishing-tool interpreter
+remains 3.14. Current local 3.15 evidence uses 3.15.0rc2; final-release claims
+require a fresh successful matrix on final. Free-threaded builds are not tested.
+
+Audit-tool compatibility is separate from runtime compatibility. The latest
+published `pip-api` (0.0.34, used by pip-audit) still imports `sre_constants`,
+which Python 3.15 removed ([upstream issue](https://github.com/di/pip-api/issues/294)).
+Each SBOM job therefore installs `requirements-runtime.lock` **with its target
+interpreter and hash verification** into a separate directory, then runs the
+locked auditor on Python 3.14 with `--path` pointing only to that inventory.
+It does not re-resolve runtime markers under 3.14 or import 3.15 native extensions
+into 3.14. A final check requires a nonempty inventory and exact name/version
+agreement with the SBOM, rejecting missing, extra, or duplicated components.
+Audit failures still block publication; there are no vulnerability exemptions.
 
 Publishing permissions remain confined to the final release job. The reusable
 checks do not inherit release secrets, contents-write, attestation-write, or
@@ -75,15 +94,20 @@ unknown archive and passing this helper is not independent security review.
 
 The workflow installs the locked runtime dependencies, installs the pinned
 build backend from `requirements-build.lock`, and validates both freshly built
-artifacts in clean environments before publishing. A separate 12-cell matrix
+artifacts in clean environments before publishing. A separate 15-cell matrix
 creates CycloneDX SBOMs from `requirements-runtime.lock` for each supported
 OS/Python combination. Artifact filenames identify the environment; a 3.14
 inventory must not be used as the complete inventory for a 3.11 installation.
 Publication waits for the required validation workflows and all SBOM jobs,
-includes all twelve inventories, writes SHA-256 checksums, and attests the
+includes all fifteen inventories, writes SHA-256 checksums, and attests the
 build provenance. A release is not
 considered supported until its artifacts have also been installed and
 validated from the published release itself.
+
+For a release declaring Python 3.11–3.15, the required asset count is 18: wheel,
+source archive, checksum manifest, and 15 SBOMs. The repository audit derives
+the inventory from that release commit's classifiers; older releases declaring
+only 3.11–3.14 still require 15 assets, not retroactive 3.15 inventories.
 
 Alpha/Beta package metadata and prerelease/development version identifiers must
 be published as a GitHub prerelease. Publication uses `--verify-tag` so a tag
@@ -152,6 +176,11 @@ change. This command preserves existing exact pins and fills their transitive
 closure; it does not automatically upgrade an explicitly pinned requirement.
 Keep shared pins consistent across lock files. Review any newly resolved
 transitive packages and run vulnerability audits before accepting them.
+
+After changing an exact pin in an existing hashed file, also pass
+`--upgrade-package PACKAGE` for that package when compiling. This refreshes
+its distribution hashes instead of retaining hashes from the old version.
+Verify the regenerated locks with real `--require-hashes` installations.
 
 Validate clean installs and dependency consistency across the supported matrix,
 including Python 3.11/3.12's typing-extensions dependency and platform-specific

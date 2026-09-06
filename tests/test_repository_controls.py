@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import tomllib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from textwrap import dedent
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -172,13 +174,69 @@ class RepositoryControlTests(unittest.TestCase):
     def test_release_sbom_matrix_and_non_overwriting_publication(self) -> None:
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertRegex(release, r"needs: \[[^\]\n]*\bruntime-sbom\]")
-        self.assertIn('python: ["3.11", "3.12", "3.13", "3.14"]', release)
+        self.assertIn('python: ["3.11", "3.12", "3.13", "3.14", "3.15"]', release)
         self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", release)
         self.assertIn("--require-hashes", release)
         self.assertIn("--prerelease", release)
         self.assertIn("Version(__version__).is_prerelease", release)
         self.assertIn("--verify-tag", release)
         self.assertNotIn("--clobber", release)
+
+    def test_sbom_audits_target_installed_metadata_not_the_tool_interpreter(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        job = workflow.split("  runtime-sbom:\n")[1].split("  validate-release:\n")[0]
+        target = job.index("python-version: ${{ matrix.python }}")
+        install = job.index(
+            'pip install --require-hashes --target "${{ env.RUNTIME_DEPENDENCIES }}"'
+        )
+        host = job.index('python-version: "3.14"')
+        audit = job.index('pip_audit --path "$RUNTIME_DEPENDENCIES" --strict')
+        gate = job.index("- name: Verify SBOM matches the target inventory")
+        self.assertLess(target, install)
+        self.assertLess(install, host)
+        self.assertLess(host, audit)
+        self.assertLess(audit, gate)
+        self.assertLess(gate, job.index("uses: actions/upload-artifact@"))
+        self.assertNotIn("pip_audit -r", job)
+        self.assertNotIn("--ignore-vuln", job)
+        step = job.split("      - name: Verify SBOM matches the target inventory\n")[1]
+        step = step.split("      - uses:")[0]
+        code = compile(dedent(step.split("        run: |\n")[1]), "ci-sbom-inventory", "exec")
+        expected = [SimpleNamespace(metadata={"Name": "rpds_py"}, version="1.2.3")]
+        valid = [{"name": "rpds-py", "version": "1.2.3"}]
+        for components, passes in (
+            (valid, True),
+            ([], False),
+            (valid * 2, False),
+            ([{"name": "rpds-py", "version": "9.9.9"}], False),
+            ([*valid, {"name": "pip-audit", "version": "2.10.1"}], False),
+        ):
+            with (
+                patch.dict("os.environ", {"RUNTIME_DEPENDENCIES": "target-fixture"}),
+                patch("importlib.metadata.distributions", return_value=expected) as inventory,
+                patch("pathlib.Path.glob", return_value=[Path("fixture.cdx.json")]),
+                patch(
+                    "pathlib.Path.read_text", return_value=json.dumps({"components": components})
+                ),
+            ):
+                if passes:
+                    exec(code, {})  # noqa: S102 -- reviewed verifier, mocked synthetic inventory
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "exactly match"):
+                        exec(code, {})  # noqa: S102 -- reviewed verifier, mocked synthetic inventory
+                inventory.assert_called_once_with(path=["target-fixture"])
+        for inventory, files in (
+            ([], [Path("fixture")]),
+            (expected, []),
+            (expected, [Path("f")] * 2),
+        ):
+            with (
+                patch.dict("os.environ", {"RUNTIME_DEPENDENCIES": "target-fixture"}),
+                patch("importlib.metadata.distributions", return_value=inventory),
+                patch("pathlib.Path.glob", return_value=files),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "nonempty target inventory"):
+                    exec(code, {})  # noqa: S102 -- reviewed verifier, mocked synthetic inventory
 
     def test_publication_requires_same_commit_ci_and_security_workflows(self) -> None:
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -212,7 +270,7 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("      security-events: write", jobs["codeql-validation"])
         self.assertIn("      pull-requests: read", jobs["dependency-validation"])
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertIn('python: ["3.11", "3.12", "3.13", "3.14"]', ci)
+        self.assertIn('python: ["3.11", "3.12", "3.13", "3.14", "3.15"]', ci)
         self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", ci)
 
     def test_actual_built_archive_is_checked_before_package_install_or_publication(self) -> None:
@@ -299,15 +357,105 @@ class RepositoryControlTests(unittest.TestCase):
             workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
             with self.subTest(workflow=name):
                 builds = re.findall(r"^\s+run: (python -m build .+)$", workflow, re.MULTILINE)
-                self.assertEqual(builds, ["python -m build --wheel --sdist --no-isolation"])
-                self.assertRegex(
-                    workflow,
-                    r'PIP_NO_INDEX: "1"\s+run: python -m build --wheel --sdist --no-isolation',
+                expected_count = 2 if name == "ci" else 1
+                self.assertEqual(
+                    builds, ["python -m build --wheel --sdist --no-isolation"] * expected_count
                 )
+                hash_verified_builds = re.findall(
+                    r'PIP_NO_INDEX: "1"\s+run: python -m build --wheel --sdist --no-isolation',
+                    workflow,
+                )
+                self.assertEqual(len(hash_verified_builds), expected_count)
                 self.assertLess(
                     workflow.index(f"pip install --require-hashes -r requirements-{lock}.lock"),
                     workflow.index(builds[0]),
                 )
+
+    def test_python_support_metadata_workflows_and_audit_policy_agree(self) -> None:
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        prefix = "Programming Language :: Python :: 3."
+        versions = tuple(
+            entry.rsplit(" :: ", 1)[-1]
+            for entry in project["project"]["classifiers"]
+            if entry.startswith(prefix)
+        )
+        self.assertEqual(versions, ("3.11", "3.12", "3.13", "3.14", "3.15"))
+        self.assertEqual(github_audit._RELEASE_PYTHONS, versions)
+        self.assertEqual(project["project"]["requires-python"], ">=3.11")
+        for name in ("ci", "release"):
+            workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
+            matrix = re.search(r"(?m)^        python: (\[.*\])$", workflow)
+            self.assertIsNotNone(matrix)
+            self.assertEqual(tuple(json.loads(matrix.group(1))), versions)
+            self.assertIn("allow-prereleases: ${{ matrix.python == '3.15' }}", workflow)
+            self.assertNotIn("continue-on-error:", workflow)
+        for system in ("ubuntu-latest", "windows-latest", "macos-latest"):
+            check = f"test ({system}, 3.15)"
+            self.assertIn(check, github_audit._REQUIRED_BRANCH_CHECKS)
+            responses = _successful_workflow_responses()
+            jobs = responses["actions/runs/1/attempts/1/jobs?per_page=100"]
+            jobs["jobs"] = [job for job in jobs["jobs"] if job["name"] != check]
+            jobs["total_count"] = len(jobs["jobs"])
+            result = github_audit._audit_current_checks(_MappedGitHubApi(responses), "a" * 40)
+            self.assertEqual(result.status, github_audit.STATUS_FAIL)
+            self.assertIn(check, result.detail)
+
+    def test_actual_python315_clean_install_step_is_portable_and_fail_closed(self) -> None:
+        # Execute only this reviewed, local workflow block with subprocesses mocked.
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        step = workflow.split(
+            "      - name: Install Python 3.15 artifacts in clean environments\n"
+        )[1]
+        step = step.split("\n  package-smoke:")[0]
+        self.assertIn("        if: matrix.python == '3.15'\n", step)
+        self.assertIn("        shell: python\n", step)
+        code = compile(dedent(step.split("        run: |\n")[1]), "ci-artifact-smoke", "exec")
+        for platform in ("win32", "linux", "darwin"):
+            with self.subTest(platform=platform), TemporaryDirectory() as directory:
+                root = Path(directory)
+                dist = root / "dist"
+                dist.mkdir()
+                wheel, sdist = dist / "sample.whl", dist / "sample.tar.gz"
+                wheel.touch()
+                sdist.touch()
+                with (
+                    patch("pathlib.Path.cwd", return_value=root),
+                    patch("sys.platform", platform),
+                    patch("subprocess.run") as run,
+                ):
+                    exec(code, {})  # noqa: S102 -- reviewed workflow, all subprocesses mocked
+                self.assertEqual(run.call_count, 11)
+                calls = run.call_args_list
+                for call in calls:
+                    self.assertTrue(call.kwargs["check"])
+                    self.assertGreater(call.kwargs["timeout"], 0)
+                    self.assertLessEqual(call.kwargs["timeout"], 180)
+                venvs = [call.args[0][-1] for call in calls if call.args[0][1:3] == ["-m", "venv"]]
+                self.assertEqual(len(set(venvs)), 2)
+                suffix = "Scripts/python.exe" if platform == "win32" else "bin/python"
+                installs = [call.args[0] for call in calls if "install" in call.args[0]]
+                self.assertEqual(len(installs), 5)
+                self.assertEqual(sum("--require-hashes" in command for command in installs), 3)
+                for command in installs:
+                    self.assertIn(Path(command[0]), [Path(env) / suffix for env in venvs])
+                    if "--require-hashes" not in command:
+                        for flag in ("--no-deps", "--no-build-isolation", "--no-index"):
+                            self.assertIn(flag, command)
+                        self.assertIn(Path(command[-1]), (wheel, sdist))
+                validations = [call for call in calls if call.args[0][-1] == "validate"]
+                self.assertEqual(len(validations), 2)
+                for call in validations:
+                    self.assertEqual(call.args[0][1:], ["-I", "-m", "cpe_access_atlas", "validate"])
+                    self.assertNotEqual(Path(call.kwargs["cwd"]), root)
+                with patch("pathlib.Path.cwd", return_value=root), patch("subprocess.run") as run:
+                    run.side_effect = subprocess.CalledProcessError(1, "fixture")
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        exec(code, {})  # noqa: S102 -- reviewed workflow, subprocesses mocked
+                    run.assert_called_once()
+                for count in (0, 2):
+                    with patch("pathlib.Path.glob", return_value=[wheel] * count):
+                        with self.assertRaisesRegex(RuntimeError, "Expected exactly one"):
+                            exec(code, {})  # noqa: S102 -- no subprocess runs without an artifact
 
     def test_github_production_audit_is_read_only(self) -> None:
         audit = (ROOT / "scripts" / "check_github_production_settings.py").read_text(

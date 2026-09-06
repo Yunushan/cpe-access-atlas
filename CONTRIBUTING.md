@@ -76,11 +76,22 @@ git commit --signoff -m "Your commit message"
 The CI, security, release, runtime-SBOM, and artifact-build environments use the
 committed lock files. When updating tooling or runtime dependencies, regenerate
 the relevant lock files with a universal resolver, preserving environment
-markers and package hashes. They cover Python 3.11–3.14 on Windows, Linux, and
+markers and package hashes. They cover Python 3.11–3.15 on Windows, Linux, and
 macOS; resolving only the maintainer's interpreter misses conditional
 dependencies. See [lock maintenance](docs/release.md#dependency-lock-maintenance).
 Run the full validation suite and record the reason in the pull request.
 Dependabot is configured to propose updates for these files.
+
+The 3.15 jobs allow prereleases until a final interpreter is available. Run the
+suite, coverage, typing, archive tests, and clean wheel/sdist installs on 3.15;
+do not count successful dependency resolution as cross-platform execution.
+The committed CLI reference still uses Python 3.14 as its canonical formatter;
+CLI behavior and reference rendering are tested on every supported interpreter.
+Use standard CPython builds; free-threaded builds and PyPy are not CI targets.
+
+Run pip-audit under Python 3.14: its current pip-api dependency cannot import
+on 3.15. The release workflow audits hash-verified, target-interpreter runtime
+inventories from this separate tooling interpreter; see the release checklist.
 
 For a release candidate, use `requirements-release.lock`, build both wheel and
 sdist artifacts, run `python -m twine check dist/*`, and install each artifact

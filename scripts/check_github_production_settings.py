@@ -53,7 +53,7 @@ _GIT_SHA = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}")
 _ASSET_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _RELEASE_OSES = ("ubuntu-latest", "windows-latest", "macos-latest")
-_RELEASE_PYTHONS = ("3.11", "3.12", "3.13", "3.14")
+_RELEASE_PYTHONS = ("3.11", "3.12", "3.13", "3.14", "3.15")
 _APPROVED_ACTION_REPOSITORIES = frozenset(
     {
         "actions/checkout",
@@ -68,8 +68,8 @@ _APPROVED_ACTION_REPOSITORIES = frozenset(
 )
 _CI_CHECK_NAMES = tuple(
     f"test ({operating_system}, {python_version})"
-    for operating_system in ("ubuntu-latest", "windows-latest", "macos-latest")
-    for python_version in ("3.11", "3.12", "3.13", "3.14")
+    for operating_system in _RELEASE_OSES
+    for python_version in _RELEASE_PYTHONS
 )
 _REQUIRED_BRANCH_CHECKS = frozenset(
     (

@@ -69,6 +69,13 @@ Ayrıntılar için [uyumluluk tablosuna](SUPPORT.md) ve
 Python 3.11 veya daha yeni bir sürüm gerekir. Kurulum, katalog şemasını çalışma
 zamanında doğrulamak için JSON Schema doğrulayıcısını da yükler.
 
+CI, Windows, Linux ve macOS üzerinde standart CPython 3.11–3.15 sürümlerini
+hedefler. Python 3.15 henüz sürüm adayıdır; yerel uyumluluk kontrolleri final
+sürümle değil, 3.15.0rc2 ile yapılır. Final sürüm çıktığında CI onu tercih eder;
+final sürüm desteğinin doğrulandığını belirtmeden önce tüm matris yeniden
+çalıştırılmalıdır. Serbest iş parçacıklı Python ve PyPy bu matrise dahil değildir.
+Python uyumluluğu, modem/yapılandırma/firmware uyumluluğunu kanıtlamaz.
+
 ```shell
 python -m pip install -e .
 cpe-atlas providers

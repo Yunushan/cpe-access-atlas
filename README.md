@@ -83,6 +83,13 @@ Requirements: Python 3.11 or newer. Installation also installs the pinned
 major-version range of the JSON Schema validator used by the runtime catalog
 validator.
 
+CI targets standard CPython 3.11–3.15 on Windows, Linux, and macOS. Python 3.15
+is currently a release candidate: local compatibility checks use 3.15.0rc2,
+not a final release. CI selects a 3.15 prerelease only until final is available;
+rerun the full matrix on final before claiming final-release validation.
+Free-threaded Python and PyPy are not part of this support matrix. Interpreter
+compatibility does not establish modem/config/firmware compatibility.
+
 ```shell
 python -m pip install -e .
 cpe-atlas providers

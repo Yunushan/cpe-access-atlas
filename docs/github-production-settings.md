@@ -35,15 +35,24 @@ test (ubuntu-latest, 3.11)
 test (ubuntu-latest, 3.12)
 test (ubuntu-latest, 3.13)
 test (ubuntu-latest, 3.14)
+test (ubuntu-latest, 3.15)
 test (windows-latest, 3.11)
 test (windows-latest, 3.12)
 test (windows-latest, 3.13)
 test (windows-latest, 3.14)
+test (windows-latest, 3.15)
 test (macos-latest, 3.11)
 test (macos-latest, 3.12)
 test (macos-latest, 3.13)
 test (macos-latest, 3.14)
+test (macos-latest, 3.15)
 ```
+
+When adopting the Python 3.15 matrix, first run its three jobs on the proposed
+branch, then add their exact names to the required checks without removing the
+existing checks or DCO sign-off gate. Editing workflow YAML does not update
+GitHub branch rules. The read-only audit reports missing 3.15 requirements until
+an authorized administrator updates the repository settings.
 
 ## Releases and security
 

@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,6 +28,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+          # Use the current RC until 3.15 final is available, then prefer final.
+          allow-prereleases: ${{ matrix.python == '3.15' }}
       - name: Install
         run: |
           python -m pip install --require-hashes -r requirements-ci.lock
@@ -61,6 +63,50 @@ jobs:
           --model "ZTE H3600P"
           --hardware-revision "V9.0"
           --firmware "H3600P V9.0 TTN.10_260210"
+      - name: Build Python 3.15 distributions
+        if: matrix.python == '3.15'
+        env:
+          PIP_NO_INDEX: "1"
+        run: python -m build --wheel --sdist --no-isolation
+      - name: Test Python 3.15 bundled source distribution
+        if: matrix.python == '3.15'
+        run: python scripts/check_sdist.py --dist-dir dist
+      - name: Install Python 3.15 artifacts in clean environments
+        if: matrix.python == '3.15'
+        shell: python
+        run: |
+          import subprocess
+          import sys
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          root = Path.cwd()
+          for pattern in ("*.whl", "*.tar.gz"):
+              artifacts = list((root / "dist").glob(pattern))
+              if len(artifacts) != 1:
+                  raise RuntimeError(f"Expected exactly one {pattern} artifact")
+              with TemporaryDirectory() as directory:
+                  env = Path(directory) / "venv"
+                  subprocess.run([sys.executable, "-m", "venv", str(env)], check=True, timeout=120)
+                  python = env / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+                  locks = ["runtime", "build"] if pattern == "*.tar.gz" else ["runtime"]
+                  for lock in locks:
+                      subprocess.run(
+                          [str(python), "-m", "pip", "install", "--require-hashes",
+                           "-r", str(root / f"requirements-{lock}.lock")],
+                          check=True, timeout=180,
+                      )
+                  subprocess.run(
+                      [str(python), "-m", "pip", "install", "--no-deps", "--no-build-isolation",
+                       "--no-index", "--no-cache-dir", str(artifacts[0])],
+                      check=True, timeout=180,
+                  )
+                  subprocess.run([str(python), "-m", "pip", "check"], check=True, timeout=60)
+                  # Isolated mode and an unrelated cwd prevent source-tree imports.
+                  subprocess.run(
+                      [str(python), "-I", "-m", "cpe_access_atlas", "validate"],
+                      cwd=directory, check=True, timeout=60,
+                  )
 
   package-smoke:
     timeout-minutes: 15
