@@ -100,22 +100,27 @@ def inspect_firmware(
     overlap = b""
     try:
         with source.open("rb") as stream:
-            while chunk := stream.read(_CHUNK_SIZE):
+            next_byte = stream.read(1)
+            while next_byte:
+                chunk = next_byte + stream.read(_CHUNK_SIZE - 1)
+                next_byte = stream.read(1)
                 scan_data = overlap + chunk
                 digest.update(chunk)
                 size += len(chunk)
-                # Defer a candidate at the read boundary until its following
-                # byte (or actual EOF) is known. Retained overlap isn't BOF.
+                # Check the following byte (or EOF) while a complete candidate
+                # and its leading delimiter are still in this read window.
+                # Do not force long candidates through the fixed overlap.
                 versions.update(
-                    _scan_versions(scan_data, begins_file=size == len(scan_data), ends_file=False)
+                    _scan_versions(
+                        scan_data + next_byte,
+                        begins_file=size == len(scan_data),
+                        ends_file=not next_byte,
+                    )
                 )
                 for name, signature in _MARKERS:
                     if signature in scan_data:
                         markers.add(name)
                 overlap = scan_data[-_SCAN_OVERLAP:]
-            versions.update(
-                _scan_versions(overlap, begins_file=size == len(overlap), ends_file=True)
-            )
     except OSError as exc:
         raise FirmwareInspectionError(f"unable to read firmware artifact: {exc}") from exc
 

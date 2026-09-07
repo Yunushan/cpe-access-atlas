@@ -57,6 +57,32 @@ class FirmwareInspectionTests(unittest.TestCase):
                 self.assertFalse(result.exact_build_match)
                 self.assertEqual(result.version_strings, ())
 
+    def test_long_complete_identifiers_keep_their_real_boundaries(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.bin"
+            for length in (255, 256, 257, 512, 4096):
+                version = (
+                    b"H3600P V9.0 TTN."
+                    + b"1" * (length - len(b"H3600P V9.0 TTN._260210"))
+                    + b"_260210"
+                )
+                for prefix in (b"", b"header\x00", b"headerX"):
+                    for suffix in (b"", b"\x00tail", b"9", b"_modified"):
+                        content = prefix + version + suffix
+                        with self.subTest(length=length, prefix=prefix, suffix=suffix):
+                            path.write_bytes(content)
+                            with patch(
+                                "cpe_access_atlas.firmware._CHUNK_SIZE", len(prefix + version)
+                            ):
+                                result = inspect_firmware(path, version.decode("ascii"))
+                            expected = prefix != b"headerX" and suffix in (b"", b"\x00tail")
+                            self.assertEqual(result.exact_build_match, expected)
+                            self.assertEqual(
+                                result.version_strings, (version.decode(),) if expected else ()
+                            )
+                            self.assertEqual(result.size, len(content))
+                            self.assertEqual(result.sha256, hashlib.sha256(content).hexdigest())
+
     def test_real_read_boundary_requires_the_following_byte_or_eof(self) -> None:
         prefix = b"\x00" * (1024 * 1024 - len(TARGET_VERSION))
         with TemporaryDirectory() as directory:

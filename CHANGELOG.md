@@ -4,6 +4,10 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Preserve the leading boundary of complete long firmware identifiers at EOF
+  and read boundaries by checking one byte ahead before retaining overlap.
+  Keep bounded reads, complete-file hashes and rejection of longer identifiers;
+  cover 255–4,096-byte synthetic identifiers without imposing a shorter limit.
 - Require complete firmware version identifiers during offline inspection;
   reject target prefixes inside longer model/build strings, including when
   the continuation arrives in the next read chunk. Preserve actual EOF,
