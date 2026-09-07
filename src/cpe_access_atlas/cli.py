@@ -520,6 +520,10 @@ def command_redact(args: argparse.Namespace) -> int:
     except OSError as exc:
         raise OSError("unable to write redacted text") from exc
     print("Wrote redacted text.")
+    print(
+        "Manual review required before sharing: unrecognized sensitive fields may remain. "
+        "Never upload configuration backups."
+    )
     return 0
 
 

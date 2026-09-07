@@ -4,6 +4,19 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Redact Wi-Fi credential aliases including `KeyPassphrase`, `PreSharedKey`,
+  `wifi_psk`, and `WPA_PSK` in supported text/JSON/XML report forms. Cover case,
+  separator, quoting, XML attribute-order and entity-encoded field-name variants
+  with API, CLI and property-based regressions. Earlier versions may retain
+  these values even when redaction reports success; manually review any older
+  reports before sharing them.
+- Remind users after successful redaction that manual review is required,
+  unrecognized sensitive fields may remain, and configuration backups must not
+  be uploaded. Preserve owner-only output and never print report contents.
+  This does not establish exact-device configuration or firmware support.
+- Preserve masking of command-line option assignments and field names with
+  Unicode vendor prefixes or repeated separators. Keep long-token regression
+  checks so broader field matching does not repeatedly scan each suffix.
 - Add standard CPython 3.15 to package classifiers, the Windows/Linux/macOS
   test matrix, and release SBOM requirements. Use prerelease fallback until
   final is available; current local validation uses Python 3.15.0rc2.

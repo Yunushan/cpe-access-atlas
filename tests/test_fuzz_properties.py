@@ -12,9 +12,11 @@ both are exercised here with wide, randomized inputs.
 from __future__ import annotations
 
 import contextlib
+import json
 import struct
 import unittest
 import zlib
+from html import escape
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -125,6 +127,46 @@ class ConfigDecodingFuzzTests(unittest.TestCase):
 
 
 class RedactionFuzzTests(unittest.TestCase):
+    @given(
+        st.sampled_from(
+            (
+                "KeyPassphrase",
+                "PreSharedKey",
+                "wifi_psk",
+                "WPA_PSK",
+                "WPA2PSK",
+                "X--password",
+                "Café-Password",
+            )
+        ),
+        st.text(alphabet="aAzZ019 _-:;,'\"\\<>&\t\r\nçğşΩ🔑", max_size=256),
+        st.booleans(),
+    )
+    @_SUITE_SETTINGS
+    def test_wifi_credentials_with_escaped_values_are_fully_removed(
+        self, name: str, value: str, uppercase: bool
+    ) -> None:
+        name = name.upper() if uppercase else name.lower()
+        examples = [
+            (
+                json.dumps({name: value}, ensure_ascii=False),
+                json.dumps({name: "[REDACTED]"}, ensure_ascii=False),
+            ),
+            (
+                f'<DM name="{name}" val="{escape(value, quote=True)}"/>',
+                f'<DM name="{name}" val="[REDACTED]"/>',
+            ),
+            (
+                f"<DM val='{escape(value, quote=True)}' name='{name}'/>",
+                f"<DM val='[REDACTED]' name='{name}'/>",
+            ),
+        ]
+        if name.isascii():
+            examples.append((json.dumps({name: value}), json.dumps({name: "[REDACTED]"})))
+        for source, expected in examples:
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+
     @given(
         st.lists(
             st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789", min_size=8, max_size=32),

@@ -181,7 +181,9 @@ cpe-atlas redact --input raw-observations.txt --output sanitized-observations.tx
 ```
 
 Redaction is conservative assistance; manually review the output and any
-screenshots, captures, or configuration exports before sharing.
+screenshots, captures, or exported text before sharing. The command reminds you
+that unrecognized sensitive fields may remain. Keep configuration backups private;
+redaction does not make a `config.bin` safe to upload.
 
 Inspect a private firmware artifact without executing or changing it:
 
@@ -289,6 +291,10 @@ Before any future verified mutation:
 The report redactor is conservative assistance, not a proof of sanitization.
 It covers common text assignments, complete Cookie/Set-Cookie headers, quoted
 ZTE XML secret fields, serial/subscriber identifiers, and PEM private-key blocks.
+Recognized Wi-Fi credential names include `KeyPassphrase`, `PreSharedKey`,
+`wifi_psk`, and `WPA_PSK`, with common case and separator variants. These names
+are matched in text assignments, JSON, XML name/value fields, and directly named
+XML attributes and elements; this is not an exhaustive sensitive-field inventory.
 It accepts at most 8 Mi characters of UTF-8 report text; binary backups and
 unsupported or malformed formats are not safe to publish after redaction.
 It requires `--output`, never prints report contents to the terminal, and writes

@@ -696,6 +696,37 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("secret", stdout)
             self.assertNotIn("secret", output.read_text(encoding="utf-8"))
 
+    def test_redact_wifi_credentials_privately_and_require_manual_review(self) -> None:
+        original = (
+            '{"wifi_psk":"SYNTHETIC_WIFI_CREDENTIAL"}\n'
+            '<DM name="KeyPassphrase" val="SYNTHETIC_WIFI_CREDENTIAL"/>\n'
+            "<DM val='SYNTHETIC_WIFI_CREDENTIAL' name='PreSharedKey'/>\n"
+            '<DM name="WPA_PSK" val="SYNTHETIC_WIFI_CREDENTIAL"/>\n'
+            "UnknownField=manual-review-needed\n"
+        )
+        for from_stdin in (False, True):
+            with self.subTest(from_stdin=from_stdin), TemporaryDirectory() as directory:
+                source, output = Path(directory) / "source.txt", Path(directory) / "redacted.txt"
+                source.write_text(original, encoding="utf-8")
+                args = ["redact", "--output", str(output)]
+                if not from_stdin:
+                    args.extend(["--input", str(source)])
+                with patch("cpe_access_atlas.cli.sys.stdin", StringIO(original)):
+                    code, stdout, stderr = self.run_cli(args)
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertEqual(
+                    output.read_text(encoding="utf-8"),
+                    original.replace("SYNTHETIC_WIFI_CREDENTIAL", "[REDACTED]"),
+                )
+                self.assertEqual(source.read_text(encoding="utf-8"), original)
+                self.assertNotIn("SYNTHETIC_WIFI_CREDENTIAL", stdout)
+                self.assertNotIn("manual-review-needed", stdout)
+                self.assertNotIn(str(output), stdout)
+                self.assertIn("Manual review required before sharing", stdout)
+                self.assertIn("unrecognized sensitive fields may remain", stdout)
+                self.assertIn("Never upload configuration backups", stdout)
+                self.assertEqual(list(Path(directory).glob(".redacted.txt.*")), [])
+
     def test_redact_rejects_invalid_text_encoding_cleanly(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "invalid.txt"
