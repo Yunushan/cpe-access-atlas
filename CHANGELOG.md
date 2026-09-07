@@ -4,6 +4,13 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Stop secret prompts before Python's visible-input fallback can read a
+  password or device passphrase. Return sanitized errors on unavailable hidden
+  input, EOF, or input-layer failures; preserve existing output on failure.
+  Bound explicit stdin reads to the supported credential lengths, reject
+  oversized values without silent truncation, and retain LF/CRLF support and
+  two-secret input ordering. Add synthetic fallback, failure, boundary, and
+  CLI artifact-preservation regressions; document safe input in both READMEs.
 - Redact Wi-Fi credential aliases including `KeyPassphrase`, `PreSharedKey`,
   `wifi_psk`, and `WPA_PSK` in supported text/JSON/XML report forms. Cover case,
   separator, quoting, XML attribute-order and entity-encoded field-name variants

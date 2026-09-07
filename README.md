@@ -240,6 +240,20 @@ filesystems fail closed. These protections do not isolate files from the same
 account, elevated administrators, or an untrusted storage provider; keep every
 artifact in a private, trusted local directory.
 
+Secret prompts stop with an error if hidden terminal input is unavailable;
+they never fall back to visible entry. End-of-input or unreadable input also
+stops the command without printing input-layer diagnostics or replacing an
+existing artifact. For automation, explicitly select `--ssh-password-stdin`
+and/or `--device-key-stdin` and supply the values through a private pipe or
+protected file, never as command-line arguments or shell-history literals.
+When both values are needed from stdin, supply the SSH password first, then
+the device passphrase, one per line (LF or CRLF). The SSH password must be
+8–128 printable characters; the device passphrase must be exactly 32 ASCII
+characters. Stdin reads are bounded to these maximum lengths plus a line
+terminator, and oversized values are rejected, not silently truncated. These
+explicit stdin options do not disable terminal echo; do not use them for
+interactive typing into a visible terminal.
+
 This is an offline research tool, not a firmware image, root exploit, or device
 flasher. A no-input artifact uses a minimal template and does not preserve ISP
 provisioning such as Internet, VoIP, IPTV, VLAN, Wi-Fi, or TR-069 settings. The

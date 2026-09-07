@@ -129,6 +129,20 @@ konfigürasyon üretmez ve hiçbir şey flash'lamaz. `cpe-atlas firmware-inspect
 `config-generate` çevrimdışı bir araştırma aracıdır; root açığı veya firmware
 yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
+Parola istemleri, gizli terminal girişi sağlanamıyorsa görünür girişe geçmek
+yerine hata vererek durur. Giriş sonlanırsa veya okunamazsa özel tanılama
+ayrıntıları yazdırılmaz ve mevcut çıktı dosyası değiştirilmez. Otomasyonda
+`--ssh-password-stdin` ve/veya `--device-key-stdin` seçeneklerini açıkça seçip
+değerleri özel bir pipe veya erişimi kısıtlı dosya üzerinden sağlayın; komut
+satırı argümanlarına veya kabuk geçmişine parola yazmayın. Her iki değer
+stdin'den okunacaksa önce SSH parolası, sonra cihaz şifreleme parolası, her
+biri ayrı satırda (LF veya CRLF) olmalıdır. SSH parolası 8–128 yazdırılabilir
+karakter, cihaz şifreleme parolası tam 32 ASCII karakter olmalıdır. Stdin
+okumaları bu üst sınırlar ve satır sonuyla sınırlıdır; uzun değerler sessizce
+kısaltılmak yerine reddedilir. Bu stdin seçenekleri terminalde karakterlerin
+görünmesini kapatmaz; görünür terminale etkileşimli parola yazmak için
+kullanmayın.
+
 **Uyarı:** v0.4.0a1 veya önceki sürümlerin oluşturduğu şifreli config dosyalarını
 modeme yüklemeyin; anahtar türetme hatalıydı. Orijinal yedeği gizli tutun.
 [v0.4.0a2 düzeltmesi](docs/config-cryptography.md), tam firmware
