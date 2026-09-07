@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from itertools import product
 from unittest.mock import patch
 
 from cpe_access_atlas.redaction import RedactionError, redact_text
@@ -14,6 +15,131 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("xyz", output)
         self.assertNotIn("session-value", output)
         self.assertEqual(output.count("[REDACTED]"), 3)
+
+    def test_redacts_wifi_credential_aliases_in_text_and_xml(self) -> None:
+        for alias in (
+            "KeyPassphrase",
+            "key_passphrase",
+            "key-passphrase",
+            "PreSharedKey",
+            "pre_shared_key",
+            "pre-shared-key",
+            "PSK",
+            "WiFiPSK",
+            "wifi_psk",
+            "wi-fi-psk",
+            "wi_fi_psk",
+            "WLANPSK",
+            "wlan_psk",
+            "WPA_PSK",
+            "WPAPSK",
+            "WPA2PSK",
+            "wpa2_psk",
+            "WPA3PSK",
+            "wpa3-psk",
+            "X_VENDOR_WPA_PSK",
+            "X-VENDOR-WPA-PSK",
+            "X--password",
+            "X__WPA_PSK",
+            "Café-Password",
+            "TürkTelekom-PreSharedKey",
+            "_vendor-password",
+            "__WPA_PSK",
+        ):
+            for name in (alias, alias.lower(), alias.upper()):
+                for template in (
+                    "{name}={value}",
+                    '{name}: "{value}"',
+                    "'{name}': '{value}'",
+                    '{{"{name}":"{value}"}}',
+                    '<DM name="{name}" val="{value}"/>',
+                    "<DM val='{value}' name='{name}'/>",
+                    '<item\n value="{value}"\n key="{name}"/>',
+                    '<item {name}="{value}"/>',
+                    "<{name}>{value}</{name}>",
+                    '<cfg:{name} xmlns:cfg="urn:test">{value}</cfg:{name}>',
+                ):
+                    with self.subTest(name=name, template=template):
+                        source = template.format(name=name, value="SYNTHETIC_WIFI_CREDENTIAL")
+                        expected = template.format(name=name, value="[REDACTED]")
+                        self.assertEqual(redact_text(source), expected)
+                        self.assertEqual(redact_text(expected), expected)
+
+    def test_wifi_xml_names_decode_entities_before_matching(self) -> None:
+        for name in ("KeyPassphr&#97;se", "PreShared&#75;ey", "WPA&#95;PSK"):
+            source = f'<DM name="{name}" val="SYNTHETIC_WIFI_CREDENTIAL"/>'
+            self.assertEqual(redact_text(source), f'<DM name="{name}" val="[REDACTED]"/>')
+
+    def test_preserves_wifi_setting_names_that_are_not_credentials(self) -> None:
+        for name in (
+            "PSKMode",
+            "PreSharedKeyCount",
+            "KeyPassphraseLength",
+            "WPA_PSKEnabled",
+            "WiFi_PSKMode",
+            "WPA2Cipher",
+            "TürkTelekom-PSKMode",
+            "Café--KeyPassphraseLength",
+            "SSID",
+            "SomeUnrecognizedField",
+        ):
+            for template in (
+                "{name}=visible",
+                '{{"{name}":"visible"}}',
+                '<DM name="{name}" val="visible"/>',
+                '<item {name}="visible"/>',
+                "<{name}>visible</{name}>",
+            ):
+                with self.subTest(name=name, template=template):
+                    source = template.format(name=name)
+                    self.assertEqual(redact_text(source), source)
+
+    def test_long_vendor_prefix_is_not_rescanned_at_every_separator(self) -> None:
+        for separator in ("-", "_", "--", "__", "_-", "-_"):
+            prefix = f"véndor{separator}" * 20_000
+            safe = f"{prefix}Setting=visible"
+            self.assertEqual(redact_text(safe), safe)
+            self.assertEqual(
+                redact_text(f"{prefix}PreSharedKey=SYNTHETIC_WIFI_CREDENTIAL"),
+                f"{prefix}PreSharedKey=[REDACTED]",
+            )
+
+    def test_redacts_command_line_option_assignments(self) -> None:
+        for name in ("password", "token", "api-key", "KeyPassphrase", "WPA_PSK"):
+            for prefix in ("-", "--", "_", "_-", "-_"):
+                for quote in ("", "'", '"'):
+                    source = f"tool {prefix}{name}={quote}SYNTHETIC_CREDENTIAL{quote} --port=22"
+                    expected = f"tool {prefix}{name}={quote}[REDACTED]{quote} --port=22"
+                    with self.subTest(name=name, prefix=prefix, quote=quote):
+                        self.assertEqual(redact_text(source), expected)
+        dashes = "-" * 20_000
+        safe = f"{dashes}mode=visible"
+        self.assertEqual(redact_text(safe), safe)
+        self.assertEqual(
+            redact_text(f"{dashes}password=SYNTHETIC_CREDENTIAL"),
+            f"{dashes}password=[REDACTED]",
+        )
+
+    def test_prefixed_secret_assignments_preserve_masking(self) -> None:
+        # Derived from a differential check against the pre-fix redactor.
+        # Keep fixed expectations so this regression runs without Git or a
+        # copy of the old implementation, including from a source archive.
+        for lead, word, separator, field in product(
+            ("", "-", "--", "_", "__", "prefix."),
+            ("", "X", "Vendor", "café", "é", "z\u0301"),
+            ("-", "--", "_", "__", ".", ":", "-_", "_-"),
+            ("password", "api-key", "secret_key", "token"),
+        ):
+            name = lead + word + separator + field
+            for template in (
+                "{name}={value}",
+                '{{"{name}":"{value}"}}',
+                "'{name}': '{value}'",
+            ):
+                with self.subTest(name=name, template=template):
+                    source = template.format(name=name, value="SYNTHETIC_CREDENTIAL")
+                    expected = template.format(name=name, value="[REDACTED]")
+                    self.assertEqual(redact_text(source), expected)
 
     def test_redacts_mac_subscriber_and_public_ip(self) -> None:
         output = redact_text(
@@ -166,6 +292,9 @@ class RedactionTests(unittest.TestCase):
             for field in (
                 "<Password>SYNTHETIC_VALUE</Password>",
                 '<DM name="SSH_PassWord" val="SYNTHETIC_VALUE"/>',
+                "<PreSharedKey>SYNTHETIC_VALUE</PreSharedKey>",
+                '<DM name="KeyPassphrase" val="SYNTHETIC_VALUE"/>',
+                '<DM name="WPA_PSK" val="SYNTHETIC_VALUE"/>',
             ):
                 with self.subTest(opening=opening, field=field):
                     value = opening + field + closing

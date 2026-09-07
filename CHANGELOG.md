@@ -4,6 +4,37 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Preserve the leading boundary of complete long firmware identifiers at EOF
+  and read boundaries by checking one byte ahead before retaining overlap.
+  Keep bounded reads, complete-file hashes and rejection of longer identifiers;
+  cover 255–4,096-byte synthetic identifiers without imposing a shorter limit.
+- Require complete firmware version identifiers during offline inspection;
+  reject target prefixes inside longer model/build strings, including when
+  the continuation arrives in the next read chunk. Preserve actual EOF,
+  delimited markers, complete-file hashes and bounded overlap. Add API and
+  CLI regressions proving that a matching file hash cannot override a version
+  mismatch in root-readiness. Existing matches remain evidence, not firmware
+  authentication or permission to flash.
+- Stop secret prompts before Python's visible-input fallback can read a
+  password or device passphrase. Return sanitized errors on unavailable hidden
+  input, EOF, or input-layer failures; preserve existing output on failure.
+  Bound explicit stdin reads to the supported credential lengths, reject
+  oversized values without silent truncation, and retain LF/CRLF support and
+  two-secret input ordering. Add synthetic fallback, failure, boundary, and
+  CLI artifact-preservation regressions; document safe input in both READMEs.
+- Redact Wi-Fi credential aliases including `KeyPassphrase`, `PreSharedKey`,
+  `wifi_psk`, and `WPA_PSK` in supported text/JSON/XML report forms. Cover case,
+  separator, quoting, XML attribute-order and entity-encoded field-name variants
+  with API, CLI and property-based regressions. Earlier versions may retain
+  these values even when redaction reports success; manually review any older
+  reports before sharing them.
+- Remind users after successful redaction that manual review is required,
+  unrecognized sensitive fields may remain, and configuration backups must not
+  be uploaded. Preserve owner-only output and never print report contents.
+  This does not establish exact-device configuration or firmware support.
+- Preserve masking of command-line option assignments and field names with
+  Unicode vendor prefixes or repeated separators. Keep long-token regression
+  checks so broader field matching does not repeatedly scan each suffix.
 - Add standard CPython 3.15 to package classifiers, the Windows/Linux/macOS
   test matrix, and release SBOM requirements. Use prerelease fallback until
   final is available; current local validation uses Python 3.15.0rc2.

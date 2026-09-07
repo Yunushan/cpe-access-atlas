@@ -7,6 +7,7 @@ import argparse
 import getpass
 import json
 import sys
+import warnings
 from pathlib import Path
 
 from . import __version__
@@ -325,13 +326,34 @@ def _read_secret(
     stdin_name: str,
     prompt: str,
     label: str,
+    *,
+    max_chars: int,
 ) -> str:
-    if getattr(args, stdin_name, False):
-        value = sys.stdin.readline().rstrip("\r\n")
-    else:
-        value = getpass.getpass(prompt)
+    try:
+        if getattr(args, stdin_name, False):
+            # Allow one CRLF terminator without reading an unbounded line or
+            # stripping arbitrary trailing characters into an accepted secret.
+            value = sys.stdin.readline(max_chars + 2).removesuffix("\n").removesuffix("\r")
+        else:
+            # getpass warns BEFORE its echoing fallback reads from stdin.
+            # Make that warning fatal even if the process normally ignores it.
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", getpass.GetPassWarning)
+                value = getpass.getpass(prompt)
+    except getpass.GetPassWarning as exc:
+        raise ConfigError(
+            "hidden secret input is unavailable; use a terminal with hidden input "
+            "or an explicit secret-stdin option with a private pipe or file"
+        ) from exc
+    except EOFError as exc:
+        raise ConfigError(f"{label} input ended before a value was read") from exc
+    except (OSError, UnicodeError, ValueError) as exc:
+        # Input-layer diagnostics can themselves contain private paths/data.
+        raise ConfigError(f"unable to read {label} securely") from exc
     if not value:
         raise ConfigError(f"{label} must not be empty")
+    if len(value) > max_chars:
+        raise ConfigError(f"{label} exceeds the {max_chars}-character input limit")
     return value
 
 
@@ -396,6 +418,7 @@ def command_config_generate(args: argparse.Namespace) -> int:
         "ssh_password_stdin",
         "SSH password to write into the private artifact: ",
         "SSH password",
+        max_chars=128,
     )
     if private_config is not None:
         if private_config_encrypted:
@@ -404,6 +427,7 @@ def command_config_generate(args: argparse.Namespace) -> int:
                 "device_key_stdin",
                 "H3600P device encryption passphrase: ",
                 "H3600P device encryption passphrase",
+                max_chars=32,
             )
         decoded = decode_config(
             private_config,
@@ -418,6 +442,7 @@ def command_config_generate(args: argparse.Namespace) -> int:
             "device_key_stdin",
             "H3600P device encryption passphrase: ",
             "H3600P device encryption passphrase",
+            max_chars=32,
         )
     if source_xml is None:
         source_xml = default_root_xml(ssh_password, args.username)
@@ -520,6 +545,10 @@ def command_redact(args: argparse.Namespace) -> int:
     except OSError as exc:
         raise OSError("unable to write redacted text") from exc
     print("Wrote redacted text.")
+    print(
+        "Manual review required before sharing: unrecognized sensitive fields may remain. "
+        "Never upload configuration backups."
+    )
     return 0
 
 

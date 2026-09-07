@@ -181,7 +181,9 @@ cpe-atlas redact --input raw-observations.txt --output sanitized-observations.tx
 ```
 
 Redaction is conservative assistance; manually review the output and any
-screenshots, captures, or configuration exports before sharing.
+screenshots, captures, or exported text before sharing. The command reminds you
+that unrecognized sensitive fields may remain. Keep configuration backups private;
+redaction does not make a `config.bin` safe to upload.
 
 Inspect a private firmware artifact without executing or changing it:
 
@@ -192,8 +194,12 @@ cpe-atlas firmware-inspect \
   --json
 ```
 
-This records a SHA-256 hash and scans opaque bytes for the exact build string
-and common image markers. It does not prove that an image is flashable,
+This records a SHA-256 hash and scans opaque bytes for complete H3600P build
+identifiers and common image markers. A target string embedded inside a longer
+identifier (for example, `TTN.10_2602109` or `TTN.10_260210_modified`) is not an
+exact match. Read-chunk boundaries are not treated as identifier boundaries.
+Recognizing a string does not authenticate an image or establish its installed
+version. It does not prove that an image is flashable,
 unsigned, recoverable, or safe to modify, and no proprietary firmware belongs
 in this repository or a public issue. If a hash was recorded separately, pass
 it with `--expected-sha256` to verify artifact identity; a mismatch returns a
@@ -237,6 +243,20 @@ NTFS, APFS, or ext4). Windows also requires persistent ACL support. Unsupported
 filesystems fail closed. These protections do not isolate files from the same
 account, elevated administrators, or an untrusted storage provider; keep every
 artifact in a private, trusted local directory.
+
+Secret prompts stop with an error if hidden terminal input is unavailable;
+they never fall back to visible entry. End-of-input or unreadable input also
+stops the command without printing input-layer diagnostics or replacing an
+existing artifact. For automation, explicitly select `--ssh-password-stdin`
+and/or `--device-key-stdin` and supply the values through a private pipe or
+protected file, never as command-line arguments or shell-history literals.
+When both values are needed from stdin, supply the SSH password first, then
+the device passphrase, one per line (LF or CRLF). The SSH password must be
+8–128 printable characters; the device passphrase must be exactly 32 ASCII
+characters. Stdin reads are bounded to these maximum lengths plus a line
+terminator, and oversized values are rejected, not silently truncated. These
+explicit stdin options do not disable terminal echo; do not use them for
+interactive typing into a visible terminal.
 
 This is an offline research tool, not a firmware image, root exploit, or device
 flasher. A no-input artifact uses a minimal template and does not preserve ISP
@@ -289,6 +309,10 @@ Before any future verified mutation:
 The report redactor is conservative assistance, not a proof of sanitization.
 It covers common text assignments, complete Cookie/Set-Cookie headers, quoted
 ZTE XML secret fields, serial/subscriber identifiers, and PEM private-key blocks.
+Recognized Wi-Fi credential names include `KeyPassphrase`, `PreSharedKey`,
+`wifi_psk`, and `WPA_PSK`, with common case and separator variants. These names
+are matched in text assignments, JSON, XML name/value fields, and directly named
+XML attributes and elements; this is not an exhaustive sensitive-field inventory.
 It accepts at most 8 Mi characters of UTF-8 report text; binary backups and
 unsupported or malformed formats are not safe to publish after redaction.
 It requires `--output`, never prints report contents to the terminal, and writes

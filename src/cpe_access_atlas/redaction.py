@@ -18,15 +18,23 @@ class RedactionError(ValueError):
 # The pattern below matches secret *field names* (e.g. "password", "api_key")
 # for redaction purposes; it is not a literal hardcoded secret.
 _SECRET_NAME = (
-    r"(?:password|passwd|passphrase|secret|secret[-_]?key|token|cookie|"  # noqa: S105
+    r"(?:password|passwd|(?:key[-_]?)?passphrase|pre[-_]?shared[-_]?key|"  # noqa: S105
+    r"(?:(?:wi[-_]?fi|wlan|wpa[23]?)[-_]?)?psk|"
+    r"secret|secret[-_]?key|token|cookie|"
     r"api[-_]?key|auth[-_]?token|access[-_]?token|refresh[-_]?token|"
     r"private[-_]?key|pppoe[-_]?password|sip[-_]?password|acs[-_]?password|"
     r"serial(?:[-_]?number)?|subscriber[-_]?id)"
 )
-_SENSITIVE_FIELD = re.compile(rf"(?i)(?:[A-Za-z0-9]+[-_])*{_SECRET_NAME}")
+_FIELD_PREFIX = r"[-_]*(?:[^\W_]+[-_]+)*"
+_SENSITIVE_FIELD = re.compile(rf"(?i){_FIELD_PREFIX}{_SECRET_NAME}")
+# Start only at a complete field boundary. This permits multi-part vendor
+# prefixes without rescanning every hyphen-separated suffix of a long token.
+# Prefix words accept Unicode alphanumerics; runs of separators are disjoint
+# from words so matching cannot split the same text into overlapping prefixes.
+# Leading separators preserve options such as --password= and _vendor-password=.
 _SECRET_KEY = (
-    r"(?P<key>[\"']?\b(?:[A-Za-z0-9]+[-_])?"
-    rf"{_SECRET_NAME}[\"']?)"
+    r"(?P<key>[\"']?(?<![\w-])"
+    rf"{_FIELD_PREFIX}{_SECRET_NAME}[\"']?)"
 )
 _SECRET_SEPARATOR = r"(?P<separator>\s*[:=]\s*)"  # noqa: S105 -- regex fragment, not a credential
 _SECRET_ASSIGNMENT_DOUBLE = re.compile(
@@ -48,7 +56,7 @@ _XML_ATTRIBUTE = re.compile(
     re.DOTALL,
 )
 _XML_NAME = re.compile(r"[A-Za-z_][\w:.-]*")
-_XML_SENSITIVE_NAME = re.compile(rf"(?i)(?:[A-Za-z0-9]+[:_-])*{_SECRET_NAME}")
+_XML_SENSITIVE_NAME = re.compile(rf"(?i)[-_]*(?:[^\W_]+[:_-]+)*{_SECRET_NAME}")
 _OPAQUE_SENSITIVE_CONTENT = re.compile(_SECRET_NAME, re.IGNORECASE)
 _PRIVATE_KEY_BLOCK = re.compile(
     r"(?P<begin>-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----)"

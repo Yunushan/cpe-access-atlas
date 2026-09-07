@@ -157,7 +157,7 @@ class CliTests(unittest.TestCase):
         version = "H3600P V9.0 TTN.10_260210"
         with TemporaryDirectory() as directory:
             artifact = Path(directory) / "firmware.bin"
-            artifact.write_bytes(b"header" + version.encode("ascii"))
+            artifact.write_bytes(b"header\x00" + version.encode("ascii"))
             expected_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
             code, stdout, stderr = self.run_cli(
                 [
@@ -206,7 +206,7 @@ class CliTests(unittest.TestCase):
         version = "H3600P V9.0 TTN.10_260210"
         with TemporaryDirectory() as directory:
             artifact = Path(directory) / "firmware.bin"
-            artifact.write_bytes(b"header" + version.encode("ascii"))
+            artifact.write_bytes(b"header\x00" + version.encode("ascii"))
             code, stdout, stderr = self.run_cli(
                 [
                     "root-readiness",
@@ -247,7 +247,7 @@ class CliTests(unittest.TestCase):
         version = "H3600P V9.0 TTN.10_260210"
         with TemporaryDirectory() as directory:
             artifact = Path(directory) / "firmware.bin"
-            artifact.write_bytes(b"header" + version.encode("ascii"))
+            artifact.write_bytes(b"header\x00" + version.encode("ascii"))
             with patch(
                 "cpe_access_atlas.cli._recipe_from_args",
                 return_value=replace(
@@ -696,6 +696,37 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("secret", stdout)
             self.assertNotIn("secret", output.read_text(encoding="utf-8"))
 
+    def test_redact_wifi_credentials_privately_and_require_manual_review(self) -> None:
+        original = (
+            '{"wifi_psk":"SYNTHETIC_WIFI_CREDENTIAL"}\n'
+            '<DM name="KeyPassphrase" val="SYNTHETIC_WIFI_CREDENTIAL"/>\n'
+            "<DM val='SYNTHETIC_WIFI_CREDENTIAL' name='PreSharedKey'/>\n"
+            '<DM name="WPA_PSK" val="SYNTHETIC_WIFI_CREDENTIAL"/>\n'
+            "UnknownField=manual-review-needed\n"
+        )
+        for from_stdin in (False, True):
+            with self.subTest(from_stdin=from_stdin), TemporaryDirectory() as directory:
+                source, output = Path(directory) / "source.txt", Path(directory) / "redacted.txt"
+                source.write_text(original, encoding="utf-8")
+                args = ["redact", "--output", str(output)]
+                if not from_stdin:
+                    args.extend(["--input", str(source)])
+                with patch("cpe_access_atlas.cli.sys.stdin", StringIO(original)):
+                    code, stdout, stderr = self.run_cli(args)
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertEqual(
+                    output.read_text(encoding="utf-8"),
+                    original.replace("SYNTHETIC_WIFI_CREDENTIAL", "[REDACTED]"),
+                )
+                self.assertEqual(source.read_text(encoding="utf-8"), original)
+                self.assertNotIn("SYNTHETIC_WIFI_CREDENTIAL", stdout)
+                self.assertNotIn("manual-review-needed", stdout)
+                self.assertNotIn(str(output), stdout)
+                self.assertIn("Manual review required before sharing", stdout)
+                self.assertIn("unrecognized sensitive fields may remain", stdout)
+                self.assertIn("Never upload configuration backups", stdout)
+                self.assertEqual(list(Path(directory).glob(".redacted.txt.*")), [])
+
     def test_redact_rejects_invalid_text_encoding_cleanly(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "invalid.txt"
@@ -742,7 +773,7 @@ class CliTests(unittest.TestCase):
         version = "H3600P V9.0 TTN.10_260210"
         with TemporaryDirectory() as directory:
             artifact = Path(directory) / "firmware.bin"
-            artifact.write_bytes(b"header\x27\x05\x19\x56" + version.encode("ascii"))
+            artifact.write_bytes(b"header\x27\x05\x19\x56\x00" + version.encode("ascii"))
 
             code, stdout, stderr = self.run_cli(["firmware-inspect", "--input", str(artifact)])
             self.assertEqual((code, stderr), (0, ""))
@@ -796,6 +827,68 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(stderr, "")
             self.assertIn("SHA-256 match:     no", stdout)
+
+    def test_firmware_and_readiness_reject_version_prefix_even_with_matching_hash(self) -> None:
+        version = "H3600P V9.0 TTN.10_260210"
+        content = version.encode("ascii") + b"9"
+        recipe = find_recipe("turk-telekom", "H3600P", "V9.0", version)
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "synthetic.bin"
+            artifact.write_bytes(content)
+            expected_hash = hashlib.sha256(content).hexdigest()
+            # Put the extra date digit in the next read. Even an otherwise
+            # verified synthetic recipe must not accept this longer version.
+            with (
+                patch("cpe_access_atlas.firmware._CHUNK_SIZE", len(version)),
+                patch(
+                    "cpe_access_atlas.cli._recipe_from_args",
+                    return_value=replace(
+                        recipe,
+                        status="verified",
+                        blockers=(),
+                        hardware_revision_status="exact",
+                        access={**recipe.access, "local_root_shell": "verified"},
+                    ),
+                ),
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "firmware-inspect",
+                        "--input",
+                        str(artifact),
+                        "--expected-version",
+                        version,
+                        "--expected-sha256",
+                        expected_hash,
+                        "--json",
+                    ]
+                )
+                self.assertEqual((code, stderr), (1, ""))
+                inspection = json.loads(stdout)
+                self.assertFalse(inspection["exact_build_match"])
+                self.assertTrue(inspection["sha256_match"])
+                self.assertEqual(inspection["version_strings"], [])
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "root-readiness",
+                        *TARGET,
+                        "--firmware-input",
+                        str(artifact),
+                        "--expected-sha256",
+                        expected_hash,
+                        "--json",
+                    ]
+                )
+                self.assertEqual((code, stderr), (1, ""))
+                readiness = json.loads(stdout)
+                self.assertEqual(readiness["decision"], "STOP")
+                self.assertFalse(readiness["checks"]["firmware_exact_build_match"])
+                self.assertFalse(readiness["checks"]["firmware_evidence_matches"])
+                self.assertFalse(readiness["checks"]["firmware_identity_verified"])
+                self.assertTrue(readiness["checks"]["firmware_sha256_match"])
+                self.assertFalse(readiness["device_io_attempted"])
+            self.assertEqual(artifact.read_bytes(), content)
+            self.assertEqual(list(Path(directory).iterdir()), [artifact])
 
     def test_firmware_inspection_errors_are_controlled(self) -> None:
         code, stdout, stderr = self.run_cli(["firmware-inspect", "--input", "does-not-exist.bin"])
