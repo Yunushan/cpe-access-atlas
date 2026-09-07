@@ -194,8 +194,12 @@ cpe-atlas firmware-inspect \
   --json
 ```
 
-This records a SHA-256 hash and scans opaque bytes for the exact build string
-and common image markers. It does not prove that an image is flashable,
+This records a SHA-256 hash and scans opaque bytes for complete H3600P build
+identifiers and common image markers. A target string embedded inside a longer
+identifier (for example, `TTN.10_2602109` or `TTN.10_260210_modified`) is not an
+exact match. Read-chunk boundaries are not treated as identifier boundaries.
+Recognizing a string does not authenticate an image or establish its installed
+version. It does not prove that an image is flashable,
 unsigned, recoverable, or safe to modify, and no proprietary firmware belongs
 in this repository or a public issue. If a hash was recorded separately, pass
 it with `--expected-sha256` to verify artifact identity; a mismatch returns a

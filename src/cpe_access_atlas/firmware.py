@@ -30,7 +30,9 @@ class FirmwareInspection:
 
 _CHUNK_SIZE = 1024 * 1024
 _SCAN_OVERLAP = 256
-_VERSION_PATTERN = re.compile(rb"(?i)H3600P\s+V9\.0\s+TTN\.\d+_\d{6}")
+_VERSION_PATTERN = re.compile(
+    rb"(?i)(?<![a-z0-9_.+-])H3600P\s+V9\.0\s+TTN\.\d+_\d{6}(?![a-z0-9_.+-])"
+)
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 _MARKERS = (
     ("uImage", b"\x27\x05\x19\x56"),
@@ -43,6 +45,17 @@ _MARKERS = (
     ("Linux", b"Linux version"),
     ("Buildroot", b"Buildroot"),
 )
+
+
+def _scan_versions(data: bytes, *, begins_file: bool, ends_file: bool) -> set[str]:
+    """Require real token boundaries, not the artificial edges of a read window."""
+
+    versions: set[str] = set()
+    for match in _VERSION_PATTERN.finditer(data):
+        if (match.start() == 0 and not begins_file) or (match.end() == len(data) and not ends_file):
+            continue
+        versions.add(match.group().decode("ascii"))
+    return versions
 
 
 def _validate_arguments(
@@ -91,12 +104,18 @@ def inspect_firmware(
                 scan_data = overlap + chunk
                 digest.update(chunk)
                 size += len(chunk)
-                for match in _VERSION_PATTERN.finditer(scan_data):
-                    versions.add(match.group().decode("ascii"))
+                # Defer a candidate at the read boundary until its following
+                # byte (or actual EOF) is known. Retained overlap isn't BOF.
+                versions.update(
+                    _scan_versions(scan_data, begins_file=size == len(scan_data), ends_file=False)
+                )
                 for name, signature in _MARKERS:
                     if signature in scan_data:
                         markers.add(name)
                 overlap = scan_data[-_SCAN_OVERLAP:]
+            versions.update(
+                _scan_versions(overlap, begins_file=size == len(overlap), ends_file=True)
+            )
     except OSError as exc:
         raise FirmwareInspectionError(f"unable to read firmware artifact: {exc}") from exc
 

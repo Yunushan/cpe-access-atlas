@@ -4,6 +4,13 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Require complete firmware version identifiers during offline inspection;
+  reject target prefixes inside longer model/build strings, including when
+  the continuation arrives in the next read chunk. Preserve actual EOF,
+  delimited markers, complete-file hashes and bounded overlap. Add API and
+  CLI regressions proving that a matching file hash cannot override a version
+  mismatch in root-readiness. Existing matches remain evidence, not firmware
+  authentication or permission to flash.
 - Stop secret prompts before Python's visible-input fallback can read a
   password or device passphrase. Return sanitized errors on unavailable hidden
   input, EOF, or input-layer failures; preserve existing output on failure.

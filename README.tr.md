@@ -126,6 +126,11 @@ Bu komut firmware dosyasını yalnızca opak baytlar olarak hash'ler ve tarar;
 mevcut TTN.10 kaydı için beklenen sonuç `STOP`'tur. Modeme bağlanmaz,
 konfigürasyon üretmez ve hiçbir şey flash'lamaz. `cpe-atlas firmware-inspect`
 özel firmware dosyasında aynı güvenli hash ve sürüm kontrolünü yapar.
+Sürüm taraması, daha uzun bir adın içindeki öneki (örneğin
+`TTN.10_2602109` veya `TTN.10_260210_modified`) tam sürüm eşleşmesi saymaz;
+okuma parçalarının sınırı da sürüm adının sonu olarak kabul edilmez. Bir sürüm
+metninin bulunması firmware'in özgünlüğünü veya güvenli yüklenebilirliğini
+kanıtlamaz.
 `config-generate` çevrimdışı bir araştırma aracıdır; root açığı veya firmware
 yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
