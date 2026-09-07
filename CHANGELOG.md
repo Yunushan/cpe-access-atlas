@@ -4,6 +4,17 @@ All notable changes are documented here.
 
 ## Unreleased
 
+## 0.4.0a3 - 2026-09-07
+
+Experimental privacy-hardening and Python 3.15 prerelease-validation release.
+Manually review reports produced by older versions before sharing: earlier
+redaction could retain Wi-Fi credentials. Redaction is still assistance, not
+proof that a report or binary configuration backup is safe to upload.
+Exact-device configuration acceptance, root access, flashing safety and
+recovery remain unverified; `apply` stays fail-closed. Vendor-compatible
+cryptography retains its documented security limitations. Python 3.15 testing
+uses RC2, not the final release.
+
 - Preserve the leading boundary of complete long firmware identifiers at EOF
   and read boundaries by checking one byte ahead before retaining overlap.
   Keep bounded reads, complete-file hashes and rejection of longer identifiers;
