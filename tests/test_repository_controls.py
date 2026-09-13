@@ -273,6 +273,26 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn('python: ["3.11", "3.12", "3.13", "3.14", "3.15"]', ci)
         self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", ci)
 
+    def test_validation_workflows_avoid_duplicate_branch_push_runs(self) -> None:
+        for name in ("ci", "security", "secret-scan", "codeql"):
+            workflow = (ROOT / ".github/workflows" / f"{name}.yml").read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn("  push:\n    branches: [main]\n", workflow)
+                self.assertIn("  pull_request:\n", workflow)
+                self.assertIn("  workflow_call:\n", workflow)
+                self.assertNotIn("  push:\n\n", workflow)
+
+    def test_release_blocks_open_codeql_alerts_before_publication(self) -> None:
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("      security-events: read", release)
+        gate = release.index("- name: Verify no open CodeQL alerts")
+        self.assertLess(gate, release.index("- name: Install release tooling"))
+        self.assertIn("code-scanning/alerts?state=open", release)
+        self.assertIn("--paginate", release)
+        self.assertIn('page_counts="$(gh api --paginate', release)
+        self.assertIn("--jq 'length')\"", release)
+        self.assertIn("open_alerts=$((open_alerts + page_count))", release)
+
     def test_actual_built_archive_is_checked_before_package_install_or_publication(self) -> None:
         for name in ("ci", "release"):
             workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")

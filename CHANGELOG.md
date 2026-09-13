@@ -4,6 +4,10 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Run validation workflows on pull requests and `main` pushes only, avoiding
+  duplicate checks for the same feature-branch commit.
+- Block release publication before build work when the open CodeQL alert
+  inventory is nonempty or cannot be read.
 - Require a separate `--acknowledge-legacy-crypto` opt-in before generating or
   preserving encrypted vendor-format artifacts; keep the cryptographic risk
   distinct from exact-firmware compatibility acknowledgement.

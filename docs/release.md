@@ -32,6 +32,11 @@ checks or independent push workflows cannot satisfy this dependency graph.
 No publishing job runs if a prerequisite workflow fails or is cancelled.
 The pull-request-only dependency-review job remains intentionally skipped on
 release-tag pushes; dependency-audit still runs and is required.
+Validation workflows run on pull requests and on pushes to `main`; feature
+branch pushes are not run a second time when the same commit is tested by its
+pull request. The release job also queries the open CodeQL alert inventory and
+stops before building or publishing if any alert remains. An inaccessible
+alert inventory is a failure, not an implicit clean result.
 
 Python 3.15 is included in both matrices, with prerelease fallback until final
 is available. Each 3.15 CI job also builds wheel/sdist artifacts, tests the

@@ -114,6 +114,7 @@ jobs:
       attestations: write
       contents: write
       id-token: write
+      security-events: read
     environment:
       name: release
     steps:
@@ -124,6 +125,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
+      - name: Verify no open CodeQL alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          page_counts="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
+            --jq 'length')"
+          open_alerts=0
+          while IFS= read -r page_count; do
+            [ -n "$page_count" ] || continue
+            open_alerts=$((open_alerts + page_count))
+          done <<< "$page_counts"
+          if [ "$open_alerts" -ne 0 ]; then
+            echo "Release blocked: $open_alerts open CodeQL alert(s) remain."
+            exit 1
+          fi
       - name: Install release tooling
         run: |
           python -m pip install --require-hashes -r requirements-release.lock
