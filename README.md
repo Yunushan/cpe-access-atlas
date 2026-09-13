@@ -67,7 +67,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
 | Linux root shell | Not supported |
-| Last evidence review | 2026-08-15 |
+| Last evidence review | 2026-09-13 |
 
 Public community evidence says the older provisioning interception workflow
 does not work on this build. No official firmware image, recovery-tested
@@ -220,6 +220,7 @@ cpe-atlas config-generate \
   --firmware "H3600P V9.0 TTN.10_260210" \
   --output h3600p-config.bin \
   --allow-unencrypted \
+  --acknowledge-unverified-compatibility \
   --i-own-or-administer-this-device
 ```
 
@@ -243,6 +244,12 @@ NTFS, APFS, or ext4). Windows also requires persistent ACL support. Unsupported
 filesystems fail closed. These protections do not isolate files from the same
 account, elevated administrators, or an untrusted storage provider; keep every
 artifact in a private, trusted local directory.
+
+For a `blocked`, `researching`, or otherwise not-exact target, the command also
+requires `--acknowledge-unverified-compatibility`. This is a deliberate risk
+acknowledgement, not evidence that the firmware accepts the artifact, enables
+root access, preserves ISP services, or has a recovery path. It does not enable
+device connections, flashing, or the fail-closed `apply` command.
 
 Secret prompts stop with an error if hidden terminal input is unavailable;
 they never fall back to visible entry. End-of-input or unreadable input also

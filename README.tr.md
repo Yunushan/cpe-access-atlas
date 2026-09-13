@@ -59,7 +59,7 @@ Bir ISS'nin listede bulunması tüm modemlerinin desteklendiği anlamına gelmez
 | Standart yerel web yöneticisi | ISS tarafından destekleniyor |
 | Ayrıcalıklı web yöneticisi | Engelli; araştırma gerekli |
 | Linux root kabuğu | Desteklenmiyor |
-| Son kanıt incelemesi | 13 Ağustos 2026 |
+| Son kanıt incelemesi | 13 Eylül 2026 |
 
 Ayrıntılar için [uyumluluk tablosuna](SUPPORT.md) ve
 [tam sürüm araştırma notuna](docs/research/zte-h3600p-ttn10-260210.md) bakın.
@@ -132,7 +132,10 @@ okuma parçalarının sınırı da sürüm adının sonu olarak kabul edilmez. B
 metninin bulunması firmware'in özgünlüğünü veya güvenli yüklenebilirliğini
 kanıtlamaz.
 `config-generate` çevrimdışı bir araştırma aracıdır; root açığı veya firmware
-yükleyicisi değildir. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
+yükleyicisi değildir. Engelli veya tam doğrulanmamış hedeflerde ayrıca
+`--acknowledge-unverified-compatibility` seçeneği gerekir. Bu seçenek yalnızca
+riskin kabul edildiğini belirtir; firmware kabulünü, root erişimini veya kurtarma
+yolunu kanıtlamaz. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
 Parola istemleri, gizli terminal girişi sağlanamıyorsa görünür girişe geçmek
 yerine hata vererek durur. Giriş sonlanırsa veya okunamazsa özel tanılama

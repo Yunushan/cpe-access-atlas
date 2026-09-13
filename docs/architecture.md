@@ -44,6 +44,10 @@ CLI
    remain private and under the user's control; same-account access, elevated
    administrators, and untrusted storage providers are outside this protection.
    The CLI does not print credential-bearing configuration or redaction output.
+   `config-generate` additionally requires an explicit
+   `--acknowledge-unverified-compatibility` opt-in whenever the selected recipe
+   is not verified/stable or its hardware revision is not exact. That opt-in
+   records acceptance of the compatibility risk; it never enables device I/O.
 
 The experimental codec reproduces vendor key derivation and AES-CBC container
 behavior; it is not a general-purpose secure backup format. See the

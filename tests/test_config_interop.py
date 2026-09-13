@@ -226,6 +226,7 @@ class ConfigInteropTests(unittest.TestCase):
                         _COORDINATES["serial"],
                         "--mac",
                         _COORDINATES["mac"],
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )

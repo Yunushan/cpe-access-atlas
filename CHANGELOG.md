@@ -4,6 +4,12 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Require an explicit `--acknowledge-unverified-compatibility` opt-in before
+  generating offline configuration artifacts for blocked, researching, or
+  non-exact targets. Keep the existing ownership and unencrypted-output
+  acknowledgements separate, and document that this opt-in does not prove
+  firmware acceptance, root access, service preservation, or recovery.
+
 ## 0.4.0a3 - 2026-09-07
 
 Experimental privacy-hardening and Python 3.15 prerelease-validation release.

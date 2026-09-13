@@ -367,6 +367,15 @@ def command_config_generate(args: argparse.Namespace) -> int:
         return 3
 
     if (
+        recipe.status not in {"verified", "stable"} or recipe.hardware_revision_status != "exact"
+    ) and not args.acknowledge_unverified_compatibility:
+        raise ConfigError(
+            "exact firmware acceptance and recovery are unverified; pass "
+            "--acknowledge-unverified-compatibility to generate an offline artifact "
+            "while accepting that the target may reject it and recovery may be unavailable"
+        )
+
+    if (
         recipe.vendor != "ZTE"
         or recipe.model != "H3600P V9"
         or recipe.hardware_revision != "V9.0"
@@ -731,6 +740,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--i-own-or-administer-this-device",
         action="store_true",
         help="acknowledge ownership or explicit authorization",
+    )
+    config_generate.add_argument(
+        "--acknowledge-unverified-compatibility",
+        action="store_true",
+        help=(
+            "acknowledge exact firmware acceptance and recovery are unverified "
+            "(offline artifact only)"
+        ),
     )
     config_generate.set_defaults(func=command_config_generate)
 
