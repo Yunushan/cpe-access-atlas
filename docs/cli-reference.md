@@ -78,6 +78,7 @@ usage: cpe-atlas config-generate [-h] --isp ISP --model MODEL
                                  [--encrypted | --allow-unencrypted] [--raw]
                                  [--force] [--i-own-or-administer-this-device]
                                  [--acknowledge-unverified-compatibility]
+                                 [--acknowledge-legacy-crypto]
 
 options:
   -h, --help            show this help message and exit
@@ -112,6 +113,9 @@ options:
   --acknowledge-unverified-compatibility
                         acknowledge exact firmware acceptance and recovery are
                         unverified (offline artifact only)
+  --acknowledge-legacy-crypto
+                        acknowledge the vendor codec's legacy SHA-256
+                        derivation and unauthenticated CBC
 ```
 
 ## `cpe-atlas devices`

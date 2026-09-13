@@ -227,6 +227,7 @@ class ConfigInteropTests(unittest.TestCase):
                         "--mac",
                         _COORDINATES["mac"],
                         "--acknowledge-unverified-compatibility",
+                        "--acknowledge-legacy-crypto",
                         "--i-own-or-administer-this-device",
                     ]
                 )

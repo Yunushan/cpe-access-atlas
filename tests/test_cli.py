@@ -17,8 +17,13 @@ from xml.etree import ElementTree as ET
 
 from cpe_access_atlas import __version__
 from cpe_access_atlas.catalog import find_recipe
-from cpe_access_atlas.cli import _configure_stdio, main
-from cpe_access_atlas.config import decode_config, default_root_xml, encode_config
+from cpe_access_atlas.cli import _configure_stdio, _paths_alias, main
+from cpe_access_atlas.config import (
+    ConfigError,
+    decode_config,
+    default_root_xml,
+    encode_config,
+)
 
 TARGET = [
     "--isp",
@@ -70,6 +75,25 @@ class CliTests(unittest.TestCase):
             patch("cpe_access_atlas.cli.sys.stderr", stderr),
         ):
             _configure_stdio()
+
+    def test_path_alias_falls_back_when_samefile_is_unavailable(self) -> None:
+        with TemporaryDirectory() as directory:
+            left = Path(directory) / "baseline.bin"
+            right = Path(directory) / "output.bin"
+            left.write_bytes(b"baseline")
+            right.write_bytes(b"output")
+            with patch.object(Path, "samefile", side_effect=OSError("unsupported")):
+                self.assertFalse(_paths_alias(left, right))
+
+    def test_path_alias_reports_resolution_failure(self) -> None:
+        with TemporaryDirectory() as directory:
+            left = Path(directory) / "baseline.bin"
+            right = Path(directory) / "output.bin"
+            left.write_bytes(b"baseline")
+            right.write_bytes(b"output")
+            with patch.object(Path, "resolve", side_effect=OSError("unavailable")):
+                with self.assertRaisesRegex(ConfigError, "unable to compare"):
+                    _paths_alias(left, right)
 
     def test_status_reports_blocked_and_no_change(self) -> None:
         code, stdout, stderr = self.run_cli(["status", *TARGET])
@@ -414,6 +438,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(fields["SSH_PassWord"], "DummyPass123")
         self.assertEqual(fields["SSH_Level"], "1")
 
+    def test_config_generate_requires_legacy_crypto_ack_before_prompting(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "encrypted.bin"
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--encrypted",
+                        "--serial",
+                        "ZTE12345678",
+                        "--mac",
+                        "00:11:22:33:44:55",
+                        "--acknowledge-unverified-compatibility",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("acknowledge-legacy-crypto", stderr)
+        self.assertFalse(output.exists())
+        prompt.assert_not_called()
+
     def test_config_generate_patches_private_config_baseline(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "private-config.bin"
@@ -461,6 +509,7 @@ class CliTests(unittest.TestCase):
                         "--ssh-password-stdin",
                         "--device-key-stdin",
                         "--acknowledge-unverified-compatibility",
+                        "--acknowledge-legacy-crypto",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -474,6 +523,31 @@ class CliTests(unittest.TestCase):
         self.assertIn("encrypted type-4", stdout)
         self.assertNotIn("NewPass123", stdout + stderr)
         self.assertIn(b'val="NewPass123"', decoded.xml)
+
+    def test_config_generate_refuses_overwriting_private_baseline_even_with_force(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "private-config.bin"
+            original = encode_config(default_root_xml("OldPass123"))
+            source.write_bytes(original)
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--input-config",
+                        str(source),
+                        "--output",
+                        str(source),
+                        "--force",
+                        "--allow-unencrypted",
+                        "--acknowledge-unverified-compatibility",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("output path must differ", stderr)
+            self.assertEqual(source.read_bytes(), original)
+            prompt.assert_not_called()
 
     def test_config_generate_reads_encrypted_private_baseline(self) -> None:
         with TemporaryDirectory() as directory:
@@ -505,6 +579,7 @@ class CliTests(unittest.TestCase):
                         "--mac",
                         "00:11:22:33:44:55",
                         "--acknowledge-unverified-compatibility",
+                        "--acknowledge-legacy-crypto",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -601,6 +676,7 @@ class CliTests(unittest.TestCase):
                         str(output),
                         "--encrypted",
                         "--acknowledge-unverified-compatibility",
+                        "--acknowledge-legacy-crypto",
                         "--i-own-or-administer-this-device",
                     ]
                 )

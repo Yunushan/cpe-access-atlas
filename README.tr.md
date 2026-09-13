@@ -137,6 +137,11 @@ yükleyicisi değildir. Engelli veya tam doğrulanmamış hedeflerde ayrıca
 riskin kabul edildiğini belirtir; firmware kabulünü, root erişimini veya kurtarma
 yolunu kanıtlamaz. Oluşturulan dosyalar ve mevcut yedekler gizli tutulmalıdır.
 
+Şifreli çıktı için ayrıca `--acknowledge-legacy-crypto` gerekir. ZTE uyumlu
+format eski SHA-256 türetmesi ve kimlik doğrulamasız CBC kullanır; bu onay onu
+modern ve güvenli bir yedekleme formatına dönüştürmez. `--force` kullanılsa bile
+özel yedeğin üzerine yazılmaz; çıktı yolunu orijinal yedekten farklı tutun.
+
 Parola istemleri, gizli terminal girişi sağlanamıyorsa görünür girişe geçmek
 yerine hata vererek durur. Giriş sonlanırsa veya okunamazsa özel tanılama
 ayrıntıları yazdırılmaz ve mevcut çıktı dosyası değiştirilmez. Otomasyonda

@@ -230,9 +230,12 @@ and writes a local, base64-wrapped compressed configuration artifact. To
 preserve an existing private baseline, add `--input-config config.bin`;
 encrypted type-4 baselines also require the device serial, lower-case MAC
 address, and the device-specific encryption passphrase. Encrypted input is
-preserved by default; use `--encrypted` with the serial, MAC, and passphrase to
-request encrypted output from another baseline or a new template. Passphrases
-are read locally and never printed. Use `--input-xml` only with a private
+preserved by default; use `--encrypted` with the serial, MAC, passphrase, and
+`--acknowledge-legacy-crypto` to request encrypted output from another baseline
+or a new template. This acknowledgement is required because the vendor format
+uses legacy SHA-256 derivation and unauthenticated CBC; it does not make the
+artifact a modern secure backup. Passphrases are read locally and never
+printed. Use `--input-xml` only with a private
 decoded XML baseline. `--raw` emits the raw binary container. Generated config
 files are atomically written with owner-only POSIX permissions or an explicit,
 protected Windows ACL granted only to the creating account. On Windows, the
@@ -243,7 +246,9 @@ control, and support hard links for no-overwrite publication (for example,
 NTFS, APFS, or ext4). Windows also requires persistent ACL support. Unsupported
 filesystems fail closed. These protections do not isolate files from the same
 account, elevated administrators, or an untrusted storage provider; keep every
-artifact in a private, trusted local directory.
+artifact in a private, trusted local directory. The output path must differ
+from the input baseline, even with `--force`, so the original backup cannot be
+replaced.
 
 For a `blocked`, `researching`, or otherwise not-exact target, the command also
 requires `--acknowledge-unverified-compatibility`. This is a deliberate risk

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -63,6 +64,24 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
         help="exact hardware revision recorded in the catalog",
     )
     parser.add_argument("--firmware", required=True, help="exact firmware string")
+
+
+def _paths_alias(left: Path, right: Path) -> bool:
+    """Return whether two user-selected paths identify the same file path."""
+
+    try:
+        if left.exists() and right.exists() and left.samefile(right):
+            return True
+    except OSError:
+        # The normalized resolved paths below still catch ordinary aliases when
+        # samefile is unavailable (for example, before a destination exists).
+        pass
+    try:
+        return os.path.normcase(str(left.resolve(strict=False))) == os.path.normcase(
+            str(right.resolve(strict=False))
+        )
+    except OSError as exc:
+        raise ConfigError("unable to compare the private baseline and output paths") from exc
 
 
 def _parse_timeout_argument(value: str) -> float:
@@ -386,6 +405,11 @@ def command_config_generate(args: argparse.Namespace) -> int:
         )
 
     output = Path(args.output)
+    baseline = args.input_config or args.input_xml
+    if baseline is not None and _paths_alias(Path(baseline), output):
+        raise ConfigError(
+            "output path must differ from the private baseline; keep the original backup"
+        )
     if output.exists() and not args.force:
         print(
             "Refused: output artifact already exists; use --force to replace it.",
@@ -421,6 +445,11 @@ def command_config_generate(args: argparse.Namespace) -> int:
         )
     if encrypted_output and (not args.serial or not args.mac):
         raise ConfigError("encrypted output requires --serial and --mac")
+    if encrypted_output and not args.acknowledge_legacy_crypto:
+        raise ConfigError(
+            "vendor-compatible encryption uses legacy SHA-256 derivation and unauthenticated "
+            "CBC; pass --acknowledge-legacy-crypto to accept this compatibility risk"
+        )
 
     ssh_password = _read_secret(
         args,
@@ -748,6 +777,11 @@ def build_parser() -> argparse.ArgumentParser:
             "acknowledge exact firmware acceptance and recovery are unverified "
             "(offline artifact only)"
         ),
+    )
+    config_generate.add_argument(
+        "--acknowledge-legacy-crypto",
+        action="store_true",
+        help=("acknowledge the vendor codec's legacy SHA-256 derivation and unauthenticated CBC"),
     )
     config_generate.set_defaults(func=command_config_generate)
 
