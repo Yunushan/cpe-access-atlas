@@ -4,6 +4,11 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Require a separate `--acknowledge-legacy-crypto` opt-in before generating or
+  preserving encrypted vendor-format artifacts; keep the cryptographic risk
+  distinct from exact-firmware compatibility acknowledgement.
+- Refuse to use the same path for an input baseline and generated output, even
+  with `--force`, so an original private backup cannot be replaced accidentally.
 - Require an explicit `--acknowledge-unverified-compatibility` opt-in before
   generating offline configuration artifacts for blocked, researching, or
   non-exact targets. Keep the existing ownership and unencrypted-output

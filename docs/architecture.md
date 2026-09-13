@@ -48,6 +48,10 @@ CLI
    `--acknowledge-unverified-compatibility` opt-in whenever the selected recipe
    is not verified/stable or its hardware revision is not exact. That opt-in
    records acceptance of the compatibility risk; it never enables device I/O.
+   Encrypted output additionally requires
+   `--acknowledge-legacy-crypto`, because the vendor-compatible format uses
+   legacy SHA-256 derivation and unauthenticated CBC. A baseline and its output
+   may not be the same path, even with replacement explicitly requested.
 
 The experimental codec reproduces vendor key derivation and AES-CBC container
 behavior; it is not a general-purpose secure backup format. See the

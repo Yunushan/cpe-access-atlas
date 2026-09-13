@@ -94,6 +94,10 @@ doivent rester privés.
 v0.4.0a1 ou une version antérieure : la dérivation des clés était incorrecte.
 Gardez la sauvegarde originale privée. Le [correctif v0.4.0a2](docs/config-cryptography.md)
 ne prouve ni la sûreté de l'importation ni l'accès root sur ce firmware précis.
+Une sortie chiffrée exige aussi `--acknowledge-legacy-crypto`. Le format
+constructeur utilise une dérivation SHA-256 ancienne et CBC sans authentification;
+cette confirmation n'en fait pas une sauvegarde moderne et sûre. Même avec
+`--force`, le chemin de sortie doit être différent de la sauvegarde privée.
 
 Dans cette version, `apply` est volontairement fermé par défaut et ne
 modifie pas cette cible bloquée.

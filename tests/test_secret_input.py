@@ -182,6 +182,7 @@ class SecretInputTests(unittest.TestCase):
                                     "--mac",
                                     "00:11:22:33:44:55",
                                     "--acknowledge-unverified-compatibility",
+                                    "--acknowledge-legacy-crypto",
                                     "--i-own-or-administer-this-device",
                                 ]
                             )
@@ -216,6 +217,7 @@ class SecretInputTests(unittest.TestCase):
                         "--ssh-password-stdin",
                         "--device-key-stdin",
                         "--acknowledge-unverified-compatibility",
+                        "--acknowledge-legacy-crypto",
                         "--i-own-or-administer-this-device",
                     ]
                 )
