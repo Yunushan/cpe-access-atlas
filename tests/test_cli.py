@@ -292,6 +292,60 @@ class CliTests(unittest.TestCase):
         self.assertIn("acknowledgement", stderr)
         prompt.assert_not_called()
 
+    def test_config_generate_requires_unverified_compatibility_ack_before_prompting(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "config.bin"
+            with patch("cpe_access_atlas.cli.getpass.getpass") as prompt:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("acknowledge-unverified-compatibility", stderr)
+        self.assertFalse(output.exists())
+        prompt.assert_not_called()
+
+    def test_config_generate_verified_exact_recipe_needs_no_extra_ack(self) -> None:
+        recipe = find_recipe(
+            "turk-telekom",
+            "H3600P",
+            "V9.0",
+            "H3600P V9.0 TTN.10_260210",
+        )
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "generated.bin"
+            with (
+                patch(
+                    "cpe_access_atlas.cli._recipe_from_args",
+                    return_value=replace(
+                        recipe,
+                        status="verified",
+                        blockers=(),
+                        hardware_revision_status="exact",
+                    ),
+                ),
+                patch("cpe_access_atlas.cli.getpass.getpass", return_value="DummyPass123"),
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            self.assertTrue(output.exists())
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("Wrote offline configuration artifact", stdout)
+
     def test_config_generate_from_scratch_is_local_and_round_trips(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory) / "generated.bin"
@@ -306,6 +360,7 @@ class CliTests(unittest.TestCase):
                         "--output",
                         str(output),
                         "--allow-unencrypted",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -340,6 +395,7 @@ class CliTests(unittest.TestCase):
                         "--output",
                         str(output),
                         "--allow-unencrypted",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -367,6 +423,7 @@ class CliTests(unittest.TestCase):
                         "00:11:22:33:44:55",
                         "--ssh-password-stdin",
                         "--device-key-stdin",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -410,6 +467,7 @@ class CliTests(unittest.TestCase):
                         "ZTE12345678",
                         "--mac",
                         "00:11:22:33:44:55",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -435,6 +493,7 @@ class CliTests(unittest.TestCase):
                         "--output",
                         str(output),
                         "--allow-unencrypted",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -451,6 +510,7 @@ class CliTests(unittest.TestCase):
                         "--output",
                         str(output),
                         "--allow-unencrypted",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -469,6 +529,7 @@ class CliTests(unittest.TestCase):
                         str(directory_path),
                         "--output",
                         str(directory_path / "generated.bin"),
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -484,6 +545,7 @@ class CliTests(unittest.TestCase):
                         "--output",
                         str(directory_path / "missing" / "generated.bin"),
                         "--allow-unencrypted",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -501,6 +563,7 @@ class CliTests(unittest.TestCase):
                         "--output",
                         str(output),
                         "--encrypted",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -517,6 +580,7 @@ class CliTests(unittest.TestCase):
                         str(output),
                         "--output",
                         str(Path(directory) / "other.bin"),
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -543,6 +607,7 @@ class CliTests(unittest.TestCase):
                         str(encrypted_source),
                         "--output",
                         str(Path(directory) / "from-encrypted.bin"),
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )
@@ -562,6 +627,7 @@ class CliTests(unittest.TestCase):
                             "--output",
                             str(output),
                             "--allow-unencrypted",
+                            "--acknowledge-unverified-compatibility",
                             "--i-own-or-administer-this-device",
                         ]
                     )
@@ -578,6 +644,7 @@ class CliTests(unittest.TestCase):
                         *TARGET,
                         "--output",
                         str(output),
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )

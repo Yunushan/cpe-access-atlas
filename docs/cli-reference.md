@@ -77,6 +77,7 @@ usage: cpe-atlas config-generate [-h] --isp ISP --model MODEL
                                  [--mac MAC] [--signature SIGNATURE]
                                  [--encrypted | --allow-unencrypted] [--raw]
                                  [--force] [--i-own-or-administer-this-device]
+                                 [--acknowledge-unverified-compatibility]
 
 options:
   -h, --help            show this help message and exit
@@ -108,6 +109,9 @@ options:
   --force
   --i-own-or-administer-this-device
                         acknowledge ownership or explicit authorization
+  --acknowledge-unverified-compatibility
+                        acknowledge exact firmware acceptance and recovery are
+                        unverified (offline artifact only)
 ```
 
 ## `cpe-atlas devices`

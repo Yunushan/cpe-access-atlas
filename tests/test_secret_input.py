@@ -181,6 +181,7 @@ class SecretInputTests(unittest.TestCase):
                                     "ZTE12345678",
                                     "--mac",
                                     "00:11:22:33:44:55",
+                                    "--acknowledge-unverified-compatibility",
                                     "--i-own-or-administer-this-device",
                                 ]
                             )
@@ -214,6 +215,7 @@ class SecretInputTests(unittest.TestCase):
                         "00:11:22:33:44:55",
                         "--ssh-password-stdin",
                         "--device-key-stdin",
+                        "--acknowledge-unverified-compatibility",
                         "--i-own-or-administer-this-device",
                     ]
                 )

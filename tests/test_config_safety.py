@@ -222,6 +222,7 @@ class CodecSelectionTests(unittest.TestCase):
                             "--output",
                             str(output),
                             "--allow-unencrypted",
+                            "--acknowledge-unverified-compatibility",
                             "--i-own-or-administer-this-device",
                         ]
                     )
@@ -243,6 +244,7 @@ class CodecSelectionTests(unittest.TestCase):
                             "--output",
                             str(target),
                             "--allow-unencrypted",
+                            "--acknowledge-unverified-compatibility",
                             "--i-own-or-administer-this-device",
                         ]
                     )
