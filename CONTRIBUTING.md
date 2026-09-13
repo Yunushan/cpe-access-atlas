@@ -79,6 +79,10 @@ the relevant lock files with a universal resolver, preserving environment
 markers and package hashes. They cover Python 3.11–3.15 on Windows, Linux, and
 macOS; resolving only the maintainer's interpreter misses conditional
 dependencies. See [lock maintenance](docs/release.md#dependency-lock-maintenance).
+Validation workflows run for pull requests and for pushes to `main`; pushes to
+feature branches are intentionally not duplicated because the pull-request run
+is the required merge evidence. Open or update a pull request before relying on
+CI results for a feature branch.
 Run the full validation suite and record the reason in the pull request.
 Dependabot is configured to propose updates for these files.
 
