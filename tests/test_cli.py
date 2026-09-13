@@ -346,6 +346,43 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, stderr), (0, ""))
         self.assertIn("Wrote offline configuration artifact", stdout)
 
+    def test_config_generate_reports_unsupported_codec_before_compatibility_ack(self) -> None:
+        recipe = find_recipe(
+            "turk-telekom",
+            "H3600P",
+            "V9.0",
+            "H3600P V9.0 TTN.10_260210",
+        )
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "generated.bin"
+            with (
+                patch(
+                    "cpe_access_atlas.cli._recipe_from_args",
+                    return_value=replace(
+                        recipe,
+                        vendor="unsupported-vendor",
+                        status="researching",
+                        hardware_revision_status="unresolved",
+                    ),
+                ),
+                patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--allow-unencrypted",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("no compatible offline configuration codec", stderr)
+        self.assertNotIn("acknowledge-unverified-compatibility", stderr)
+        self.assertFalse(output.exists())
+        prompt.assert_not_called()
+
     def test_config_generate_from_scratch_is_local_and_round_trips(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory) / "generated.bin"

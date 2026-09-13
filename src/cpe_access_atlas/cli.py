@@ -367,15 +367,6 @@ def command_config_generate(args: argparse.Namespace) -> int:
         return 3
 
     if (
-        recipe.status not in {"verified", "stable"} or recipe.hardware_revision_status != "exact"
-    ) and not args.acknowledge_unverified_compatibility:
-        raise ConfigError(
-            "exact firmware acceptance and recovery are unverified; pass "
-            "--acknowledge-unverified-compatibility to generate an offline artifact "
-            "while accepting that the target may reject it and recovery may be unavailable"
-        )
-
-    if (
         recipe.vendor != "ZTE"
         or recipe.model != "H3600P V9"
         or recipe.hardware_revision != "V9.0"
@@ -384,6 +375,15 @@ def command_config_generate(args: argparse.Namespace) -> int:
         raise ConfigError("no compatible offline configuration codec is registered for this target")
     if args.signature != H3600P_SIGNATURE:
         raise ConfigError("configuration signature must match the selected H3600P V9.0 codec")
+
+    if (
+        recipe.status not in {"verified", "stable"} or recipe.hardware_revision_status != "exact"
+    ) and not args.acknowledge_unverified_compatibility:
+        raise ConfigError(
+            "exact firmware acceptance and recovery are unverified; pass "
+            "--acknowledge-unverified-compatibility to generate an offline artifact "
+            "while accepting that the target may reject it and recovery may be unavailable"
+        )
 
     output = Path(args.output)
     if output.exists() and not args.force:
