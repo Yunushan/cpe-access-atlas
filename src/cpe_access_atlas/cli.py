@@ -41,6 +41,13 @@ from .policy import (
     parse_timeout,
     probe_tcp_ports,
 )
+from .private_container import (
+    MAX_CONTAINER_BYTES,
+    MAX_PRIVATE_BYTES,
+    PrivateContainerError,
+    protect_private_bytes,
+    unprotect_private_bytes,
+)
 from .private_files import write_private_bytes, write_private_text
 from .redaction import MAX_REPORT_CHARS, RedactionError, redact_text
 from .report import build_research_template
@@ -376,6 +383,19 @@ def _read_secret(
     return value
 
 
+def _read_private_file(path: str | Path, maximum: int, label: str) -> bytes:
+    try:
+        with Path(path).open("rb") as stream:
+            data = stream.read(maximum + 1)
+    except OSError as exc:
+        raise ConfigError(f"unable to read {label}") from exc
+    if not data:
+        raise ConfigError(f"{label} is empty")
+    if len(data) > maximum:
+        raise ConfigError(f"{label} exceeds the safety size limit")
+    return data
+
+
 def command_config_generate(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
     if not args.i_own_or_administer_this_device:
@@ -520,6 +540,96 @@ def command_config_generate(args: argparse.Namespace) -> int:
         "WARNING: acceptance on this exact firmware, preservation of ISP settings, "
         "and recovery are not verified. Keep the original backup private."
     )
+    return 0
+
+
+def _private_container_paths(args: argparse.Namespace) -> tuple[Path, Path] | None:
+    source = Path(args.input)
+    output = Path(args.output)
+    if _paths_alias(source, output):
+        raise ConfigError(
+            "output path must differ from the private input; keep the original artifact"
+        )
+    if output.exists() and not args.force:
+        print(
+            "Refused: output artifact already exists; use --force to replace it.",
+            file=sys.stderr,
+        )
+        return None
+    return source, output
+
+
+def command_private_protect(args: argparse.Namespace) -> int:
+    """Protect one local private artifact with an authenticated container."""
+
+    if not args.i_am_authorized_to_handle_this_private_file:
+        print(
+            "Refused: explicit authorization to handle the private file is required.",
+            file=sys.stderr,
+        )
+        return 3
+    paths = _private_container_paths(args)
+    if paths is None:
+        return 4
+    source, output = paths
+    data = _read_private_file(source, MAX_PRIVATE_BYTES, "private artifact")
+    passphrase = _read_secret(
+        args,
+        "passphrase_stdin",
+        "Private-container passphrase: ",
+        "private-container passphrase",
+        max_chars=256,
+    )
+    protected = protect_private_bytes(data, passphrase)
+    try:
+        write_private_bytes(output, protected, replace=args.force)
+    except FileExistsError:
+        print(
+            "Refused: output artifact already exists; use --force to replace it.",
+            file=sys.stderr,
+        )
+        return 4
+    except OSError as exc:
+        raise OSError("unable to write protected private artifact") from exc
+    print("Wrote authenticated private container.")
+    print("This container is for local protection only; it is not a modem-import configuration.")
+    return 0
+
+
+def command_private_unprotect(args: argparse.Namespace) -> int:
+    """Decrypt one authenticated local container into a private artifact."""
+
+    if not args.i_am_authorized_to_handle_this_private_file:
+        print(
+            "Refused: explicit authorization to handle the private file is required.",
+            file=sys.stderr,
+        )
+        return 3
+    paths = _private_container_paths(args)
+    if paths is None:
+        return 4
+    source, output = paths
+    data = _read_private_file(source, MAX_CONTAINER_BYTES, "private container")
+    passphrase = _read_secret(
+        args,
+        "passphrase_stdin",
+        "Private-container passphrase: ",
+        "private-container passphrase",
+        max_chars=256,
+    )
+    plaintext = unprotect_private_bytes(data, passphrase)
+    try:
+        write_private_bytes(output, plaintext, replace=args.force)
+    except FileExistsError:
+        print(
+            "Refused: output artifact already exists; use --force to replace it.",
+            file=sys.stderr,
+        )
+        return 4
+    except OSError as exc:
+        raise OSError("unable to write unprotected private artifact") from exc
+    print("Wrote private artifact from authenticated container.")
+    print("The output contains the original private contents; keep it protected and local.")
     return 0
 
 
@@ -810,6 +920,44 @@ def build_parser() -> argparse.ArgumentParser:
     redact.add_argument("--force", action="store_true")
     redact.set_defaults(func=command_redact)
 
+    private_protect = subparsers.add_parser(
+        "private-protect",
+        help="protect a private local artifact with scrypt and AES-GCM",
+    )
+    private_protect.add_argument("--input", required=True, help="private artifact to protect")
+    private_protect.add_argument("--output", required=True, help="protected output path")
+    private_protect.add_argument(
+        "--passphrase-stdin",
+        action="store_true",
+        help="read the protection passphrase from stdin instead of prompting",
+    )
+    private_protect.add_argument("--force", action="store_true")
+    private_protect.add_argument(
+        "--i-am-authorized-to-handle-this-private-file",
+        action="store_true",
+        help="acknowledge ownership or explicit authorization for the private file",
+    )
+    private_protect.set_defaults(func=command_private_protect)
+
+    private_unprotect = subparsers.add_parser(
+        "private-unprotect",
+        help="decrypt an authenticated private local container",
+    )
+    private_unprotect.add_argument("--input", required=True, help="protected private container")
+    private_unprotect.add_argument("--output", required=True, help="private output path")
+    private_unprotect.add_argument(
+        "--passphrase-stdin",
+        action="store_true",
+        help="read the protection passphrase from stdin instead of prompting",
+    )
+    private_unprotect.add_argument("--force", action="store_true")
+    private_unprotect.add_argument(
+        "--i-am-authorized-to-handle-this-private-file",
+        action="store_true",
+        help="acknowledge ownership or explicit authorization for the private file",
+    )
+    private_unprotect.set_defaults(func=command_private_unprotect)
+
     firmware = subparsers.add_parser(
         "firmware-inspect",
         help="hash and scan one private firmware artifact without modifying it",
@@ -855,7 +1003,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         return int(args.func(args))
-    except (CatalogError, ConfigError, FirmwareInspectionError, PolicyError, RedactionError) as exc:
+    except (
+        CatalogError,
+        ConfigError,
+        FirmwareInspectionError,
+        PolicyError,
+        PrivateContainerError,
+        RedactionError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:

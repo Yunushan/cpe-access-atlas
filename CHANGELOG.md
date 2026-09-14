@@ -4,6 +4,10 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Add a separate authenticated local container for credential-bearing artifacts,
+  using fresh scrypt salt and AES-GCM nonce/tag; keep it distinct from the
+  legacy modem-compatible H3600P format and explicitly state that it is not a
+  modem-import or publication-safety mechanism.
 - Run validation workflows on pull requests and `main` pushes only, avoiding
   duplicate checks for the same feature-branch commit.
 - Block release publication before build work when the open CodeQL alert
