@@ -36,8 +36,8 @@ class PrivateContainerCliTests(unittest.TestCase):
                 root / "config.cpap",
                 root / "restored.bin",
             )
-            secret_data = b"password=SYNTHETIC_PRIVATE_VALUE\x00"
-            source.write_bytes(secret_data)
+            fixture_data = b"fixture-bytes-only\x00"
+            source.write_bytes(fixture_data)
 
             code, stdout, stderr = self.run_cli(
                 [
@@ -53,9 +53,9 @@ class PrivateContainerCliTests(unittest.TestCase):
             )
             self.assertEqual((code, stderr), (0, ""))
             self.assertIn("authenticated private container", stdout)
-            self.assertNotIn("SYNTHETIC_PRIVATE_VALUE", stdout)
+            self.assertNotIn("fixture-bytes-only", stdout)
             self.assertNotIn(PASSPHRASE, stdout)
-            self.assertNotEqual(protected.read_bytes(), secret_data)
+            self.assertNotEqual(protected.read_bytes(), fixture_data)
 
             code, stdout, stderr = self.run_cli(
                 [
@@ -72,7 +72,7 @@ class PrivateContainerCliTests(unittest.TestCase):
             self.assertEqual((code, stderr), (0, ""))
             self.assertIn("Wrote private artifact", stdout)
             self.assertIn("keep it protected and local", stdout)
-            self.assertEqual(restored.read_bytes(), secret_data)
+            self.assertEqual(restored.read_bytes(), fixture_data)
 
     def test_commands_require_authorization_before_reading_or_prompting(self) -> None:
         for command in ("private-protect", "private-unprotect"):
