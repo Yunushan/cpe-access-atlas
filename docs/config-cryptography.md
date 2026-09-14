@@ -84,6 +84,23 @@ Changing that derivation, padding, IV policy, or cipher would change the bytes
 the target format expects. A new password KDF or authenticated cipher cannot
 simply be substituted without a separately supported container format.
 
+## Authenticated local container
+
+The `private-protect` command provides that separate format for local storage.
+It uses a fresh 128-bit salt, scrypt with fixed version-1 parameters, and
+AES-GCM with a fresh 96-bit nonce and 128-bit authentication tag. The header,
+salt, and nonce are authenticated as associated data, and the format is
+bounded and length-checked before decryption. A wrong passphrase or any
+tampering fails authentication without producing plaintext output.
+
+This format is deliberately not a ZTE/H3600P container: a modem will not import
+it, and using it cannot establish firmware acceptance or root access. It also
+does not make a protected artifact appropriate for public upload; the contents
+may still include credentials and device identifiers, and passphrase strength
+and handling remain the user's responsibility. The legacy vendor path remains
+available only for explicit compatibility work and retains its separate warning
+and acknowledgement.
+
 The inputs include a device-specific 32-character ASCII encryption passphrase,
 serial, and MAC. Serial/MAC values identify the device; do not treat them as
 secrets providing independent key entropy. Length/format validation does not

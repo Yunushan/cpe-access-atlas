@@ -13,13 +13,13 @@ python scripts/generate_cli_reference.py
 
 ```text
 usage: cpe-atlas [-h] [--version]
-                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,report-template,redact,firmware-inspect,validate} ...
+                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate} ...
 
 Firmware-aware catalog and safe research tooling for owner-authorized CPE
 access
 
 positional arguments:
-  {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,report-template,redact,firmware-inspect,validate}
+  {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate}
     providers           list cataloged providers
     recipes             list exact device recipes
     devices             list devices published on official ISP pages (not
@@ -37,6 +37,9 @@ positional arguments:
     report-template     generate a sanitized hardware research template
     redact              redact common secrets and identifying network data
                         from text
+    private-protect     protect a private local artifact with scrypt and AES-
+                        GCM
+    private-unprotect   decrypt an authenticated private local container
     firmware-inspect    hash and scan one private firmware artifact without
                         modifying it
     validate            validate bundled catalog data
@@ -191,6 +194,44 @@ options:
   --hardware-revision HARDWARE_REVISION
                         exact hardware revision recorded in the catalog
   --firmware FIRMWARE   exact firmware string
+```
+
+## `cpe-atlas private-protect`
+
+```text
+usage: cpe-atlas private-protect [-h] --input INPUT --output OUTPUT
+                                 [--passphrase-stdin] [--force]
+                                 [--i-am-authorized-to-handle-this-private-file]
+
+options:
+  -h, --help            show this help message and exit
+  --input INPUT         private artifact to protect
+  --output OUTPUT       protected output path
+  --passphrase-stdin    read the protection passphrase from stdin instead of
+                        prompting
+  --force
+  --i-am-authorized-to-handle-this-private-file
+                        acknowledge ownership or explicit authorization for
+                        the private file
+```
+
+## `cpe-atlas private-unprotect`
+
+```text
+usage: cpe-atlas private-unprotect [-h] --input INPUT --output OUTPUT
+                                   [--passphrase-stdin] [--force]
+                                   [--i-am-authorized-to-handle-this-private-file]
+
+options:
+  -h, --help            show this help message and exit
+  --input INPUT         protected private container
+  --output OUTPUT       private output path
+  --passphrase-stdin    read the protection passphrase from stdin instead of
+                        prompting
+  --force
+  --i-am-authorized-to-handle-this-private-file
+                        acknowledge ownership or explicit authorization for
+                        the private file
 ```
 
 ## `cpe-atlas providers`

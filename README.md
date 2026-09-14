@@ -282,6 +282,26 @@ The `apply` command is deliberately fail-closed in this release. Even after
 ownership acknowledgement it refuses this blocked recipe and makes no device
 change.
 
+To protect an existing private artifact at rest, use the separate authenticated
+local container format:
+
+```shell
+cpe-atlas private-protect \
+  --input config.bin \
+  --output config.bin.cpap \
+  --passphrase-stdin \
+  --i-am-authorized-to-handle-this-private-file
+```
+
+The command uses a fresh salt, scrypt, and AES-GCM authentication. The matching
+`private-unprotect` command restores a private local copy after the same hidden
+passphrase is supplied. This container is **not** a modem-import format and does
+not redact credentials, prove firmware compatibility, or make a backup safe to
+publish. Keep the protected file and passphrase separate; do not commit either
+one or attach them to an issue. The passphrase must be 12–256 printable
+characters and must be supplied through a hidden prompt or a private pipe, never
+as a command-line argument.
+
 ## Access terminology
 
 | Term | Meaning |

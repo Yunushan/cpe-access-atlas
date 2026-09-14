@@ -52,6 +52,10 @@ CLI
    `--acknowledge-legacy-crypto`, because the vendor-compatible format uses
    legacy SHA-256 derivation and unauthenticated CBC. A baseline and its output
    may not be the same path, even with replacement explicitly requested.
+   The separate `private-protect`/`private-unprotect` commands provide an
+   authenticated local-at-rest container using scrypt and AES-GCM; that format
+   is intentionally not accepted by a modem and is not a publishing or
+   compatibility mechanism.
 
 The experimental codec reproduces vendor key derivation and AES-CBC container
 behavior; it is not a general-purpose secure backup format. See the
