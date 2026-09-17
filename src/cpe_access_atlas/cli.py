@@ -51,6 +51,7 @@ from .private_container import (
 from .private_files import write_private_bytes, write_private_text
 from .redaction import MAX_REPORT_CHARS, RedactionError, redact_text
 from .report import build_research_template
+from .web_evidence import WebEvidenceError, collect_zte_web_evidence
 
 
 def _recipe_from_args(args: argparse.Namespace) -> Recipe:
@@ -648,6 +649,51 @@ def command_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_web_evidence(args: argparse.Namespace) -> int:
+    """Collect sanitized authenticated evidence from the exact local target."""
+
+    recipe = _recipe_from_args(args)
+    if not args.i_own_or_administer_this_device:
+        print(
+            "Refused: explicit ownership/authorization acknowledgement is required.",
+            file=sys.stderr,
+        )
+        return 3
+    if not args.acknowledge_local_http_authentication:
+        print(
+            "Refused: acknowledge that this firmware's local login uses HTTP before continuing.",
+            file=sys.stderr,
+        )
+        return 3
+    if recipe.vendor != "ZTE" or recipe.model != "H3600P V9":
+        raise WebEvidenceError("the read-only web evidence adapter is limited to ZTE H3600P V9")
+
+    password = _read_secret(
+        args,
+        "password_stdin",
+        "Local router web password (not stored): ",
+        "local router web password",
+        max_chars=256,
+    )
+    evidence = collect_zte_web_evidence(
+        args.host,
+        args.username,
+        password,
+        timeout=args.timeout,
+        expected_firmware=recipe.firmware,
+        expected_model=recipe.model,
+        expected_hardware=recipe.hardware_revision,
+    )
+    print(
+        json.dumps(
+            {"target": _recipe_payload(recipe), "web_evidence": evidence},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_report_template(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
     content = build_research_template(recipe)
@@ -903,6 +949,31 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--timeout", type=_parse_timeout_argument, default=1.0)
     doctor.set_defaults(func=command_doctor)
 
+    web_evidence = subparsers.add_parser(
+        "web-evidence",
+        help="collect sanitized authenticated read-only evidence from one local ZTE target",
+    )
+    _add_target_arguments(web_evidence)
+    web_evidence.add_argument("--host", required=True, help="one RFC1918 or IPv6 ULA literal")
+    web_evidence.add_argument("--username", default="admin", help="local web-console username")
+    web_evidence.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the local web password from the first stdin line instead of prompting",
+    )
+    web_evidence.add_argument("--timeout", type=_parse_timeout_argument, default=5.0)
+    web_evidence.add_argument(
+        "--i-own-or-administer-this-device",
+        action="store_true",
+        help="acknowledge ownership or explicit authorization",
+    )
+    web_evidence.add_argument(
+        "--acknowledge-local-http-authentication",
+        action="store_true",
+        help="accept the risk of the firmware's challenge-hash login over local HTTP",
+    )
+    web_evidence.set_defaults(func=command_web_evidence)
+
     report = subparsers.add_parser(
         "report-template",
         help="generate a sanitized hardware research template",
@@ -1011,6 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
         PolicyError,
         PrivateContainerError,
         RedactionError,
+        WebEvidenceError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

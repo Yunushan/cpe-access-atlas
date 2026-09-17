@@ -163,6 +163,34 @@ private IP:
 cpe-atlas doctor --host 192.168.1.1 --ports 80,443 --probe
 ```
 
+Collect authenticated, read-only web evidence from an owned H3600P without
+printing the password, cookies, parameter values, or raw pages:
+
+```shell
+cpe-atlas web-evidence \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --host 192.168.1.1 \
+  --username admin \
+  --i-own-or-administer-this-device \
+  --acknowledge-local-http-authentication
+```
+
+The password is requested with hidden terminal input. The command makes one
+normal web-console login attempt, then issues only bounded GET requests for the
+authenticated root and device-status views. It reports response shapes, route
+names, parameter names, and the presence of expected identity or root-research
+strings as sanitized JSON. It does not send CWMP, configuration, shell, reboot,
+reset, upload, or firmware requests and does not save raw responses. An
+incorrect password can still contribute to the router's login lockout, so the
+command never retries automatically. The HTTP acknowledgement is required
+because this firmware exposes its challenge-hash login over local HTTP.
+
+This evidence can show what the exact authenticated firmware exposes; it does
+not itself enable root access or make the blocked recipe rootable.
+
 Generate a contribution template:
 
 ```shell

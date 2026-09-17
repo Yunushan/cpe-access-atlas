@@ -783,6 +783,108 @@ class CliTests(unittest.TestCase):
         self.assertIn("tcp/80: open", stdout)
         self.assertIn("tcp/443: closed/unreachable", stdout)
 
+    def test_web_evidence_requires_authorization_before_secret_input(self) -> None:
+        with (
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+            patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
+        ):
+            code, stdout, stderr = self.run_cli(["web-evidence", *TARGET, "--host", "192.168.1.1"])
+        self.assertEqual((code, stdout), (3, ""))
+        self.assertIn("ownership/authorization", stderr)
+        prompt.assert_not_called()
+        collect.assert_not_called()
+
+    def test_web_evidence_requires_http_acknowledgement_before_secret_input(self) -> None:
+        with (
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+            patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--i-own-or-administer-this-device",
+                ]
+            )
+        self.assertEqual((code, stdout), (3, ""))
+        self.assertIn("local login uses HTTP", stderr)
+        prompt.assert_not_called()
+        collect.assert_not_called()
+
+    def test_web_evidence_outputs_only_sanitized_json(self) -> None:
+        evidence = {
+            "authenticated": True,
+            "configuration_mutation_attempted": False,
+            "credentials_cookies_or_parameter_values_output": False,
+        }
+        with (
+            patch("cpe_access_atlas.cli.getpass.getpass", return_value="private-password"),
+            patch(
+                "cpe_access_atlas.cli.collect_zte_web_evidence",
+                return_value=evidence,
+            ) as collect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--username",
+                    "admin",
+                    "--timeout",
+                    "7",
+                    "--i-own-or-administer-this-device",
+                    "--acknowledge-local-http-authentication",
+                ]
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(
+            payload["target"]["id"], "tr.turk-telekom.zte.h3600p.h3600p-v9-ttn10-260210"
+        )
+        self.assertEqual(payload["web_evidence"], evidence)
+        self.assertNotIn("private-password", stdout)
+        collect.assert_called_once_with(
+            "192.168.1.1",
+            "admin",
+            "private-password",
+            timeout=7.0,
+            expected_firmware="H3600P V9.0 TTN.10_260210",
+            expected_model="H3600P V9",
+            expected_hardware="V9.0",
+        )
+
+    def test_web_evidence_adapter_rejects_other_models_before_secret_input(self) -> None:
+        recipe = replace(
+            find_recipe(
+                "turk-telekom",
+                "H3600P",
+                "V9.0",
+                "H3600P V9.0 TTN.10_260210",
+            ),
+            model="H3601P",
+        )
+        with (
+            patch("cpe_access_atlas.cli._recipe_from_args", return_value=recipe),
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--i-own-or-administer-this-device",
+                    "--acknowledge-local-http-authentication",
+                ]
+            )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("limited to ZTE H3600P V9", stderr)
+        prompt.assert_not_called()
+
     def test_public_target_is_rejected(self) -> None:
         code, _, stderr = self.run_cli(["doctor", "--host", "1.1.1.1"])
         self.assertEqual(code, 2)
