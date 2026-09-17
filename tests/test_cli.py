@@ -885,6 +885,64 @@ class CliTests(unittest.TestCase):
         self.assertIn("limited to ZTE H3600P V9", stderr)
         prompt.assert_not_called()
 
+    def test_uart_evidence_outputs_sanitized_offline_json(self) -> None:
+        content = (
+            b"H3600P V9.0 TTN.10_260210\n"
+            b"non secure boot\n"
+            b"U-Boot 2013.04 (Feb 28 2024 - 16:13:22)\n"
+            b"CPU: ZX279128S\n"
+            b"password=SYNTHETIC-PRIVATE-PASSWORD\n"
+            b"SerialNumber=SYNTHETIC-PRIVATE-SERIAL\n"
+        )
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "private-uart.log"
+            source.write_bytes(content)
+            code, stdout, stderr = self.run_cli(["uart-evidence", *TARGET, "--input", str(source)])
+
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(
+            payload["target"]["id"], "tr.turk-telekom.zte.h3600p.h3600p-v9-ttn10-260210"
+        )
+        evidence = payload["uart_evidence"]
+        self.assertEqual(evidence["firmware_identity_status"], "matched")
+        self.assertEqual(evidence["boot_security"], "non-secure")
+        self.assertFalse(evidence["device_io_attempted"])
+        self.assertFalse(evidence["raw_log_output"])
+        self.assertFalse(evidence["secret_or_identity_values_output"])
+        self.assertFalse(evidence["root_access_verified"])
+        self.assertNotIn("sha256", evidence)
+        self.assertNotIn("SYNTHETIC-PRIVATE", stdout)
+        self.assertNotIn(str(source), stdout)
+
+    def test_uart_evidence_rejects_other_models_before_reading(self) -> None:
+        recipe = replace(
+            find_recipe(
+                "turk-telekom",
+                "H3600P",
+                "V9.0",
+                "H3600P V9.0 TTN.10_260210",
+            ),
+            model="H3601P",
+        )
+        with (
+            patch("cpe_access_atlas.cli._recipe_from_args", return_value=recipe),
+            patch("cpe_access_atlas.cli.inspect_uart_log") as inspect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                ["uart-evidence", *TARGET, "--input", "private-uart.log"]
+            )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("limited to ZTE H3600P V9", stderr)
+        inspect.assert_not_called()
+
+    def test_uart_evidence_errors_are_controlled(self) -> None:
+        code, stdout, stderr = self.run_cli(
+            ["uart-evidence", *TARGET, "--input", "does-not-exist.log"]
+        )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("UART log does not exist", stderr)
+
     def test_public_target_is_rejected(self) -> None:
         code, _, stderr = self.run_cli(["doctor", "--host", "1.1.1.1"])
         self.assertEqual(code, 2)

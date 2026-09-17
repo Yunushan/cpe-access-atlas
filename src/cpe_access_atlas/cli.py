@@ -51,6 +51,7 @@ from .private_container import (
 from .private_files import write_private_bytes, write_private_text
 from .redaction import MAX_REPORT_CHARS, RedactionError, redact_text
 from .report import build_research_template
+from .uart_evidence import UartEvidenceError, inspect_uart_log
 from .web_evidence import WebEvidenceError, collect_zte_web_evidence
 
 
@@ -694,6 +695,52 @@ def command_web_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_uart_evidence(args: argparse.Namespace) -> int:
+    """Inspect a private UART boot capture without emitting raw log data."""
+
+    recipe = _recipe_from_args(args)
+    if recipe.vendor != "ZTE" or recipe.model != "H3600P V9":
+        raise UartEvidenceError("the UART evidence adapter is limited to ZTE H3600P V9")
+    evidence = inspect_uart_log(args.input, recipe.firmware)
+    payload = {
+        "size": evidence.size,
+        "line_count": evidence.line_count,
+        "expected_firmware": evidence.expected_firmware,
+        "firmware_versions": list(evidence.firmware_versions),
+        "firmware_identity_status": evidence.firmware_identity_status,
+        "bootloader_versions": list(evidence.bootloader_versions),
+        "bootloader_builds": list(evidence.bootloader_builds),
+        "linux_versions": list(evidence.linux_versions),
+        "hardware_versions": list(evidence.hardware_versions),
+        "soc_models": list(evidence.soc_models),
+        "board_models": list(evidence.board_models),
+        "product_ids": list(evidence.product_ids),
+        "dram_mib": list(evidence.dram_mib),
+        "boot_security": evidence.boot_security,
+        "uboot_security": evidence.uboot_security,
+        "boot_interrupt_prompt_observed": evidence.boot_interrupt_prompt_observed,
+        "bootloader_password_prompt_observed": evidence.bootloader_password_prompt_observed,
+        "bootloader_shell_prompt_observed": evidence.bootloader_shell_prompt_observed,
+        "kernel_start_observed": evidence.kernel_start_observed,
+        "linux_console_output_observed": evidence.linux_console_output_observed,
+        "linux_login_prompt_observed": evidence.linux_login_prompt_observed,
+        "uid_zero_marker_observed": evidence.uid_zero_marker_observed,
+        "recognized_h3600p_boot_output": evidence.recognized_h3600p_boot_output,
+        "device_io_attempted": evidence.device_io_attempted,
+        "raw_log_output": evidence.raw_log_output,
+        "secret_or_identity_values_output": evidence.secret_or_identity_values_output,
+        "root_access_verified": evidence.root_access_verified,
+    }
+    print(
+        json.dumps(
+            {"target": _recipe_payload(recipe), "uart_evidence": payload},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_report_template(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
     content = build_research_template(recipe)
@@ -974,6 +1021,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     web_evidence.set_defaults(func=command_web_evidence)
 
+    uart_evidence = subparsers.add_parser(
+        "uart-evidence",
+        help="inspect a private UART boot log without printing raw or secret values",
+    )
+    _add_target_arguments(uart_evidence)
+    uart_evidence.add_argument("--input", required=True, help="private UART boot-log file")
+    uart_evidence.set_defaults(func=command_uart_evidence)
+
     report = subparsers.add_parser(
         "report-template",
         help="generate a sanitized hardware research template",
@@ -1082,6 +1137,7 @@ def main(argv: list[str] | None = None) -> int:
         PolicyError,
         PrivateContainerError,
         RedactionError,
+        UartEvidenceError,
         WebEvidenceError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
