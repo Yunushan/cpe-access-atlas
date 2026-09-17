@@ -59,7 +59,7 @@ python -m pip install -e .
 cpe-atlas providers
 cpe-atlas devices
 cpe-atlas validate
-cpe-atlas status --isp "Türk Telekom" --model "ZTE H3600P" \
+cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" \
   --hardware-revision "V9.0" \
   --firmware "H3600P V9.0 TTN.10_260210"
 ```
