@@ -14,6 +14,7 @@ from urllib.parse import parse_qs
 from cpe_access_atlas.web_evidence import (
     MAX_COOKIE_VALUE_CHARS,
     MAX_RESPONSE_BYTES,
+    MAX_STRUCTURAL_IDENTIFIERS,
     WebEvidenceError,
     _endpoint_evidence,
     _json_object,
@@ -114,7 +115,13 @@ class WebEvidenceTests(unittest.TestCase):
         root = (
             b'<html><a href="/?_type=menuView&_tag=statusMgr">status</a>'
             b"H3600P V9 V9.0 CWMP TR-069 InternetGatewayDevice X_TT "
-            b"Shell SSH Telnet root configDownload</html>"
+            b"Shell SSH root configDownload"
+            b'<script>_PageAccessAuthor["tr069"] = '
+            b"{'VisibilityLevel':3,'Limitation':1};"
+            b'_PageAccessAuthor["rsc"] = '
+            b"{'VisibilityLevel':3,'Limitation':1};"
+            b'_PageAccessAuthor["homePage"] = '
+            b"{'VisibilityLevel':1,'Limitation':1};</script></html>"
         )
         status_data = (
             b"<ajax_response_xml_root><OBJ_DEVINFO_ID><Instance>"
@@ -140,6 +147,16 @@ class WebEvidenceTests(unittest.TestCase):
             FakeResponse(root, content_type="text/html; charset=utf-8"),
             FakeResponse(b"<html>statusMgr</html>", content_type="text/html"),
             FakeResponse(status_data, content_type="text/xml; charset=utf-8"),
+            FakeResponse(
+                b'<html>TR-069<input id="OBJ_TR069_ID.EnableCWMP" '
+                b'name="EnableCWMP"><address>tr069_lua.lua</address>'
+                b"<ParaName>ManagementServer.EnableCWMP</ParaName></html>",
+                content_type="text/html",
+            ),
+            FakeResponse(
+                b"<html>H3600P V9 V9.0 Telnet<ParaName>ServiceControl</ParaName></html>",
+                content_type="text/html",
+            ),
         ]
 
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
@@ -167,7 +184,30 @@ class WebEvidenceTests(unittest.TestCase):
         endpoints = result["endpoints"]
         self.assertEqual(endpoints["authenticated_root"]["route_tags"], ["statusMgr"])
         self.assertEqual(endpoints["status_data"]["parameter_names"], ["SoftwareVersion"])
+        self.assertEqual(
+            endpoints["page_view_tr069"]["parameter_names"],
+            ["ManagementServer.EnableCWMP"],
+        )
+        self.assertEqual(
+            endpoints["page_view_tr069"]["html_element_ids"],
+            ["OBJ_TR069_ID.EnableCWMP"],
+        )
+        self.assertEqual(endpoints["page_view_tr069"]["html_field_names"], ["EnableCWMP"])
+        self.assertEqual(endpoints["page_view_tr069"]["config_object_ids"], ["OBJ_TR069_ID"])
+        self.assertEqual(endpoints["page_view_tr069"]["lua_resource_names"], ["tr069_lua.lua"])
+        self.assertFalse(endpoints["page_view_tr069"]["structural_identifier_limit_reached"])
+        self.assertEqual(endpoints["page_view_rsc"]["parameter_names"], ["ServiceControl"])
         self.assertIn("ParaValue", endpoints["status_data"]["xml_element_names"])
+        self.assertEqual(result["advertised_privileged_page_ids"], ["rsc", "tr069"])
+        self.assertEqual(result["read_only_page_views_requested"], ["tr069", "rsc"])
+        self.assertEqual(
+            result["advertised_page_access"],
+            [
+                {"page_id": "homePage", "visibility_level": 1, "limitation": 1},
+                {"page_id": "rsc", "visibility_level": 3, "limitation": 1},
+                {"page_id": "tr069", "visibility_level": 3, "limitation": 1},
+            ],
+        )
         self.assertFalse(result["configuration_mutation_attempted"])
         self.assertFalse(result["cwmp_request_sent"])
         self.assertFalse(result["credentials_cookies_or_parameter_values_output"])
@@ -182,6 +222,15 @@ class WebEvidenceTests(unittest.TestCase):
                 "GET",
                 "GET",
                 "GET",
+                "GET",
+                "GET",
+            ],
+        )
+        self.assertEqual(
+            [item["path"] for item in FakeConnection.requests[-2:]],
+            [
+                "/?_type=menuView&_tag=tr069&Menu3Location=0",
+                "/?_type=menuView&_tag=rsc&Menu3Location=0",
             ],
         )
         posted = parse_qs(FakeConnection.requests[2]["body"].decode("ascii"))
@@ -249,6 +298,37 @@ class WebEvidenceTests(unittest.TestCase):
                     expected_hardware="hardware",
                 )
         self.assertEqual(request.call_count, 3)
+
+    def test_collect_rejects_login_page_after_nominal_login(self) -> None:
+        with patch(
+            "cpe_access_atlas.web_evidence._request",
+            side_effect=[
+                response(
+                    b'{"lockingTime":0,"sess_token":"session"}',
+                    content_type="application/json",
+                ),
+                response(
+                    b"<ajax_response_xml_root>challenge</ajax_response_xml_root>",
+                    content_type="text/xml",
+                ),
+                response(b'{"login_need_refresh":true}', content_type="application/json"),
+                response(
+                    b'<html><input id="Frm_Username">login_entry</html>',
+                    content_type="text/html",
+                ),
+            ],
+        ) as request:
+            with self.assertRaisesRegex(WebEvidenceError, "returned the login page"):
+                collect_zte_web_evidence(
+                    "192.168.1.1",
+                    "admin",
+                    "secret",
+                    timeout=5,
+                    expected_firmware="firmware",
+                    expected_model="model",
+                    expected_hardware="hardware",
+                )
+        self.assertEqual(request.call_count, 4)
 
     def test_collect_stops_before_password_post_when_router_is_locked(self) -> None:
         for locking_time in (1, True, "30", None):
@@ -392,6 +472,46 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertFalse(any(evidence["expected_identity_markers"].values()))
         self.assertEqual(evidence["route_types"], [])
         self.assertEqual(evidence["parameter_names"], [])
+        self.assertEqual(evidence["page_access_entries"], [])
+        self.assertFalse(evidence["login_page_detected"])
+        self.assertEqual(evidence["html_element_ids"], [])
+        self.assertEqual(evidence["html_field_names"], [])
+        self.assertEqual(evidence["config_object_ids"], [])
+        self.assertEqual(evidence["lua_resource_names"], [])
+        self.assertFalse(evidence["structural_identifier_limit_reached"])
+
+    def test_endpoint_evidence_reports_access_map_and_login_page(self) -> None:
+        body = (
+            b'<html><input id="Frm_Username">login_entry<script>'
+            b"_PageAccessAuthor['tr069']={'VisibilityLevel':3,'Limitation':1};"
+            b"_PageAccessAuthor['tr069']={'VisibilityLevel':3,'Limitation':1};"
+            b"</script></html>"
+        )
+        evidence = _endpoint_evidence(
+            response(body, content_type="text/html"),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+        self.assertTrue(evidence["login_page_detected"])
+        self.assertEqual(
+            evidence["page_access_entries"],
+            [{"page_id": "tr069", "visibility_level": 3, "limitation": 1}],
+        )
+
+    def test_endpoint_evidence_bounds_structural_identifiers(self) -> None:
+        body = b"".join(
+            f'<input id="field{index:04d}">'.encode("ascii")
+            for index in range(MAX_STRUCTURAL_IDENTIFIERS + 1)
+        )
+        evidence = _endpoint_evidence(
+            response(body, content_type="text/html"),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+        self.assertEqual(len(evidence["html_element_ids"]), MAX_STRUCTURAL_IDENTIFIERS)
+        self.assertTrue(evidence["structural_identifier_limit_reached"])
 
     def test_result_is_json_serializable(self) -> None:
         minimal = _endpoint_evidence(

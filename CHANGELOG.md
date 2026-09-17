@@ -6,10 +6,13 @@ All notable changes are documented here.
 
 - Add an owner-authorized `web-evidence` command for the ZTE H3600P V9. It
   performs one normal challenge-hash login and bounded, read-only status-page
-  requests, emits only sanitized structural/marker evidence, never retries a
-  failed login, and sends no CWMP or configuration mutation. Keep the exact
-  TTN.10 root-support decision blocked until a method and recovery path are
-  independently verified.
+  requests, parses the firmware-advertised page-access map, and GETs only the
+  advertised root-research page views. It emits only sanitized
+  structural/marker evidence—including bounded form IDs, configuration-object
+  IDs, and Lua resource names while omitting values—rejects a nominal login
+  that still returns the login page, never retries a failed login, and sends no
+  CWMP or configuration mutation. Keep the exact TTN.10 root-support decision
+  blocked until a method and recovery path are independently verified.
 - Preserve private-container passphrase portability across supported Python
   versions with a stable Unicode policy and independent fixed ciphertext vectors.
   Existing containers keep the same UTF-8 key derivation and remain readable.

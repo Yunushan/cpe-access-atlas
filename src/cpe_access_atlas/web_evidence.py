@@ -16,6 +16,7 @@ from .policy import parse_single_private_address, parse_timeout
 
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_COOKIE_VALUE_CHARS = 4_096
+MAX_STRUCTURAL_IDENTIFIERS = 512
 
 _LOGIN_RESPONSE_ROOT = "ajax_response_xml_root"
 _ROUTE_TYPE = re.compile(r"_type=([A-Za-z][A-Za-z0-9_.-]{0,95})")
@@ -25,6 +26,25 @@ _PARAMETER_NAME = re.compile(
     rb"<(?:[A-Za-z_][\w.-]*:)?ParaName\b[^>]*>\s*"
     rb"([A-Za-z_][A-Za-z0-9_.:-]{0,127})\s*"
     rb"</(?:[A-Za-z_][\w.-]*:)?ParaName\s*>",
+    re.IGNORECASE,
+)
+_PAGE_ACCESS_ENTRY = re.compile(
+    rb"_PageAccessAuthor\[\s*[\"']([A-Za-z][A-Za-z0-9_.-]{0,95})[\"']\s*\]"
+    rb"\s*=\s*\{\s*[\"']VisibilityLevel[\"']\s*:\s*([0-9]{1,2})\s*,"
+    rb"\s*[\"']Limitation[\"']\s*:\s*([0-9]{1,2})\s*\}",
+    re.IGNORECASE,
+)
+_HTML_ELEMENT_ID = re.compile(
+    rb"\bid\s*=\s*[\"']([A-Za-z_][A-Za-z0-9_.:-]{0,127})[\"']",
+    re.IGNORECASE,
+)
+_HTML_FIELD_NAME = re.compile(
+    rb"\bname\s*=\s*[\"']([A-Za-z_][A-Za-z0-9_.:-]{0,127})[\"']",
+    re.IGNORECASE,
+)
+_CONFIG_OBJECT_ID = re.compile(rb"\b(OBJ_[A-Za-z0-9_:-]{1,123})\b", re.IGNORECASE)
+_LUA_RESOURCE = re.compile(
+    rb"\b([A-Za-z_][A-Za-z0-9_.-]{0,123}\.lua)\b",
     re.IGNORECASE,
 )
 _SAFE_COOKIE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
@@ -53,6 +73,18 @@ _READ_ONLY_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("status_data", "/?_type=menuData&_tag=devmgr_statusmgr_lua.lua"),
 )
 
+# These are server-advertised page views from the exact TTN.10 login shell.
+# They are requested only when the authenticated root advertises the same ID.
+# A page-view GET renders controls; it does not submit their forms or invoke a
+# menuData/configuration endpoint.
+_ROOT_RESEARCH_PAGE_IDS: tuple[str, ...] = (
+    "tr069",
+    "rsc",
+    "usrCfgMgr",
+    "mirror",
+    "capture",
+)
+
 
 class WebEvidenceError(ValueError):
     """Raised when bounded local web evidence collection cannot continue safely."""
@@ -65,6 +97,12 @@ class _Response:
     body: bytes
 
 
+class _PageAccessEvidence(TypedDict):
+    page_id: str
+    visibility_level: int
+    limitation: int
+
+
 class _EndpointEvidence(TypedDict):
     http_status: int
     response_bytes: int
@@ -73,6 +111,13 @@ class _EndpointEvidence(TypedDict):
     route_tags: list[str]
     xml_element_names: list[str]
     parameter_names: list[str]
+    page_access_entries: list[_PageAccessEvidence]
+    login_page_detected: bool
+    html_element_ids: list[str]
+    html_field_names: list[str]
+    config_object_ids: list[str]
+    lua_resource_names: list[str]
+    structural_identifier_limit_reached: bool
     root_research_string_markers: dict[str, bool]
     expected_identity_markers: dict[str, bool]
 
@@ -205,12 +250,37 @@ def _route_values(pattern: re.Pattern[str], body: bytes) -> list[str]:
     return sorted({match.group(1) for match in pattern.finditer(text)})
 
 
+def _bounded_ascii_matches(pattern: re.Pattern[bytes], body: bytes) -> tuple[list[str], bool]:
+    values = sorted({match.group(1).decode("ascii") for match in pattern.finditer(body)})
+    return values[:MAX_STRUCTURAL_IDENTIFIERS], len(values) > MAX_STRUCTURAL_IDENTIFIERS
+
+
 def _marker_presence(body: bytes) -> dict[str, bool]:
     lowered = body.lower()
     return {
         label: any(marker in lowered for marker in markers)
         for label, markers in _ROOT_RESEARCH_MARKERS.items()
     }
+
+
+def _page_access_entries(body: bytes) -> list[_PageAccessEvidence]:
+    entries = {
+        (match.group(1).decode("ascii"), int(match.group(2)), int(match.group(3)))
+        for match in _PAGE_ACCESS_ENTRY.finditer(body)
+    }
+    return [
+        {
+            "page_id": page_id,
+            "visibility_level": visibility_level,
+            "limitation": limitation,
+        }
+        for page_id, visibility_level, limitation in sorted(entries)
+    ]
+
+
+def _looks_like_login_page(body: bytes) -> bool:
+    lowered = body.lower()
+    return b"frm_username" in lowered and b"login_entry" in lowered
 
 
 def _endpoint_evidence(
@@ -220,6 +290,10 @@ def _endpoint_evidence(
     expected_model: str,
     expected_hardware: str,
 ) -> _EndpointEvidence:
+    html_element_ids, element_ids_limited = _bounded_ascii_matches(_HTML_ELEMENT_ID, response.body)
+    html_field_names, field_names_limited = _bounded_ascii_matches(_HTML_FIELD_NAME, response.body)
+    config_object_ids, object_ids_limited = _bounded_ascii_matches(_CONFIG_OBJECT_ID, response.body)
+    lua_resource_names, lua_names_limited = _bounded_ascii_matches(_LUA_RESOURCE, response.body)
     return {
         "http_status": response.status,
         "response_bytes": len(response.body),
@@ -228,6 +302,20 @@ def _endpoint_evidence(
         "route_tags": _route_values(_ROUTE_TAG, response.body),
         "xml_element_names": _sorted_ascii_matches(_XML_TAG, response.body),
         "parameter_names": _sorted_ascii_matches(_PARAMETER_NAME, response.body),
+        "page_access_entries": _page_access_entries(response.body),
+        "login_page_detected": _looks_like_login_page(response.body),
+        "html_element_ids": html_element_ids,
+        "html_field_names": html_field_names,
+        "config_object_ids": config_object_ids,
+        "lua_resource_names": lua_resource_names,
+        "structural_identifier_limit_reached": any(
+            (
+                element_ids_limited,
+                field_names_limited,
+                object_ids_limited,
+                lua_names_limited,
+            )
+        ),
         "root_research_string_markers": _marker_presence(response.body),
         "expected_identity_markers": {
             "firmware": expected_firmware.encode("utf-8") in response.body,
@@ -337,18 +425,58 @@ def collect_zte_web_evidence(
             expected_hardware=expected_hardware,
         )
         endpoints[name] = endpoint
+        if name == "authenticated_root" and endpoint["login_page_detected"]:
+            raise WebEvidenceError(
+                "router returned the login page after accepting the login response; "
+                "no management page probes were attempted"
+            )
         for key in identity_markers:
             identity_markers[key] = (
                 identity_markers[key] or endpoint["expected_identity_markers"][key]
             )
         for key in root_markers:
             root_markers[key] = root_markers[key] or endpoint["root_research_string_markers"][key]
+
+    authenticated_root = endpoints["authenticated_root"]
+    advertised_access = authenticated_root["page_access_entries"]
+    advertised_ids = {entry["page_id"] for entry in advertised_access}
+    requested_page_ids: list[str] = []
+    for page_id in _ROOT_RESEARCH_PAGE_IDS:
+        if page_id not in advertised_ids:
+            continue
+        endpoint = _endpoint_evidence(
+            _request(
+                target,
+                "GET",
+                f"/?_type=menuView&_tag={page_id}&Menu3Location=0",
+                bounded_timeout,
+                cookies,
+            ),
+            expected_firmware=expected_firmware,
+            expected_model=expected_model,
+            expected_hardware=expected_hardware,
+        )
+        endpoints[f"page_view_{page_id}"] = endpoint
+        requested_page_ids.append(page_id)
+        for key in identity_markers:
+            identity_markers[key] = (
+                identity_markers[key] or endpoint["expected_identity_markers"][key]
+            )
+        for key in root_markers:
+            root_markers[key] = root_markers[key] or endpoint["root_research_string_markers"][key]
+
+    privileged_page_ids = sorted(
+        {entry["page_id"] for entry in advertised_access if entry["visibility_level"] >= 3}
+    )
     return {
         "transport": "local-http",
         "host": target,
         "authenticated": True,
         "login_attempts": 1,
         "endpoints": endpoints,
+        "advertised_page_access": advertised_access,
+        "advertised_privileged_page_ids": privileged_page_ids,
+        "read_only_page_views_requested": requested_page_ids,
         "observed_expected_identity_markers": identity_markers,
         "observed_root_research_string_markers": root_markers,
         "configuration_mutation_attempted": False,

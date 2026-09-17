@@ -180,13 +180,18 @@ cpe-atlas web-evidence \
 
 The password is requested with hidden terminal input. The command makes one
 normal web-console login attempt, then issues only bounded GET requests for the
-authenticated root and device-status views. It reports response shapes, route
-names, parameter names, and the presence of expected identity or root-research
-strings as sanitized JSON. It does not send CWMP, configuration, shell, reboot,
-reset, upload, or firmware requests and does not save raw responses. An
-incorrect password can still contribute to the router's login lockout, so the
-command never retries automatically. The HTTP acknowledgement is required
-because this firmware exposes its challenge-hash login over local HTTP.
+authenticated root and device-status views. It also parses the page-access map
+embedded by the firmware and requests the rendered `tr069`, `rsc`, user-manager,
+mirror, and capture page views only when the authenticated root advertises the
+same IDs. It reports response shapes, access levels, route names, parameter
+names, bounded HTML field/element IDs, configuration-object IDs, Lua resource
+names, and the presence of expected identity or root-research strings as
+sanitized JSON. Input values and parameter values are not emitted. It never
+submits those pages and does not send CWMP, configuration, shell, reboot, reset,
+upload, or firmware requests or save raw responses. An incorrect password can
+still contribute to the router's login lockout, so the command never retries
+automatically. The HTTP acknowledgement is required because this firmware
+exposes its challenge-hash login over local HTTP.
 
 This evidence can show what the exact authenticated firmware exposes; it does
 not itself enable root access or make the blocked recipe rootable.

@@ -36,6 +36,7 @@
     "single-private-target-validation",
     "non-mutating-port-check",
     "sanitized-research-report",
+    "sanitized-authenticated-web-evidence",
     "offline-private-config-codec"
   ],
   "blockers": [
@@ -46,7 +47,8 @@
     "No official public downgrade image or recovery-tested downgrade path was found.",
     "A February 2026 guide claims Türk Telekom H3600P applicability but does not identify this exact build; a follow-up reports failure on TTN.8_250626.",
     "The available guide relies on an unverified third-party VM and provides no exact-build artifact hash or recovery proof.",
-    "A newer public H298A CWMP proof-of-concept hard-codes H298A-specific paths and has no exact H3600P TTN.10 validation."
+    "A newer public H298A CWMP proof-of-concept hard-codes H298A-specific paths and has no exact H3600P TTN.10 validation.",
+    "The exact device's public web shell advertises privilege-level-3 tr069, mirror, capture, and rsc page IDs, but exposes no root, shell, or telnet string and does not establish authenticated access to those pages."
   ],
   "evidence": [
     {
@@ -92,7 +94,7 @@
   ],
   "next_evidence": [
     "Authorized physical-device validation on the exact hardware revision and firmware.",
-    "Exact local UI firmware string and non-secret page behavior after factory reset.",
+    "Sanitized authenticated web-evidence output showing which advertised privilege-level-3 page views the known standard account can read and which parameter names they expose.",
     "Private SHA-256 hash and offline inspection of an exact TTN.10_260210 firmware artifact, if available.",
     "An exact-build parameter inventory showing whether the reported access-control paths exist.",
     "A source-reviewed, isolated observation of the H3600P CWMP data model before any parameter is sent.",
@@ -101,5 +103,5 @@
     "Sanitized protocol metadata proving the requested change and a separate login verification.",
     "Independent reproduction that preserves Internet, IPTV, VoIP, and WAN-management safety."
   ],
-  "last_reviewed": "2026-09-13"
+  "last_reviewed": "2026-09-17"
 }
