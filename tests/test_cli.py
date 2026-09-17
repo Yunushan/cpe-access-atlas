@@ -27,7 +27,7 @@ from cpe_access_atlas.config import (
 
 TARGET = [
     "--isp",
-    "Türk Telekom",
+    "turk-telekom",
     "--model",
     "ZTE H3600P",
     "--hardware-revision",
