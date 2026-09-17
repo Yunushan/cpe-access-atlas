@@ -28,6 +28,61 @@ class PrivateContainerCliTests(unittest.TestCase):
             code = main(args)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def test_new_unicode_and_combining_characters_round_trip_without_exposure(self) -> None:
+        # U+1FAE9 was added in Unicode 16. This CLI path must also work on the
+        # older Unicode databases bundled with supported Python 3.11/3.12.
+        passphrase = "synthetic-cpap-\U0001fae9-e\u0301"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, protected, restored = (root / name for name in ("input", "protected", "output"))
+            plaintext = b"synthetic unicode CLI input"
+            source.write_bytes(plaintext)
+            for command, input_path, output_path in (
+                ("private-protect", source, protected),
+                ("private-unprotect", protected, restored),
+            ):
+                with self.subTest(command=command):
+                    code, stdout, stderr = self.run_cli(
+                        [
+                            command,
+                            "--input",
+                            str(input_path),
+                            "--output",
+                            str(output_path),
+                            "--passphrase-stdin",
+                            AUTH,
+                        ],
+                        passphrase + "\n",
+                    )
+                    self.assertEqual((code, stderr), (0, ""))
+                    self.assertNotIn(passphrase, stdout)
+                    self.assertNotIn(plaintext.decode(), stdout)
+            self.assertEqual(restored.read_bytes(), plaintext)
+
+    def test_controls_and_surrogates_are_rejected_without_output_or_disclosure(self) -> None:
+        with TemporaryDirectory() as directory:
+            source, output = Path(directory) / "input", Path(directory) / "output"
+            source.write_bytes(b"synthetic")
+            for suffix in ("\x00", "\x1b", "\x85", "\u2028", "\ud800"):
+                passphrase = "synthetic-passphrase-" + suffix
+                with self.subTest(suffix=ascii(suffix)):
+                    code, stdout, stderr = self.run_cli(
+                        [
+                            "private-protect",
+                            "--input",
+                            str(source),
+                            "--output",
+                            str(output),
+                            "--passphrase-stdin",
+                            AUTH,
+                        ],
+                        passphrase + "\n",
+                    )
+                    self.assertEqual((code, stdout), (2, ""))
+                    self.assertIn("without C0/C1 controls", stderr)
+                    self.assertNotIn(passphrase, stderr)
+                    self.assertFalse(output.exists())
+
     def test_private_protect_and_unprotect_round_trip_without_printing_secrets(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -155,7 +210,7 @@ class PrivateContainerCliTests(unittest.TestCase):
                 "short\n",
             )
             self.assertEqual((code, stdout), (2, ""))
-            self.assertIn("12-256 printable", stderr)
+            self.assertIn("12-256 Unicode", stderr)
             self.assertFalse(protected.exists())
 
             self.run_cli(

@@ -1,7 +1,17 @@
 # Release checklist
 
 The release workflow runs for `v*` tags. Administrators must protect that tag
-pattern before publishing. Before creating a tag:
+pattern and enable GitHub **release immutability** before publishing. Confirm
+the setting with an administrator-visible read-only request:
+
+```shell
+gh api repos/Yunushan/cpe-access-atlas/immutable-releases
+```
+
+The response must report `enabled: true`; missing permission or an unavailable
+setting is not evidence of enforcement. Keep this administrator check outside
+the release job so its token does not gain repository-administration privileges.
+Before creating a tag:
 
 1. Confirm the catalog, schemas, documentation, and a matching version heading
    in `CHANGELOG.md` describe the same version.
@@ -120,6 +130,17 @@ removed after validation cannot be silently recreated by the release command.
 Existing published assets are never overwritten by a rerun: release a new version when
 artifacts change. The existing v0.3.0 release predates these safeguards.
 
+The current `gh release create` command attaches every asset before publication:
+GitHub CLI creates a draft, uploads the files, and then publishes it, which is
+compatible with repository release immutability. Do not replace this with a
+publish-then-upload sequence. After publication the workflow checks the release
+metadata and fails unless `immutable` is exactly `true`; API failures and missing
+or malformed evidence also fail. This check cannot undo a publication made while
+the repository setting was disabled. Preserve that release, correct the setting,
+and prepare a new version. Do not delete or replace published assets to make a
+failed verification look successful. See the
+[GitHub CLI release-create reference](https://cli.github.com/manual/gh_release_create).
+
 ## Published-artifact verification
 
 The solo maintainer may perform this verification. Use a fresh environment and
@@ -197,6 +218,7 @@ Repository administrators should also keep these GitHub controls enabled:
 - pull requests and passing CI, security, and CodeQL checks on `main`, with
   zero mandatory approvals under the solo-maintainer policy;
 - signed or verified release tags and no direct pushes to `main`;
+- release immutability enabled, with the latest publication confirmed immutable;
 - Dependabot security updates and alerts;
 - secret scanning and push protection;
 - a private security reporting channel.

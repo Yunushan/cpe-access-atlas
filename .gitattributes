@@ -1,0 +1,2 @@
+# Keep reviewed source and packaged archives identical across supported hosts.
+* text=auto eol=lf

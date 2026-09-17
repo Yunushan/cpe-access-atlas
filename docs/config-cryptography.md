@@ -28,8 +28,8 @@ decoder without weakening its corruption, size, or credential checks.
 
 ## Cross-implementation test evidence
 
-The [public H3600P research](https://orca.pet/zteh3600p/#decrypting-the-settings)
-and its [reference script](https://orca.pet/zteh3600p/ztetool.py) were inspected
+The [public H3600P research](https://lacerta.es/zteh3600p/)
+and its [reference script](https://lacerta.es/zteh3600p/ztetool.py) were inspected
 on 2026-09-05. Its referenced [C digest implementation](https://github.com/ilvn/SHA256/blob/d8d69dbfeeb68f31e74f8e24971332e996eed76b/mark2/sha256.c)
 is commit-pinned. Only reviewed source and synthetic data were used, never
 downloaded modem exports, device secrets, firmware, or network/device operations.
@@ -92,6 +92,17 @@ AES-GCM with a fresh 96-bit nonce and 128-bit authentication tag. The header,
 salt, and nonce are authenticated as associated data, and the format is
 bounded and length-checked before decryption. A wrong passphrase or any
 tampering fails authentication without producing plaintext output.
+
+Version-1 local-container passphrases contain 12–256 Unicode scalar values.
+C0/C1 controls, line/paragraph separators and surrogate code points are
+rejected using fixed numeric ranges. The policy does not depend on Python's
+Unicode database, so a newly assigned character accepted by one supported
+interpreter remains usable on the others. Exact UTF-8 bytes feed scrypt:
+no normalization, case folding, trimming or whitespace substitution occurs.
+Keep the exact passphrase; visually identical composed/decomposed text can
+produce different keys. Fixed independent ciphertext vectors test this policy
+on every supported interpreter, including reading a container created before
+the policy correction on Python 3.14.
 
 This format is deliberately not a ZTE/H3600P container: a modem will not import
 it, and using it cannot establish firmware acceptance or root access. It also

@@ -31,6 +31,7 @@ class SdistTests(unittest.TestCase):
             "LICENSE": b"0BSD\n",
             ".gitignore": b".tmp/\n",
             ".gitleaks.toml": b"[extend]\nuseDefault = true\n",
+            ".gitattributes": b"* text=auto eol=lf\n",
             ".pre-commit-config.yaml": b"repos: []\n",
             "README.md": b"synthetic\n",
             "requirements-ci.lock": b"# synthetic\n",

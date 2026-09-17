@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
+import json
 import unittest
 from itertools import product
 from unittest.mock import patch
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cpe_access_atlas.redaction import RedactionError, redact_text
 
@@ -179,6 +183,210 @@ class RedactionTests(unittest.TestCase):
         output = redact_text('Authorization: Digest username="alice", nonce="sensitive-value"\n')
         self.assertNotIn("sensitive-value", output)
         self.assertIn("Authorization: [REDACTED]", output)
+        self.assertEqual(
+            redact_text(
+                'Captured Authorization: Digest username="SYNTHETIC_USER",\n'
+                ' response="SYNTHETIC_CREDENTIAL"\nHost: router.local'
+            ),
+            "Captured Authorization: [REDACTED]\nHost: router.local",
+        )
+
+    def test_redacts_complete_authorization_headers_and_folded_continuations(self) -> None:
+        for key in ("Authorization", "Proxy-Authorization", "> Authorization"):
+            for scheme in ("Digest", "Bearer", "Basic", "CustomScheme"):
+                for newline in ("\n", "\r\n"):
+                    source = (
+                        f'{key}: {scheme} username="SYNTHETIC_USER",{newline}'
+                        f' nonce="SYNTHETIC_NONCE",{newline}'
+                        f'\tresponse="SYNTHETIC_CREDENTIAL"{newline}'
+                        "Host: router.local"
+                    )
+                    expected = f"{key}: [REDACTED]{newline}Host: router.local"
+                    with self.subTest(key=key, scheme=scheme, newline=newline):
+                        self.assertEqual(redact_text(source), expected)
+                        self.assertEqual(redact_text(expected), expected)
+
+    def test_unterminated_authorization_quotes_are_masked_without_backtracking(self) -> None:
+        for size in (1, 12, 30, 1000, 20_000):
+            for quote in ('"', "'"):
+                credential = quote + "\\" * size + "SYNTHETIC_UNTERMINATED"
+                source = f"Captured Authorization: {credential}\nHost: router.local"
+                with self.subTest(size=size, quote=quote):
+                    expected = "Captured Authorization: [REDACTED]\nHost: router.local"
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+
+    def test_unquoted_credentials_include_punctuation_spaces_and_unclosed_quotes(self) -> None:
+        for credential in (
+            "SYNTHETIC_HEAD;SYNTHETIC_TAIL",
+            "SYNTHETIC_HEAD&SYNTHETIC_TAIL",
+            "SYNTHETIC_HEAD,SYNTHETIC_TAIL",
+            "SYNTHETIC_HEAD'SYNTHETIC_TAIL",
+            'SYNTHETIC_HEAD"SYNTHETIC_TAIL',
+            "SYNTHETIC_HEAD SYNTHETIC_TAIL",
+            "SYNTHETIC_HEAD}SYNTHETIC_TAIL",
+            '"SYNTHETIC_HEAD SYNTHETIC_TAIL',
+            "'SYNTHETIC_HEAD SYNTHETIC_TAIL",
+            '"SYNTHETIC_HEAD"SYNTHETIC_TAIL',
+        ):
+            for separator in ("=", ":", ": "):
+                source = f"password{separator}{credential}\nmode=bridge"
+                expected = f"password{separator}[REDACTED]\nmode=bridge"
+                with self.subTest(credential=credential, separator=separator):
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+
+    def test_compact_colon_values_cannot_hide_a_sensitive_key(self) -> None:
+        for key in ("password", "token", "cfg:password", "vendor:cfg:password"):
+            for credential in ("SYNTHETIC_HEAD:SYNTHETIC_TAIL", "SYNTHETIC_HEAD=value"):
+                source = f"{key}:{credential} mode=bridge"
+                self.assertEqual(redact_text(source), f"{key}:[REDACTED] mode=bridge")
+        self.assertEqual(redact_text("cfg:password=SYNTHETIC_SECRET"), "cfg:password=[REDACTED]")
+
+    def test_assignment_boundaries_preserve_public_fields_and_subsequent_masking(self) -> None:
+        self.assertEqual(
+            redact_text("setting=password=SYNTHETIC_SECRET"), "setting=password=[REDACTED]"
+        )
+        for prefix in ("$", "(", "[", "prefix+", "prefix\\", "prefix#"):
+            source = f"{prefix}token=SYNTHETIC_SECRET"
+            self.assertEqual(redact_text(source), f"{prefix}token=[REDACTED]")
+        for boundary in (" ", "\t", ";", "; ", ", ", "&"):
+            for public in ("mode=bridge", '"mode":"bridge"', "--port=22"):
+                source = (
+                    f"password=SYNTHETIC_ONE; ambiguous words{boundary}{public}"
+                    f"{boundary}token=SYNTHETIC_TWO&unseparated"
+                )
+                expected = f"password=[REDACTED]{boundary}{public}{boundary}token=[REDACTED]"
+                with self.subTest(boundary=boundary, public=public):
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+
+    def test_yaml_block_scalars_remove_all_indented_secret_content(self) -> None:
+        for indicator in ("|", ">", "|-", ">+", "|2", ">2-", "|-2", ">+2 # private"):
+            for prefix in ("", "  ", "- ", "  -   "):
+                for newline in ("\n", "\r\n"):
+                    indent = " " * (len(prefix) + 2)
+                    public_indent = " " * len(prefix)
+                    source = (
+                        f"{prefix}password: {indicator}{newline}"
+                        f"{indent}SYNTHETIC_ONE{newline}{newline}"
+                        f"{indent}  SYNTHETIC_TWO{newline}"
+                        f"{public_indent}mode: bridge{newline}"
+                    )
+                    expected = (
+                        f"{prefix}password: [REDACTED]{newline}{public_indent}mode: bridge{newline}"
+                    )
+                    with self.subTest(indicator=indicator, prefix=prefix, newline=newline):
+                        self.assertEqual(redact_text(source), expected)
+                        self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text("password: |\n  SYNTHETIC_SECRET"), "password: [REDACTED]\n")
+        self.assertEqual(
+            redact_text("password: |\nmode: bridge"), "password: [REDACTED]\nmode: bridge"
+        )
+        self.assertEqual(redact_text("notes: |\n  public text"), "notes: |\n  public text")
+
+    def test_namespaced_and_dotted_credentials_share_field_recognition(self) -> None:
+        for name in (
+            "SIP_AuthPassword",
+            "SIP_AuthenticationPassword",
+            "PPPPassword",
+            "InternetGatewayDevice.WANDevice.1.WANPPPConnection.1.Password",
+            "Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+            "Device.Users.User.2.X_VENDOR_AuthPassword",
+        ):
+            for template in (
+                "{name}=SYNTHETIC_SECRET",
+                '{{"{name}":"SYNTHETIC_SECRET"}}',
+                '<DM name="{name}" val="SYNTHETIC_SECRET"/>',
+                '<DM val="SYNTHETIC_SECRET" name="{name}"/>',
+                '<cfg:DM cfg:key="{name}" cfg:value="SYNTHETIC_SECRET"/>',
+                '<cfg:DM cfg:{name}="SYNTHETIC_SECRET"/>',
+                "<cfg:{name}>SYNTHETIC_SECRET</cfg:{name}>",
+            ):
+                source = template.format(name=name)
+                expected = source.replace("SYNTHETIC_SECRET", "[REDACTED]")
+                with self.subTest(name=name, template=template):
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+        for name in (
+            "SIP_AuthPasswordLength",
+            "Device.WiFi.PreSharedKeyCount",
+            "PPPPasswordEnabled",
+        ):
+            source = f'<DM name="{name}" val="visible"/>'
+            self.assertEqual(redact_text(source), source)
+
+    @given(st.text(alphabet="abcXYZ019 _-;,'\"&/\\{}[]!$%çğşΩ🔑", max_size=1000))
+    @settings(max_examples=150, deadline=None)
+    def test_generated_unquoted_values_are_fully_masked(self, value: str) -> None:
+        source = f"password=SYNTHETIC_HEAD{value}SYNTHETIC_TAIL mode=bridge"
+        expected = "password=[REDACTED] mode=bridge"
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+
+    @given(
+        st.lists(
+            st.text(alphabet="abcdef019 ;,:={}[]!", min_size=1, max_size=100),
+            min_size=1,
+            max_size=20,
+        )
+    )
+    @settings(max_examples=100, deadline=None)
+    def test_generated_yaml_blocks_mask_field_looking_lines(self, lines: list[str]) -> None:
+        source = "password: |\n" + "".join(f"  {line}\n" for line in lines) + "mode: bridge\n"
+        self.assertEqual(redact_text(source), "password: [REDACTED]\nmode: bridge\n")
+
+    def test_long_report_lines_preserve_bounded_scanning_and_following_fields(self) -> None:
+        for count in (1, 1000, 20_000):
+            source = "password=SYNTHETIC; tail mode=bridge " * count
+            expected = "password=[REDACTED] mode=bridge " * count
+            self.assertEqual(redact_text(source), expected)
+        path = "Device.Instance.1." * 20_000
+        source = f'<DM name="{path}SIP_AuthPassword" val="SYNTHETIC_SECRET"/>'
+        self.assertEqual(redact_text(source), source.replace("SYNTHETIC_SECRET", "[REDACTED]"))
+        self.assertEqual(redact_text(f"{path}Setting=visible"), f"{path}Setting=visible")
+
+    def test_quoted_assignments_preserve_cross_line_keys_separators_and_values(self) -> None:
+        for before_colon, after_colon in product(("", "\n", "\r\n \t"), repeat=2):
+            for separator in ("\n", "\r", "\r\n", "\u2028", "\u0085", "\v", "\f"):
+                for quote in ('"', "'"):
+                    source = (
+                        f"{{{quote}password{quote}{before_colon}:{after_colon}"
+                        f"{quote}SYNTHETIC_HEAD{separator}SYNTHETIC_TAIL{quote},"
+                        f"{quote}mode{quote}: {quote}bridge{quote}}}"
+                    )
+                    expected = source.replace(
+                        f"SYNTHETIC_HEAD{separator}SYNTHETIC_TAIL", "[REDACTED]"
+                    )
+                    with self.subTest(before=before_colon, after=after_colon, sep=separator):
+                        self.assertEqual(redact_text(source), expected)
+                        self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text('password:\n "SYNTHETIC_SECRET"'), 'password:\n "[REDACTED]"')
+        self.assertEqual(redact_text("password:\nSYNTHETIC_SECRET"), "password:\n[REDACTED]")
+        self.assertEqual(
+            redact_text("password\n= SYNTHETIC_SECRET mode=bridge"),
+            "password\n= [REDACTED] mode=bridge",
+        )
+        self.assertEqual(redact_text("password:"), "password:")
+        self.assertEqual(redact_text("password:\n"), "password:\n[REDACTED]")
+
+    @given(
+        st.text(alphabet="aAZ09\"'\\ \t\r\n\v\f\u0085\u2028\u2029çğşΩ🔑", max_size=500),
+        st.sampled_from(("", "\n", "\r\n \t")),
+        st.sampled_from(("", "\n", "\r\n \t")),
+    )
+    @settings(max_examples=150, deadline=None)
+    def test_json_secrets_with_multiline_formatting_and_unicode_are_fully_masked(
+        self, value: str, before_colon: str, after_colon: str
+    ) -> None:
+        scalar = json.dumps("SYNTHETIC_HEAD" + value + "SYNTHETIC_TAIL", ensure_ascii=False)
+        source = f'{{"password"{before_colon}:{after_colon}{scalar},"mode":"bridge"}}'
+        expected = f'{{"password"{before_colon}:{after_colon}"[REDACTED]","mode":"bridge"}}'
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(
+            json.loads(redact_text(source)), {"password": "[REDACTED]", "mode": "bridge"}
+        )
+        self.assertEqual(redact_text(expected), expected)
 
     def test_preserves_non_ip_colon_tokens(self) -> None:
         output = redact_text("label=ab:cd:ef")

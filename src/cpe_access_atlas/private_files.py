@@ -20,6 +20,30 @@ def _restrict_permissions(path: Path) -> None:
     path.chmod(_PRIVATE_MODE)
 
 
+def _sync_directory(descriptor: int) -> None:
+    """Request directory-entry durability; unsupported filesystems fail closed."""
+
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise OSError("unable to synchronize private output directory") from exc
+
+
+def _open_sync_directory(path: Path) -> int:
+    """Check POSIX directory synchronization before creating a private artifact."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("private output parent is not a directory")
+        _sync_directory(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def write_private_bytes(
     path: str | Path,
     data: bytes,
@@ -35,6 +59,9 @@ def write_private_bytes(
     Publishing without replacement uses an atomic hard link, not a separate
     existence check followed by replacement. Filesystems without hard-link
     support fail closed; a private local NTFS/APFS/ext4 directory is suitable.
+    POSIX publication and temporary-name cleanup synchronize the parent
+    directory. A synchronization error is reported even if publication has
+    already succeeded; the published target is retained in that case.
     """
 
     target = Path(path)
@@ -43,10 +70,12 @@ def write_private_bytes(
 
     temporary: Path | None = None
     descriptor: int | None = None
+    directory_descriptor: int | None = None
     try:
         if _IS_WINDOWS:
             descriptor, temporary_name = create_private_temp(target)
         else:
+            directory_descriptor = _open_sync_directory(target.parent)
             descriptor, temporary_name = tempfile.mkstemp(
                 prefix=f".{target.name}.",
                 dir=str(target.parent),
@@ -71,11 +100,21 @@ def write_private_bytes(
             # Both names refer to the already flushed, permission-restricted
             # inode; finally removes only our temporary name.
             os.link(temporary, target)
+        if directory_descriptor is not None:
+            _sync_directory(directory_descriptor)
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        try:
+            if descriptor is not None:
+                os.close(descriptor)
+        finally:
+            try:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                    if directory_descriptor is not None:
+                        _sync_directory(directory_descriptor)
+            finally:
+                if directory_descriptor is not None:
+                    os.close(directory_descriptor)
 
 
 def write_private_text(

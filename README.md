@@ -298,9 +298,11 @@ The command uses a fresh salt, scrypt, and AES-GCM authentication. The matching
 passphrase is supplied. This container is **not** a modem-import format and does
 not redact credentials, prove firmware compatibility, or make a backup safe to
 publish. Keep the protected file and passphrase separate; do not commit either
-one or attach them to an issue. The passphrase must be 12–256 printable
-characters and must be supplied through a hidden prompt or a private pipe, never
-as a command-line argument.
+one or attach them to an issue. The passphrase must contain 12–256 Unicode
+characters, excluding C0/C1 controls, line/paragraph separators, and surrogates.
+This policy is stable across supported Python versions. Preserve its exact text:
+no Unicode normalization or whitespace trimming occurs. Supply it through a
+hidden prompt or a private pipe, never as a command-line argument.
 
 ## Access terminology
 

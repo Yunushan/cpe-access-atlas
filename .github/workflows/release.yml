@@ -240,4 +240,25 @@ jobs:
           if [ "$prerelease" = "true" ]; then
             release_args+=(--prerelease)
           fi
+          # gh creates a draft, uploads all assets, then publishes it. Repository
+          # release immutability must be enabled before this protected tag runs.
           gh release create "$GITHUB_REF_NAME" dist/* "${release_args[@]}"
+      - name: Verify published release is immutable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+
+          result = subprocess.run(
+              ["gh", "api", "--method", "GET",
+               f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/tags/{os.environ['GITHUB_REF_NAME']}"],
+              capture_output=True, text=True, check=True, timeout=30,
+          )
+          release = json.loads(result.stdout)
+          if not isinstance(release, dict) or release.get("immutable") is not True:
+              raise RuntimeError(
+                  "Published release immutability was not verified; do not replace its assets"
+              )

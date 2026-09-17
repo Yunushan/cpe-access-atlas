@@ -56,6 +56,16 @@ an authorized administrator updates the repository settings.
 
 ## Releases and security
 
+- Enable **release immutability** in the repository's Releases settings before
+  creating the next protected release tag. Tag rules protect Git references;
+  they do not prevent release-asset replacement. Immutable releases protect
+  both the published assets and their associated tag. The published-release
+  audit requires the newest release's `immutable` field to be exactly `true`;
+  `false` fails, while missing or malformed evidence stays `UNVERIFIED`.
+  Enabling the setting applies to future publications and does not establish
+  immutability for an existing release. Preserve older artifacts and publish
+  a new version through the protected process. See
+  [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 - Protect the `v*` tag pattern and restrict release-tag creation to
   maintainers.
   Use a creation ruleset with explicitly authorized creators, plus separate
@@ -129,8 +139,9 @@ The published-release check selects the newest nondraft release by publication
 time, including prereleases. It resolves its annotated tag to a commit, reads
 the declared package version and maturity classifiers at that immutable commit
 without executing code, and compares main reachability using pinned commit IDs.
-It requires distinct uploaded, nonempty wheel/sdist/checksum assets and runtime
-SBOMs for every declared supported Python version on Linux, Windows, and macOS.
+It requires confirmed release immutability, distinct uploaded, nonempty
+wheel/sdist/checksum assets and runtime SBOMs for every declared supported Python
+version on Linux, Windows, and macOS.
 Required assets must have GitHub SHA-256 digest metadata. Missing, duplicated,
 misnamed, or incomplete inventory records do not pass.
 
@@ -181,6 +192,7 @@ From an authenticated GitHub CLI session with repository-admin visibility:
 ```shell
 gh api repos/Yunushan/cpe-access-atlas/branches/main/protection
 gh api repos/Yunushan/cpe-access-atlas/rulesets
+gh api repos/Yunushan/cpe-access-atlas/immutable-releases
 gh api repos/Yunushan/cpe-access-atlas/releases
 gh api repos/Yunushan/cpe-access-atlas/tags
 gh api repos/Yunushan/cpe-access-atlas
@@ -193,4 +205,12 @@ zero open CodeQL alerts, and successful CI, security, CodeQL, package-smoke,
 dependency-audit, and secret-scan check runs for the merged commit. On a push,
 the dependency-review check may be skipped because it is pull-request-only;
 the branch policy must still require it for pull requests. The latest release
-must also use an annotated tag whose commit is reachable from `main`.
+must also be immutable and use an annotated tag whose commit is reachable from
+`main`.
+
+Checking the repository's `immutable-releases` setting requires Administration
+read permission. The release workflow keeps its existing restricted token
+permissions and verifies the published release's `immutable` result through the
+release metadata endpoint. This is a publication postcondition, not a substitute
+for the administrator's prepublication settings check; an inaccessible or false
+postcondition fails the workflow without deleting or replacing published assets.

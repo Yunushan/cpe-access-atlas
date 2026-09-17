@@ -55,6 +55,21 @@ def build_research_template(recipe: Recipe) -> str:
 - Connectivity restored:
 - WAN-side management still disabled:
 
+## Qualification evidence
+
+Complete only from observed results on this exact target; leave unknowns explicit.
+Never perform an unverified import or reset merely to fill in this report.
+
+- Tested on (YYYY-MM-DD):
+- Hardware evidence:
+- Claimed access independently verified:
+- Recovery tested before and after:
+- Services compared with the original baseline (including not-applicable items):
+- WAN isolation verified:
+- Config import accepted and unrelated settings preserved (if claimed):
+- Independent reproduction (required for stable status):
+- Reviewed, sanitized evidence URLs:
+
 ## Sanitization checklist
 
 - [ ] No configuration backup is attached.

@@ -273,7 +273,10 @@ def _decode_base64_wrapper(data: bytes) -> tuple[bytes, bool]:
         raise ConfigError("configuration artifact is empty")
     if len(data) > _MAX_ARTIFACT_BYTES:
         raise ConfigError("configuration artifact exceeds the safety size limit")
-    candidate = b"".join(data.split())
+    # bytes.split() builds one object/list entry per whitespace-separated token.
+    # Strip the same six ASCII whitespace bytes in one bounded allocation so a
+    # small malformed artifact cannot amplify into hundreds of MiB of tokens.
+    candidate = data.translate(None, b" \t\n\r\v\f")
     if not candidate or len(candidate) % 4 or _BASE64_PATTERN.fullmatch(candidate) is None:
         return data, False
     try:
