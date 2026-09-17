@@ -2,7 +2,33 @@
 
 All notable changes are documented here.
 
-## Unreleased
+## 0.4.0a4 - Unreleased
+
+- Preserve private-container passphrase portability across supported Python
+  versions with a stable Unicode policy and independent fixed ciphertext vectors.
+  Existing containers keep the same UTF-8 key derivation and remain readable.
+- Redact complete folded Authorization headers, ambiguous punctuated/multiword
+  values, YAML block scalars, compact password field names, and dotted TR-069
+  paths. Preserve multiline JSON/quoted values and remove exponential matching
+  of unterminated Authorization quotes. Bound newline-heavy report allocations.
+  Keep manual review mandatory because unknown sensitive fields can remain.
+- Bound base64 whitespace normalization memory without constructing a token list;
+  cover hostile whitespace-heavy inputs with measured allocation-budget tests.
+- Detect overlapping model aliases in catalog validation using the same accepted
+  identifiers as runtime lookup. Require named, linked, dated qualification
+  evidence before verified/stable status; config-import and independent
+  reproduction evidence are required for their respective support claims.
+- Synchronize POSIX private-output directories before writing, after publication,
+  and after temporary-name cleanup; propagate durability failures and retain any
+  already published output. Physical power-loss resilience depends on storage.
+- Require immutable published releases in the repository audit and check the
+  publication result without increasing workflow token permissions.
+- Standardize source line endings and include the policy in source archive checks.
+
+Exact-device acceptance, service preservation, access and recovery remain
+unverified. The legacy vendor-format KDF/CBC risk and its open CodeQL finding
+are not remediated by these fixes; release publication remains gated on the
+configured security checks. This candidate is not a production-support claim.
 
 - Add a separate authenticated local container for credential-bearing artifacts,
   using fresh scrypt salt and AES-GCM nonce/tag; keep it distinct from the

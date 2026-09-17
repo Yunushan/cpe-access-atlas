@@ -74,13 +74,26 @@ MAX_CONTAINER_BYTES = MAX_PRIVATE_BYTES + _HEADER.size + _SALT_LENGTH + _NONCE_L
 
 
 def _validate_passphrase(passphrase: str) -> bytes:
+    # Unicode categories change with Python's Unicode database. In particular,
+    # isprintable() can reject a passphrase containing a newer assigned character
+    # when an existing container is opened on an older supported interpreter.
+    # Use fixed ranges instead: Unicode scalars except C0/C1 controls and the
+    # line/paragraph separators. Future assignments therefore remain compatible.
+    # Do not normalize or trim: the exact UTF-8 bytes are part of the v1 KDF.
     if (
         not isinstance(passphrase, str)
         or not _MIN_PASSPHRASE_CHARS <= len(passphrase) <= _MAX_PASSPHRASE_CHARS
-        or not passphrase.isprintable()
+        or any(
+            codepoint < 0x20
+            or 0x7F <= codepoint <= 0x9F
+            or 0x2028 <= codepoint <= 0x2029
+            or 0xD800 <= codepoint <= 0xDFFF
+            for codepoint in map(ord, passphrase)
+        )
     ):
         raise PrivateContainerError(
-            "private-container passphrase must contain 12-256 printable characters"
+            "private-container passphrase must contain 12-256 Unicode characters "
+            "without C0/C1 controls, line separators, or surrogates"
         )
     return passphrase.encode("utf-8")
 

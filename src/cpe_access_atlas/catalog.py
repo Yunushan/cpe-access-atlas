@@ -7,7 +7,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from typing import Any
 
@@ -24,6 +24,12 @@ def normalize(value: str) -> str:
         raise CatalogError("catalog lookup values must be strings")
     value = unicodedata.normalize("NFKC", value)
     return re.sub(r"\s+", " ", value).strip().casefold()
+
+
+def _model_lookup_values(vendor: str, model: str, aliases: Iterable[str]) -> set[str]:
+    """Use the same accepted identifiers for matching and ambiguity validation."""
+
+    return {normalize(model), normalize(f"{vendor} {model}"), *(normalize(x) for x in aliases)}
 
 
 @dataclass(frozen=True)
@@ -67,6 +73,7 @@ class Recipe:
     evidence: tuple[dict[str, str], ...]
     next_evidence: tuple[str, ...]
     last_reviewed: str
+    qualification: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, item: dict[str, Any]) -> Recipe:
@@ -97,6 +104,9 @@ class Recipe:
             ),
             next_evidence=tuple(str(value) for value in item.get("next_evidence", [])),
             last_reviewed=str(item["last_reviewed"]),
+            qualification={
+                str(key): str(value) for key, value in item.get("qualification", {}).items()
+            },
         )
 
     def matches(
@@ -107,11 +117,7 @@ class Recipe:
         firmware: str,
     ) -> bool:
         isp_values = {normalize(self.isp_id), normalize(self.isp_name)}
-        model_values = {
-            normalize(self.model),
-            normalize(f"{self.vendor} {self.model}"),
-            *(normalize(alias) for alias in self.model_aliases),
-        }
+        model_values = _model_lookup_values(self.vendor, self.model, self.model_aliases)
         return (
             normalize(isp) in isp_values
             and normalize(model) in model_values
@@ -161,6 +167,40 @@ class OfficialDevice:
             source_provider_ids=tuple(str(source["provider_id"]) for source in source_records),
             source_urls=tuple(str(source["url"]) for source in source_records),
         )
+
+
+def _qualification_errors(recipe: Recipe) -> list[str]:
+    """Require reviewable exact-target evidence before declaring verified support."""
+
+    errors: list[str] = []
+    required: set[str] = set()
+    if recipe.status in {"verified", "stable"}:
+        placeholders = {"", "unresolved", "unknown", "tbd", "n/a"}
+        if any(
+            normalize(value) in placeholders
+            for value in (recipe.hardware_revision, recipe.firmware)
+        ):
+            errors.append(f"{recipe.id}: qualified targets require concrete hardware and firmware")
+        required.update(
+            {"hardware", "access", "recovery", "services", "wan_isolation", "tested_on"}
+        )
+        if "offline-private-config-codec" in recipe.capabilities:
+            required.add("config_import")
+    if recipe.status == "stable":
+        required.add("independent_reproduction")
+    missing = required - recipe.qualification.keys()
+    if missing:
+        errors.append(f"{recipe.id}: qualification evidence missing: {', '.join(sorted(missing))}")
+    evidence_urls = {item["url"] for item in recipe.evidence}
+    for kind, value in recipe.qualification.items():
+        if kind == "tested_on":
+            if value > recipe.last_reviewed:
+                errors.append(f"{recipe.id}: qualification test date is after the evidence review")
+        elif value not in evidence_urls:
+            errors.append(
+                f"{recipe.id}: qualification {kind} must reference a catalog evidence URL"
+            )
+    return errors
 
 
 def _load_json(relative_path: str) -> Any:
@@ -226,7 +266,11 @@ def load_recipes() -> tuple[Recipe, ...]:
                 "recipe.schema.json",
                 entry.name,
             )
-            recipes.append(Recipe.from_dict(payload))
+            recipe = Recipe.from_dict(payload)
+            errors = _qualification_errors(recipe)
+            if errors:
+                raise CatalogError("; ".join(errors))
+            recipes.append(recipe)
     return tuple(recipes)
 
 
@@ -360,6 +404,7 @@ def validate_catalog() -> list[str]:
     valid_statuses = {"researching", "experimental", "verified", "stable", "blocked"}
     target_keys: set[tuple[str, str, str, str]] = set()
     for recipe in recipes:
+        errors.extend(_qualification_errors(recipe))
         if recipe.schema_version != 1:
             errors.append(f"{recipe.id}: unsupported schema version")
         if recipe.isp_id not in known_providers:
@@ -377,14 +422,17 @@ def validate_catalog() -> list[str]:
             "stable",
         }:
             errors.append(f"{recipe.id}: verified recipes require a resolved hardware revision")
-        target_key = (
-            normalize(recipe.isp_id),
-            normalize(recipe.model),
-            normalize(recipe.hardware_revision),
-            normalize(recipe.firmware),
-        )
-        if target_key in target_keys:
-            errors.append(f"{recipe.id}: duplicate exact target")
-        target_keys.add(target_key)
+        for model in sorted(
+            _model_lookup_values(recipe.vendor, recipe.model, recipe.model_aliases)
+        ):
+            target_key = (
+                normalize(recipe.isp_id),
+                model,
+                normalize(recipe.hardware_revision),
+                normalize(recipe.firmware),
+            )
+            if target_key in target_keys:
+                errors.append(f"{recipe.id}: duplicate exact target for model identifier {model!r}")
+            target_keys.add(target_key)
 
     return errors

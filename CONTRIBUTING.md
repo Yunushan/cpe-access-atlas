@@ -29,6 +29,20 @@ shell payloads, firmware images, or vendor-owned binaries.
 `verified` and `stable` require hardware evidence. Mock tests alone are not
 enough.
 
+Qualified records must include a `qualification` object with `hardware`,
+`access`, `recovery`, `services`, and `wan_isolation` URLs and a `tested_on`
+date. Each URL must also appear in the record's reviewed `evidence` list;
+the test date cannot be later than `last_reviewed`. A verified/stable record
+with `offline-private-config-codec` must additionally include `config_import`.
+Stable records additionally require `independent_reproduction`. Verified
+records require exact hardware and no remaining blockers. Generic product
+pages do not establish these outcomes: review the linked sanitized reports
+against the exact ISP, hardware, firmware, and claimed access level.
+
+The schema and loader enforce the evidence structure, not the truth of a
+hardware experiment. Follow [device qualification](docs/device-qualification.md)
+and retain private originals; never publish backups or device credentials.
+
 ## Development
 
 This project currently has one maintainer. Push changes to a feature branch,

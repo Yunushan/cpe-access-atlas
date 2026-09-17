@@ -1082,6 +1082,14 @@ def _release_metadata(
 def _audit_release(api: GitHubApi) -> CheckResult:
     try:
         release = _latest_published_release(api)
+        if type(release.get("immutable")) is not bool:
+            raise _ReleaseEvidenceError(
+                "published release immutability is unavailable or malformed"
+            )
+        if not release["immutable"]:
+            raise _ReleaseEvidenceError(
+                "newest published release must have immutable assets and tag", STATUS_FAIL
+            )
         commit = _release_commit(api, release)
         version, versions = _release_metadata(api, release, commit)
         assets, error = _get_collection(api, f"releases/{release['id']}/assets")
@@ -1131,7 +1139,8 @@ def _audit_release(api: GitHubApi) -> CheckResult:
         return CheckResult(
             "published release",
             STATUS_PASS,
-            f"{release['tag_name']} classification and {len(expected)} required asset "
+            f"{release['tag_name']} immutability, classification and "
+            f"{len(expected)} required asset "
             "metadata records verified; "
             "download checksums and provenance still require independent verification",
         )

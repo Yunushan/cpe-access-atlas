@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import struct
+import tracemalloc
 import unittest
 import zlib
 from contextlib import redirect_stderr, redirect_stdout
@@ -55,6 +56,30 @@ def compressed_chunks(chunks: list[bytes], declared_size: int) -> bytes:
 
 
 class ConfigSafetyTests(unittest.TestCase):
+    def test_base64_whitespace_normalization_has_a_bounded_memory_budget(self) -> None:
+        # Allocate the input before tracing: the budget measures parser overhead.
+        # The old split/list/join implementation used roughly 45x this input.
+        for size in (1024 * 1024, 2 * 1024 * 1024):
+            artifact = b"a " * (size // 2)
+            for reader in (config.inspect_config, decode_config):
+                with self.subTest(size=size, reader=reader.__name__):
+                    tracemalloc.start()
+                    try:
+                        with self.assertRaisesRegex(ConfigError, "not a supported"):
+                            reader(artifact)
+                        _, peak = tracemalloc.get_traced_memory()
+                    finally:
+                        tracemalloc.stop()
+                    self.assertLess(peak, 8 * size)
+
+    def test_base64_wrapper_accepts_all_ascii_whitespace_without_changing_xml(self) -> None:
+        xml = b"<DB><Data>synthetic preserved value</Data></DB>"
+        encoded = encode_config(xml)
+        whitespace = b" \t\n\r\v\f"
+        wrapped = whitespace + whitespace.join(bytes([value]) for value in encoded) + whitespace
+        self.assertEqual(decode_config(wrapped).xml, xml)
+        self.assertEqual(config.inspect_config(wrapped), config.inspect_config(encoded))
+
     def test_combined_chunk_budget_is_enforced_before_second_decompression(self) -> None:
         # Small limits make this deterministic without allocating a decompression bomb.
         artifact = compressed_chunks([b"a" * 128, b"b" * 128], 128)

@@ -57,6 +57,18 @@ CLI
    is intentionally not accepted by a modem and is not a publishing or
    compatibility mechanism.
 
+On POSIX, private output checks that the parent directory supports `fsync`
+before creating a temporary file, flushes the file before publication, and
+synchronizes the directory after publication and removal of the temporary
+name. Unsupported synchronization and flush failures are reported; a target
+already published before a later failure is retained, so a failed call can
+still leave a complete output file. These operations request durability from
+the OS and filesystem; they are not a tested physical power-loss guarantee.
+Windows retains its existing file flush and atomic publication behavior,
+without a directory-durability claim. Filesystem and hardware behavior still
+matter; see the [Linux `fsync` documentation](https://man7.org/linux/man-pages/man2/fsync.2.html)
+and [Apple's storage-cache limitations](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html).
+
 The experimental codec reproduces vendor key derivation and AES-CBC container
 behavior; it is not a general-purpose secure backup format. See the
 [configuration cryptography threat model](config-cryptography.md) for the

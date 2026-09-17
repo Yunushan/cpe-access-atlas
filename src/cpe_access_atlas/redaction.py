@@ -7,6 +7,7 @@ import ipaddress
 import re
 from collections.abc import Iterator
 from html import unescape
+from io import StringIO
 
 MAX_REPORT_CHARS = 8 * 1024 * 1024
 
@@ -20,34 +21,35 @@ class RedactionError(ValueError):
 _SECRET_NAME = (
     r"(?:password|passwd|(?:key[-_]?)?passphrase|pre[-_]?shared[-_]?key|"  # noqa: S105
     r"(?:(?:wi[-_]?fi|wlan|wpa[23]?)[-_]?)?psk|"
-    r"secret|secret[-_]?key|token|cookie|"
+    r"secret|secret[-_]?key|token|cookie|(?:proxy[-_]?)?authorization|"
     r"api[-_]?key|auth[-_]?token|access[-_]?token|refresh[-_]?token|"
     r"private[-_]?key|pppoe[-_]?password|sip[-_]?password|acs[-_]?password|"
     r"serial(?:[-_]?number)?|subscriber[-_]?id)"
 )
-_FIELD_PREFIX = r"[-_]*(?:[^\W_]+[-_]+)*"
-_SENSITIVE_FIELD = re.compile(rf"(?i){_FIELD_PREFIX}{_SECRET_NAME}")
-# Start only at a complete field boundary. This permits multi-part vendor
-# prefixes without rescanning every hyphen-separated suffix of a long token.
-# Prefix words accept Unicode alphanumerics; runs of separators are disjoint
-# from words so matching cannot split the same text into overlapping prefixes.
-# Leading separators preserve options such as --password= and _vendor-password=.
-_SECRET_KEY = (
-    r"(?P<key>[\"']?(?<![\w-])"
-    rf"{_FIELD_PREFIX}{_SECRET_NAME}[\"']?)"
+_SENSITIVE_SUFFIX = re.compile(rf"(?i)(?:^|[\W_]){_SECRET_NAME}\Z")
+# Token boundaries prevent retrying a failed match at every character of a
+# long vendor/path name. Quoted JSON keys and command options use the same
+# scanner, while XML name/value pairs are handled before this text pass.
+_FIELD_KEY = r"[\"']?[^\s:=\"',;{}&<>]+[\"']?"
+_ASSIGNMENT = re.compile(
+    rf"(?<![^\s:=\"',;{{}}&<>])(?P<key>{_FIELD_KEY})"
+    r"(?P<separator>[ \t]*[:=][ \t]*)"
 )
-_SECRET_SEPARATOR = r"(?P<separator>\s*[:=]\s*)"  # noqa: S105 -- regex fragment, not a credential
-_SECRET_ASSIGNMENT_DOUBLE = re.compile(
-    rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}\"(?:\\.|[^\"\\\r\n])*\""
+_MULTILINE_ASSIGNMENT = re.compile(
+    rf"(?<![^\s:=\"',;{{}}&<>])(?P<key>{_FIELD_KEY})(?P<separator>\s*[:=]\s*)"
 )
-_SECRET_ASSIGNMENT_SINGLE = re.compile(
-    rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}'(?:\\.|[^'\\\r\n])*'"
-)
-_SECRET_ASSIGNMENT_UNQUOTED = re.compile(rf"(?i){_SECRET_KEY}{_SECRET_SEPARATOR}[^\s,;}}&\"']+")
+_NEXT_ASSIGNMENT = re.compile(rf"(?:(?<![ \t])[ \t]+|[,;&][ \t]*){_FIELD_KEY}[ \t]*[:=][ \t]*")
+_QUOTED_VALUE = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'", re.DOTALL)
+_REPORT_LINES = re.compile(r"[^\r\n]*(?:\r\n?|\n|\Z)")
+_YAML_BLOCK = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?[ \t]*(?:#.*)?\Z")
 # Consume the complete HTTP value, including obsolete folded continuations.
 # Applying the assignment matcher alone would leave every cookie after ';'.
 _COOKIE_HEADER = re.compile(
     r"(?im)(?P<key>(?<![\w-])(?:set-cookie|cookie))"
+    r"(?P<separator>[ \t]*:[ \t]*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*"
+)
+_AUTHORIZATION_HEADER = re.compile(
+    r"(?im)(?P<key>^[ \t]*(?:>[ \t]*)?(?:proxy-)?authorization)"
     r"(?P<separator>[ \t]*:[ \t]*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*"
 )
 _XML_ATTRIBUTE = re.compile(
@@ -56,7 +58,6 @@ _XML_ATTRIBUTE = re.compile(
     re.DOTALL,
 )
 _XML_NAME = re.compile(r"[A-Za-z_][\w:.-]*")
-_XML_SENSITIVE_NAME = re.compile(rf"(?i)[-_]*(?:[^\W_]+[:_-]+)*{_SECRET_NAME}")
 _OPAQUE_SENSITIVE_CONTENT = re.compile(_SECRET_NAME, re.IGNORECASE)
 _PRIVATE_KEY_BLOCK = re.compile(
     r"(?P<begin>-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----)"
@@ -67,13 +68,14 @@ _AUTHORIZATION = re.compile(
     r"(?i)(?P<key>[\"']?authorization[\"']?)"
     r"(?P<separator>\s*[:=]\s*)"
     r"(?:(?P<scheme>Bearer|Basic)\s+)?"
-    r"(?:(?P<quote>[\"'])(?:\\.|(?!(?P=quote))[^\r\n])*(?P=quote)|"
+    r"(?:(?P<quote>[\"'])(?:\\.|(?!(?P=quote))[^\\\r\n])*(?P=quote)|"
     r"(?![A-Za-z][A-Za-z0-9_-]*\s+)[^\s,;}\"']+)"
 )
 _AUTHORIZATION_OTHER = re.compile(
     r"(?i)(?P<key>[\"']?authorization[\"']?)"
     r"(?P<separator>\s*[:=]\s*)"
     r"(?P<scheme>(?!Bearer\b|Basic\b)[A-Za-z][A-Za-z0-9_-]*)\s+[^\r\n}]+"
+    r"(?:\r?\n[ \t]+[^\r\n]*)*"
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _BASIC = re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]+")
@@ -107,8 +109,110 @@ def _replace_secret_assignment(match: re.Match[str]) -> str:
     return f"{match.group('key')}{match.group('separator')}[REDACTED]"
 
 
-def _replace_quoted_secret(match: re.Match[str], quote: str) -> str:
-    return f"{match.group('key')}{match.group('separator')}{quote}[REDACTED]{quote}"
+def _is_sensitive_field(name: str) -> bool:
+    """Recognize credential suffixes across vendor, namespace and TR-069 paths."""
+
+    name = name.strip("\"'").casefold()
+    # Compact identifiers such as SIP_AuthPassword and PPPPassword carry the
+    # same credential suffix as separated names. Suffixes like PasswordLength
+    # remain public settings rather than being classified as passwords.
+    return name.endswith(("password", "passwd")) or _SENSITIVE_SUFFIX.search(name) is not None
+
+
+def _redact_structured_assignments(value: str) -> str:
+    """Mask quoted values before interpreting CR/LF as report line boundaries.
+
+    JSON permits whitespace between a key, colon and quoted value. Quoted
+    YAML/text values may also contain literal line separators. Recognize the
+    complete scalar in one forward scan, without parsing or rewriting its
+    surrounding document. Unquoted values following a cross-line separator
+    consume their complete physical line or the next field assignment.
+    """
+
+    output = StringIO()
+    cursor = position = 0
+    while match := _MULTILINE_ASSIGNMENT.search(value, position):
+        position = match.end()
+        if not _is_sensitive_field(match.group("key")):
+            continue
+        quoted = _QUOTED_VALUE.match(value, position)
+        if quoted:
+            output.write(value[cursor:position])
+            output.write(f"{value[position]}[REDACTED]{value[position]}")
+            cursor = position = quoted.end()
+        elif "\n" in match.group("separator") or "\r" in match.group("separator"):
+            # The line pattern includes an empty match at EOF.
+            line = next(_REPORT_LINES.finditer(value, position))
+            end = position + len(line.group().rstrip("\r\n"))
+            boundary = _NEXT_ASSIGNMENT.search(value, position, end)
+            output.write(value[cursor:position])
+            output.write("[REDACTED]")
+            cursor = position = end if boundary is None else boundary.start()
+    output.write(value[cursor:])
+    return output.getvalue()
+
+
+def _redact_assignments(value: str) -> str:
+    """Mask complete values, retaining only recognizable assignment boundaries.
+
+    Unquoted punctuation and spaces may belong to a password. Consume them
+    through the end of the line unless another field assignment starts.
+    YAML block values consume all more-indented continuation lines. Each
+    line/token is traversed a bounded number of times; no recursive parsing
+    or repeated scan of a shrinking line suffix is needed.
+    """
+
+    if ":" not in value and "=" not in value:
+        return value
+    output = StringIO()
+    block_indent: int | None = None
+    for line_match in _REPORT_LINES.finditer(value):
+        raw_line = line_match.group()
+        line = raw_line.rstrip("\r\n")
+        newline = raw_line[len(line) :]
+        indentation = len(line) - len(line.lstrip(" \t"))
+        if block_indent is not None:
+            if not line.strip() or indentation > block_indent:
+                continue
+            block_indent = None
+        yaml_key_start = indentation
+        if line.startswith(("- ", "-\t"), indentation):
+            yaml_key_start += 1
+            while yaml_key_start < len(line) and line[yaml_key_start] in " \t":
+                yaml_key_start += 1
+        cursor = 0
+        while match := _ASSIGNMENT.search(line, cursor):
+            if not _is_sensitive_field(match.group("key")):
+                output.write(line[cursor : match.end()])
+                cursor = match.end()
+                continue
+            start = match.end()
+            output.write(line[cursor:start])
+            if start == len(line):
+                cursor = start
+                continue
+            if match.start() == yaml_key_start and _YAML_BLOCK.fullmatch(line[start:]):
+                block_indent = yaml_key_start
+                output.write("[REDACTED]")
+                cursor = len(line)
+                break
+            quoted = _QUOTED_VALUE.match(line, start)
+            if quoted and (
+                quoted.end() == len(line)
+                or line[quoted.end()].isspace()
+                or line[quoted.end()] in ",;}]/>"
+            ):
+                quote = line[start]
+                output.write(f"{quote}[REDACTED]{quote}")
+                cursor = quoted.end()
+                continue
+            boundary = _NEXT_ASSIGNMENT.search(line, start)
+            end = len(line) if boundary is None else boundary.start()
+            output.write("[REDACTED]")
+            cursor = end
+        output.write(line[cursor:])
+        output.write(newline)
+    return output.getvalue()
 
 
 def _replace_authorization(match: re.Match[str]) -> str:
@@ -129,14 +233,14 @@ def _redact_xml_tag(tag: str, sensitive_element: bool = False) -> str:
     """
 
     secret_value = sensitive_element or any(
-        attribute.group("name").casefold() in {"name", "key"}
-        and _SENSITIVE_FIELD.fullmatch(unescape(attribute.group("value")))
+        attribute.group("name").casefold().rsplit(":", 1)[-1] in {"name", "key"}
+        and _is_sensitive_field(unescape(attribute.group("value")))
         for attribute in _XML_ATTRIBUTE.finditer(tag)
     )
 
     def replace_attribute(attribute: re.Match[str]) -> str:
-        name = attribute.group("name").casefold()
-        if _SENSITIVE_FIELD.fullmatch(name) or (secret_value and name in {"val", "value"}):
+        name = attribute.group("name").casefold().rsplit(":", 1)[-1]
+        if _is_sensitive_field(name) or (secret_value and name in {"val", "value"}):
             quote = attribute.group("quote")
             return f"{attribute.group('prefix')}{quote}[REDACTED]{quote}"
         return attribute.group(0)
@@ -212,7 +316,7 @@ def _redact_xml(value: str) -> str:
                     active_name = ""
         else:
             parts.append(value[cursor:start])
-            sensitive = _XML_SENSITIVE_NAME.fullmatch(name) is not None
+            sensitive = _is_sensitive_field(name)
             if not name and _OPAQUE_SENSITIVE_CONTENT.search(tag):
                 # Opaque markup cannot terminate an enclosing secret, but it
                 # may itself contain credential fields. Mask it wholesale
@@ -243,13 +347,13 @@ def redact_text(value: str) -> str:
     )
     value = _redact_xml(value)
     value = _COOKIE_HEADER.sub(_replace_secret_assignment, value)
+    value = _AUTHORIZATION_HEADER.sub(_replace_secret_assignment, value)
     value = _AUTHORIZATION.sub(_replace_authorization, value)
     value = _AUTHORIZATION_OTHER.sub(_replace_other_authorization, value)
     value = _BEARER.sub("Bearer [REDACTED]", value)
     value = _BASIC.sub("Basic [REDACTED]", value)
-    value = _SECRET_ASSIGNMENT_DOUBLE.sub(lambda match: _replace_quoted_secret(match, '"'), value)
-    value = _SECRET_ASSIGNMENT_SINGLE.sub(lambda match: _replace_quoted_secret(match, "'"), value)
-    value = _SECRET_ASSIGNMENT_UNQUOTED.sub(_replace_secret_assignment, value)
+    value = _redact_structured_assignments(value)
+    value = _redact_assignments(value)
     value = _MAC.sub("[REDACTED-MAC]", value)
     value = _SUBSCRIBER_ID.sub("[REDACTED-SUBSCRIBER-ID]", value)
     value = _IPV4.sub(_redact_public_ip, value)

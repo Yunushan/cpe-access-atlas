@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
@@ -237,9 +238,14 @@ class CatalogTests(unittest.TestCase):
             status="invalid",
             firmware_match="loose",
             evidence=(),
+            qualification={},
+            capabilities=(),
+            last_reviewed="2026-09-01",
             hardware_revision="hardware",
             hardware_revision_status="unresolved",
             model="model",
+            vendor="Vendor",
+            model_aliases=(),
             firmware="firmware",
         )
         known_mismatch = SimpleNamespace(
@@ -249,10 +255,15 @@ class CatalogTests(unittest.TestCase):
             isp_name="wrong",
             status="blocked",
             firmware_match="exact",
-            evidence=("evidence",),
+            evidence=({"title": "synthetic", "url": "https://example.test/evidence"},),
+            qualification={},
+            capabilities=(),
+            last_reviewed="2026-09-01",
             hardware_revision="hardware-2",
             hardware_revision_status="unresolved",
             model="model-2",
+            vendor="Vendor",
+            model_aliases=(),
             firmware="firmware-2",
         )
         inventory_device = SimpleNamespace(
@@ -293,6 +304,186 @@ class CatalogTests(unittest.TestCase):
             any("official device inventory: duplicate device" in error for error in errors)
         )
 
+    def test_alias_collisions_are_rejected_before_shipping_catalog(self) -> None:
+        first = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        for model, aliases in (
+            ("Distinct", (first.model,)),
+            ("Distinct", (first.model_aliases[0],)),
+            (f"{first.vendor} {first.model}", ()),
+            ("Distinct", ("  H3600P\u00a0v9  ",)),
+        ):
+            second = replace(
+                first, id="synthetic.alias-collision", model=model, model_aliases=aliases
+            )
+            with self.subTest(model=model, aliases=aliases):
+                with patch.object(catalog, "load_recipes", return_value=(first, second)):
+                    self.assertTrue(
+                        any("duplicate exact target" in error for error in validate_catalog())
+                    )
+                    shared = catalog._model_lookup_values(
+                        first.vendor, first.model, first.model_aliases
+                    ) & catalog._model_lookup_values(
+                        second.vendor, second.model, second.model_aliases
+                    )
+                    for identifier in shared:
+                        with self.assertRaisesRegex(CatalogError, "multiple exact recipes"):
+                            find_recipe(
+                                first.isp_id, identifier, first.hardware_revision, first.firmware
+                            )
+
+    def test_aliases_can_be_reused_for_distinct_compatibility_dimensions(self) -> None:
+        first = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        for changes in (
+            {"hardware_revision": "V10"},
+            {"firmware": "distinct firmware"},
+            {"isp_id": "turknet", "isp_name": "TurkNet"},
+        ):
+            second = replace(first, id="synthetic.distinct-target", **changes)
+            with self.subTest(changes=changes):
+                with patch.object(catalog, "load_recipes", return_value=(first, second)):
+                    self.assertEqual(validate_catalog(), [])
+
+    def test_verified_qualification_requires_named_reviewable_evidence(self) -> None:
+        payload = catalog._load_json("recipes/tr_turk_telekom_zte_h3600p_ttn10_260210.json")
+        payload.update(status="verified", blockers=[])
+        payload["device"]["hardware_revision_status"] = "exact"
+        with self.assertRaises(CatalogError):
+            catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
+        proof = "https://example.test/synthetic-exact-device-report"
+        payload["evidence"] = [{"title": "Synthetic qualification fixture", "url": proof}]
+        payload["qualification"] = {
+            **dict.fromkeys(
+                ("hardware", "access", "recovery", "services", "wan_isolation", "config_import"),
+                proof,
+            ),
+            "tested_on": payload["last_reviewed"],
+        }
+        catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
+        recipe = catalog.Recipe.from_dict(payload)
+        self.assertEqual(catalog._qualification_errors(recipe), [])
+        for kind in (
+            "hardware",
+            "access",
+            "recovery",
+            "services",
+            "wan_isolation",
+            "config_import",
+            "tested_on",
+        ):
+            incomplete = replace(
+                recipe,
+                qualification={
+                    key: value for key, value in recipe.qualification.items() if key != kind
+                },
+            )
+            with self.subTest(missing=kind):
+                self.assertTrue(
+                    any(
+                        "qualification evidence missing" in error
+                        for error in catalog._qualification_errors(incomplete)
+                    )
+                )
+        self.assertTrue(catalog._qualification_errors(replace(recipe, status="stable")))
+        stable = replace(
+            recipe,
+            status="stable",
+            qualification={**recipe.qualification, "independent_reproduction": proof},
+        )
+        self.assertEqual(catalog._qualification_errors(stable), [])
+        # A verified non-codec method does not make a config-import claim.
+        self.assertEqual(
+            catalog._qualification_errors(
+                replace(
+                    recipe,
+                    capabilities=(),
+                    qualification={
+                        key: value
+                        for key, value in recipe.qualification.items()
+                        if key != "config_import"
+                    },
+                )
+            ),
+            [],
+        )
+
+    def test_qualified_targets_cannot_relabel_unresolved_coordinates_as_exact(self) -> None:
+        recipe = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        proof = recipe.evidence[0]["url"]
+        qualification = {
+            **dict.fromkeys(
+                ("hardware", "access", "recovery", "services", "wan_isolation", "config_import"),
+                proof,
+            ),
+            "tested_on": recipe.last_reviewed,
+        }
+        for dimension in ("hardware_revision", "firmware"):
+            for value in ("unresolved", " UNKNOWN ", "tbd", "N/A", " \t "):
+                candidate = replace(
+                    recipe,
+                    status="verified",
+                    hardware_revision_status="exact",
+                    qualification=qualification,
+                    **{dimension: value},
+                )
+                with self.subTest(dimension=dimension, value=value):
+                    with patch.object(catalog.Recipe, "from_dict", return_value=candidate):
+                        with self.assertRaisesRegex(CatalogError, "concrete hardware and firmware"):
+                            find_recipe(
+                                candidate.isp_id,
+                                candidate.model,
+                                candidate.hardware_revision,
+                                candidate.firmware,
+                            )
+
+    def test_qualification_links_dates_and_load_gate_are_checked(self) -> None:
+        recipe = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        invalid = replace(
+            recipe,
+            qualification={
+                "recovery": "https://example.test/not-in-evidence",
+                "tested_on": "9999-12-31",
+            },
+        )
+        errors = catalog._qualification_errors(invalid)
+        self.assertTrue(any("must reference" in error for error in errors))
+        self.assertTrue(any("after the evidence review" in error for error in errors))
+        with patch.object(catalog.Recipe, "from_dict", return_value=invalid):
+            with self.assertRaisesRegex(CatalogError, "must reference"):
+                catalog.load_recipes()
+        with patch.object(catalog, "load_recipes", return_value=(invalid,)):
+            self.assertTrue(any("qualification" in error for error in validate_catalog()))
+
+    def test_qualification_schema_requires_config_import_and_independent_reproduction(self) -> None:
+        payload = catalog._load_json("recipes/tr_turk_telekom_zte_h3600p_ttn10_260210.json")
+        payload.update(status="stable", blockers=[])
+        payload["device"]["hardware_revision_status"] = "exact"
+        proof = "https://example.test/synthetic-report"
+        payload["qualification"] = {
+            **dict.fromkeys(
+                (
+                    "hardware",
+                    "access",
+                    "recovery",
+                    "services",
+                    "wan_isolation",
+                    "config_import",
+                    "independent_reproduction",
+                ),
+                proof,
+            ),
+            "tested_on": payload["last_reviewed"],
+        }
+        catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
+        for kind in ("config_import", "independent_reproduction"):
+            value = payload["qualification"].pop(kind)
+            with self.subTest(missing=kind):
+                with self.assertRaises(CatalogError):
+                    catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
+            payload["qualification"][kind] = value
+        payload["qualification"]["tested_on"] = "invalid-date"
+        with self.assertRaises(CatalogError):
+            catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
+
     def test_verified_recipe_requires_exact_hardware_status(self) -> None:
         provider = catalog.Provider("isp", "ISP", (), "TR", "cataloged")
         recipe = SimpleNamespace(
@@ -302,10 +493,15 @@ class CatalogTests(unittest.TestCase):
             isp_name="ISP",
             status="verified",
             firmware_match="exact",
-            evidence=("evidence",),
+            evidence=({"title": "synthetic", "url": "https://example.test/evidence"},),
+            qualification={},
+            capabilities=(),
+            last_reviewed="2026-09-01",
             hardware_revision="V9.0",
             hardware_revision_status="unresolved",
             model="model",
+            vendor="Vendor",
+            model_aliases=(),
             firmware="firmware",
         )
         with (

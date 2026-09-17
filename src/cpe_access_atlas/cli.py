@@ -112,6 +112,7 @@ def _recipe_payload(recipe: Recipe) -> dict[str, object]:
         "capabilities": list(recipe.capabilities),
         "blockers": list(recipe.blockers),
         "last_reviewed": recipe.last_reviewed,
+        "qualification": dict(recipe.qualification),
     }
 
 

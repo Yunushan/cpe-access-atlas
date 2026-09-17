@@ -5,46 +5,301 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version", "id", "country", "status", "confidence", "isp",
-    "device", "firmware", "access", "capabilities", "blockers", "evidence",
-    "next_evidence", "last_reviewed"
+    "schema_version",
+    "id",
+    "country",
+    "status",
+    "confidence",
+    "isp",
+    "device",
+    "firmware",
+    "access",
+    "capabilities",
+    "blockers",
+    "evidence",
+    "next_evidence",
+    "last_reviewed"
   ],
   "properties": {
-    "schema_version": {"const": 1},
-    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
-    "country": {"const": "TR"},
-    "status": {"enum": ["researching", "experimental", "verified", "stable", "blocked"]},
-    "confidence": {"enum": ["low", "medium", "high"]},
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]+$"
+    },
+    "country": {
+      "const": "TR"
+    },
+    "status": {
+      "enum": [
+        "researching",
+        "experimental",
+        "verified",
+        "stable",
+        "blocked"
+      ]
+    },
+    "confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
     "isp": {
-      "type": "object", "additionalProperties": false, "required": ["id", "name"],
-      "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "device": {
-      "type": "object", "additionalProperties": false,
-      "required": ["vendor", "model", "aliases", "hardware_revision", "hardware_revision_status"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vendor",
+        "model",
+        "aliases",
+        "hardware_revision",
+        "hardware_revision_status"
+      ],
       "properties": {
-        "vendor": {"type": "string", "minLength": 1},
-        "model": {"type": "string", "minLength": 1},
-        "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
-        "hardware_revision": {"type": "string", "minLength": 1},
-        "hardware_revision_status": {"enum": ["unresolved", "exact"]}
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "hardware_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hardware_revision_status": {
+          "enum": [
+            "unresolved",
+            "exact"
+          ]
+        }
       }
     },
     "firmware": {
-      "type": "object", "additionalProperties": false, "required": ["display", "match_policy"],
-      "properties": {"display": {"type": "string", "minLength": 1}, "match_policy": {"const": "exact"}}
-    },
-    "access": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}},
-    "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
-    "blockers": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "evidence": {
-      "type": "array", "minItems": 1,
-      "items": {
-        "type": "object", "additionalProperties": false, "required": ["title", "url"],
-        "properties": {"title": {"type": "string", "minLength": 1}, "url": {"type": "string", "format": "uri", "pattern": "^https://"}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display",
+        "match_policy"
+      ],
+      "properties": {
+        "display": {
+          "type": "string",
+          "minLength": 1
+        },
+        "match_policy": {
+          "const": "exact"
+        }
       }
     },
-    "next_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "last_reviewed": {"type": "string", "format": "date"}
-  }
+    "access": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "url"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          }
+        }
+      }
+    },
+    "next_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "last_reviewed": {
+      "type": "string",
+      "format": "date"
+    },
+    "qualification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hardware": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "access": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "recovery": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "services": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "wan_isolation": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "config_import": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "independent_reproduction": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "tested_on": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidenceUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "verified",
+              "stable"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "qualification"
+        ],
+        "properties": {
+          "qualification": {
+            "required": [
+              "hardware",
+              "access",
+              "recovery",
+              "services",
+              "wan_isolation",
+              "tested_on"
+            ]
+          },
+          "device": {
+            "properties": {
+              "hardware_revision_status": {
+                "const": "exact"
+              }
+            }
+          },
+          "blockers": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "stable"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "qualification": {
+            "required": [
+              "independent_reproduction"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "verified",
+              "stable"
+            ]
+          },
+          "capabilities": {
+            "contains": {
+              "const": "offline-private-config-codec"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "qualification": {
+            "required": [
+              "config_import"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

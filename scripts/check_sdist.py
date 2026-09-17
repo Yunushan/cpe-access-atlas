@@ -49,6 +49,7 @@ def source_inputs(source: Path) -> tuple[Path, ...]:
             "LICENSE",
             ".gitignore",
             ".gitleaks.toml",
+            ".gitattributes",
             ".pre-commit-config.yaml",
         )
     ]

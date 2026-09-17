@@ -182,6 +182,55 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("--verify-tag", release)
         self.assertNotIn("--clobber", release)
 
+    def test_publication_verifies_immutability_without_administrator_credentials(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        gate = "      - name: Verify published release is immutable\n"
+        self.assertLess(workflow.index("gh release create"), workflow.index(gate))
+        step = workflow.split(gate)[1]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", step)
+        code = compile(dedent(step.split("        run: |\n")[1]), "release-immutability", "exec")
+        for payload in ({"immutable": True}, {"immutable": False}, {}, {"immutable": 1}, [], None):
+            with (
+                self.subTest(payload=payload),
+                patch.dict(
+                    "os.environ",
+                    {"GITHUB_REPOSITORY": "example/project", "GITHUB_REF_NAME": "v0.4.0a1"},
+                ),
+                patch(
+                    "subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))
+                ) as run,
+            ):
+                if payload == {"immutable": True} and type(payload.get("immutable")) is bool:
+                    exec(code, {})  # noqa: S102 -- fixed workflow code with mocked GitHub I/O
+                else:
+                    with self.assertRaises(RuntimeError):
+                        exec(code, {})  # noqa: S102 -- fixed workflow code with mocked GitHub I/O
+                self.assertEqual(
+                    run.call_args.args[0],
+                    [
+                        "gh",
+                        "api",
+                        "--method",
+                        "GET",
+                        "repos/example/project/releases/tags/v0.4.0a1",
+                    ],
+                )
+                self.assertTrue(run.call_args.kwargs["check"])
+                self.assertEqual(run.call_args.kwargs["timeout"], 30)
+        for failure in (
+            subprocess.CalledProcessError(1, "gh"),
+            subprocess.TimeoutExpired("gh", 30),
+        ):
+            with (
+                patch.dict(
+                    "os.environ",
+                    {"GITHUB_REPOSITORY": "example/project", "GITHUB_REF_NAME": "v0.4.0a1"},
+                ),
+                patch("subprocess.run", side_effect=failure),
+                self.assertRaises(type(failure)),
+            ):
+                exec(code, {})  # noqa: S102 -- fixed workflow code with mocked GitHub I/O
+
     def test_sbom_audits_target_installed_metadata_not_the_tool_interpreter(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         job = workflow.split("  runtime-sbom:\n")[1].split("  validate-release:\n")[0]

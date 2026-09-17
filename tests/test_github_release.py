@@ -64,6 +64,7 @@ def fixture(version: str = "0.4.0", status: str = ALPHA) -> dict[str, Any]:
                 "tag_name": f"v{version}",
                 "draft": False,
                 "prerelease": True,
+                "immutable": True,
                 "published_at": "2026-09-05T10:00:00Z",
             }
         ],
@@ -90,6 +91,25 @@ def fixture(version: str = "0.4.0", status: str = ALPHA) -> dict[str, Any]:
 
 
 class GitHubReleaseTests(unittest.TestCase):
+    def test_published_assets_require_explicit_immutability_evidence(self) -> None:
+        records = fixture()
+        api = Api(records)
+        self.assertEqual(audit._audit_release(api).status, audit.STATUS_PASS)
+        records["releases?per_page=100"][0]["immutable"] = False
+        api = Api(records)
+        result = audit._audit_release(api)
+        self.assertEqual(result.status, audit.STATUS_FAIL)
+        self.assertIn("immutable assets and tag", result.detail)
+        self.assertEqual(api.calls, ["releases?per_page=100"])
+        for value in (None, 1, 0, "true", "false", [], {}):
+            with self.subTest(value=value):
+                records["releases?per_page=100"][0]["immutable"] = value
+                result = audit._audit_release(Api(records))
+                self.assertEqual(result.status, audit.STATUS_UNVERIFIED)
+                self.assertIn("immutability", result.detail)
+        del records["releases?per_page=100"][0]["immutable"]
+        self.assertEqual(audit._audit_release(Api(records)).status, audit.STATUS_UNVERIFIED)
+
     def test_newest_published_prerelease_is_checked_instead_of_old_full_release(self) -> None:
         records = fixture()
         records["releases?per_page=100"] += [
