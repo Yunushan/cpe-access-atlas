@@ -3,6 +3,27 @@
 Support is tracked per ISP, device, hardware revision, firmware, and access
 level. Listing a provider does not imply that every device is supported.
 
+## Software support policy
+
+Before version 1.0, only the latest published GitHub release receives fixes. Every alpha
+or beta tag is experimental and may change behavior or file formats as described
+in the changelog. There is currently no guaranteed response or restoration
+service-level agreement; issues are handled on a best-effort basis by one
+maintainer. This support posture is not sufficient for unattended or
+business-critical deployment.
+
+Use the general software bug form for reproducible CLI, package, or
+documentation defects. Never place credentials, configuration exports, session
+cookies, subscriber identifiers, private firmware, or unpatched vulnerability
+details in an issue. Follow [the security policy](SECURITY.md) for confidential
+reporting and [installation and rollback](docs/installation.md) when changing
+versions.
+
+A release becomes a production-support candidate only after its release gates,
+administrator-visible repository audit, published-artifact verification, and
+the relevant exact-device qualification all pass. Green unit tests or a
+successful installation cannot substitute for those forms of evidence.
+
 The repository also includes a separate official-device inventory for selected
 Türk Telekom, Turkcell Superonline, and Türksat pages. Those records establish
 only that a model was publicly listed; they do not establish an exact firmware,

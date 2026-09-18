@@ -1,18 +1,23 @@
+# SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
 import copy
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from packaging.markers import default_environment
 from packaging.requirements import Requirement
 
 from scripts import check_github_production_settings as github_audit
@@ -22,6 +27,7 @@ WORKFLOW_FILES = (
     ROOT / ".github" / "workflows" / "ci.yml",
     ROOT / ".github" / "workflows" / "security.yml",
     ROOT / ".github" / "workflows" / "release.yml",
+    ROOT / ".github" / "workflows" / "release-preflight.yml",
     ROOT / ".github" / "workflows" / "codeql.yml",
     ROOT / ".github" / "workflows" / "dco.yml",
     ROOT / ".github" / "workflows" / "secret-scan.yml",
@@ -63,7 +69,7 @@ def _successful_workflow_responses() -> dict[str, object]:
                 "head_branch": "main",
                 "event": "push",
                 "run_attempt": 1,
-                "created_at": "2026-09-05T10:00:00Z",
+                "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -109,7 +115,7 @@ class RepositoryControlTests(unittest.TestCase):
                     if line in local_calls:
                         # GitHub resolves these exact local workflow paths at
                         # the caller commit; no mutable @main/@tag exception.
-                        self.assertEqual(workflow.name, "release.yml")
+                        self.assertIn(workflow.name, {"release.yml", "release-preflight.yml"})
                     else:
                         self.assertRegex(line, pattern)
 
@@ -118,6 +124,144 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("package-ecosystem: pip", config)
         self.assertIn("package-ecosystem: github-actions", config)
         self.assertIn("interval: weekly", config)
+
+    def test_dependency_audit_is_periodic_manual_and_covers_every_lock(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
+        self.assertIn("  workflow_dispatch:\n", workflow)
+        self.assertRegex(workflow, r'(?m)^  schedule:\n    - cron: "[^"]+"$')
+        for name in ("runtime", "security", "ci", "release", "build"):
+            self.assertIn(f"-r requirements-{name}.lock", workflow)
+        audit_job = workflow.split("  dependency-audit:\n", 1)[1].split(
+            "\n  dependency-review:", 1
+        )[0]
+        matrix = re.search(r"(?m)^        python: (\[.*\])$", audit_job)
+        self.assertIsNotNone(matrix)
+        versions = tuple(json.loads(matrix.group(1)))
+        self.assertEqual(versions, github_audit._SECURITY_AUDIT_PYTHONS)
+        self.assertIn("runs-on: ubuntu-latest", audit_job)
+
+        requirements: list[tuple[str, Requirement]] = []
+        for name in ("runtime", "security", "ci", "release", "build"):
+            path = ROOT / f"requirements-{name}.lock"
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if not line or line[0].isspace() or line.startswith("#"):
+                    continue
+                requirements.append(
+                    (f"{path.name}:{line_number}", Requirement(line.removesuffix("\\").strip()))
+                )
+
+        def environments(
+            operating_systems: tuple[str, ...], python_versions: tuple[str, ...]
+        ) -> list[dict[str, str]]:
+            platform_values = {
+                "ubuntu-latest": ("posix", "linux", "Linux", "x86_64"),
+                "windows-latest": ("nt", "win32", "Windows", "AMD64"),
+                "macos-latest": ("posix", "darwin", "Darwin", "x86_64"),
+            }
+            result: list[dict[str, str]] = []
+            for operating_system in operating_systems:
+                os_name, sys_platform, platform_system, platform_machine = platform_values[
+                    operating_system
+                ]
+                for python_version in python_versions:
+                    environment = default_environment()
+                    environment.update(
+                        {
+                            "os_name": os_name,
+                            "sys_platform": sys_platform,
+                            "platform_system": platform_system,
+                            "platform_machine": platform_machine,
+                            "python_version": python_version,
+                            "python_full_version": f"{python_version}.0",
+                        }
+                    )
+                    result.append(environment)
+            return result
+
+        def active_in(targets: list[dict[str, str]]) -> set[str]:
+            return {
+                location
+                for location, requirement in requirements
+                if requirement.marker is None
+                or any(requirement.marker.evaluate(environment) for environment in targets)
+            }
+
+        supported = environments(github_audit._RELEASE_OSES, github_audit._RELEASE_PYTHONS)
+        audited = environments(("ubuntu-latest",), versions)
+        self.assertEqual(active_in(supported) - active_in(audited), set())
+
+    def test_release_preflight_is_manual_read_only_and_nonpublishing(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release-preflight.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("  workflow_dispatch:\n", workflow)
+        self.assertIn("      release_tag:\n", workflow)
+        self.assertNotIn("contents: write", workflow)
+        self.assertNotIn("attestations: write", workflow)
+        self.assertNotIn("id-token: write", workflow)
+        self.assertNotIn("gh release create", workflow)
+        self.assertIn("scripts/check_release_candidate.py", workflow)
+        self.assertIn('if [ "$GITHUB_REF" != "refs/heads/main" ]', workflow)
+        self.assertIn("git rev-parse --verify refs/remotes/origin/main", workflow)
+        self.assertIn('if [ "$GITHUB_SHA" != "$main_sha" ]', workflow)
+        self.assertIn("gh api --paginate --method GET", workflow)
+        self.assertIn('-f state=open -f "ref=$GITHUB_REF" -f per_page=100', workflow)
+        self.assertIn('"repos/${GITHUB_REPOSITORY}/code-scanning/alerts"', workflow)
+        self.assertIn('--codeql-risk-ref "$GITHUB_REF"', workflow)
+        self.assertIn('--codeql-risk-commit "$GITHUB_SHA"', workflow)
+        self.assertIn('python-version: "3.14"', workflow)
+        for name in ("ci", "security", "secret-scan", "codeql"):
+            self.assertIn(f"uses: ./.github/workflows/{name}.yml", workflow)
+        reusable_jobs = workflow.split("  source-validation:\n", 1)[1].split(
+            "\n  candidate-validation:", 1
+        )[0]
+        self.assertEqual(reusable_jobs.count("    needs: scope-and-input-validation\n"), 4)
+        scope = workflow.split("  scope-and-input-validation:\n", 1)[1].split(
+            "\n  source-validation:", 1
+        )[0]
+        self.assertLess(
+            scope.index("Verify preflight runs from main"), scope.index("actions/checkout@")
+        )
+        self.assertIn("PYTHONPATH: src", scope)
+
+    def test_release_uses_exact_dated_candidate_metadata_validator(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn('python scripts/check_release_candidate.py --tag "$RELEASE_TAG"', workflow)
+        self.assertNotIn('grep -Fq "## $version"', workflow)
+        self.assertIn("Verify tag is current main head", workflow)
+        self.assertIn("git rev-parse --verify refs/remotes/origin/main", workflow)
+        self.assertNotIn("git merge-base --is-ancestor", workflow)
+        self.assertIn("gh api --paginate --method GET", workflow)
+        self.assertIn('-f state=open -f "ref=$GITHUB_REF" -f per_page=100', workflow)
+        self.assertIn('--codeql-risk-ref "$GITHUB_REF"', workflow)
+        self.assertIn('--codeql-risk-commit "$GITHUB_SHA"', workflow)
+
+    def test_codeql_accepted_risk_policy_is_exact_numbered_and_expiring(self) -> None:
+        policy = json.loads(
+            (ROOT / ".github" / "codeql-accepted-risks.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(policy["schema_version"], 1)
+        self.assertEqual(policy["repository"], "Yunushan/cpe-access-atlas")
+        risks = {item["alert_number"]: item for item in policy["accepted_risks"]}
+        self.assertEqual(set(risks), {5, 9})
+        self.assertEqual(
+            {item["rule_id"] for item in risks.values()},
+            {"py/weak-sensitive-data-hashing"},
+        )
+        self.assertEqual({item["security_severity_level"] for item in risks.values()}, {"high"})
+        self.assertEqual(
+            {item["path"] for item in risks.values()},
+            {
+                "src/cpe_access_atlas/config.py",
+                "src/cpe_access_atlas/web_evidence.py",
+            },
+        )
+        for item in risks.values():
+            self.assertEqual(item["dismissed_reason"], "won't fix")
+            self.assertTrue(item["dismissed_comment"])
+            self.assertTrue(item["review_by"])
+            self.assertTrue(item["compensating_controls"])
+            self.assertTrue(item["re_review_triggers"])
 
     def test_ci_checks_dependency_consistency(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -322,6 +466,184 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn('python: ["3.11", "3.12", "3.13", "3.14", "3.15"]', ci)
         self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", ci)
 
+    def test_privileged_release_job_only_publishes_the_validated_exact_bundle(self) -> None:
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        jobs = dict(
+            re.findall(
+                r"(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)",
+                release.split("jobs:\n", 1)[1],
+            )
+        )
+        validation = jobs["validate-release"]
+        publication = jobs["publish-release"]
+
+        self.assertIn("      contents: read", validation)
+        self.assertIn("      security-events: read", validation)
+        self.assertNotIn(": write", validation)
+        self.assertNotIn("id-token:", validation)
+        self.assertNotRegex(validation, r"(?m)^    environment:")
+        self.assertLess(
+            validation.index("Verify annotated release tag"),
+            validation.index("actions/setup-python@"),
+        )
+        self.assertLess(
+            validation.index("Verify tag is current main head"),
+            validation.index("Install release tooling"),
+        )
+
+        self.assertRegex(publication, r"(?m)^    needs: validate-release$")
+        self.assertIn("      attestations: write", publication)
+        self.assertIn("      contents: write", publication)
+        self.assertIn("      id-token: write", publication)
+        self.assertRegex(publication, r"(?m)^    environment:\n      name: release$")
+        for forbidden in (
+            "actions/checkout@",
+            "actions/setup-python@",
+            "pip install",
+            "python -c",
+            "scripts/",
+            "from cpe_access_atlas",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, publication)
+
+        markers = (
+            "Download validated release bundle",
+            "Verify exact release bundle and checksums",
+            "Refuse to overwrite an existing release",
+            "Reverify annotated tag and main targets before attestation",
+            "Attest release artifacts",
+            "Reverify annotated tag and main targets after attestation",
+            "Publish GitHub release",
+            "Verify published release is immutable",
+        )
+        positions = [publication.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions))
+        for marker in (
+            "expected_paths",
+            "actual_paths",
+            "listed_paths",
+            'entry_count="$(find dist -mindepth 1 -maxdepth 1 -print | wc -l)"',
+            "sha256sum --check --strict dist/SHA256SUMS",
+            'target.get("sha") != os.environ["GITHUB_SHA"]',
+        ):
+            self.assertIn(marker, publication)
+        self.assertLess(
+            validation.index("Upload distributions"),
+            len(validation),
+        )
+
+    def test_privileged_publication_reverifies_live_tag_and_main_targets(self) -> None:
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        before_attestation = release.split(
+            "      - name: Reverify annotated tag and main targets before attestation\n", 1
+        )[1].split("      - name: Attest release artifacts\n", 1)[0]
+        after_attestation = release.split(
+            "      - name: Reverify annotated tag and main targets after attestation\n", 1
+        )[1].split("      - name: Publish GitHub release\n", 1)[0]
+        self.assertIn("        shell: python\n", before_attestation)
+        self.assertIn("        shell: python\n", after_attestation)
+        before_code = dedent(before_attestation.split("        run: |\n", 1)[1])
+        after_code = dedent(after_attestation.split("        run: |\n", 1)[1])
+        self.assertEqual(before_code, after_code)
+        code = compile(
+            before_code,
+            "release-live-tag-verifier",
+            "exec",
+        )
+        commit = "a" * 40
+        tag_object = "b" * 40
+        valid_ref = {"object": {"type": "tag", "sha": tag_object}}
+        valid_tag = {"object": {"type": "commit", "sha": commit}}
+        valid_main = {"object": {"type": "commit", "sha": commit}}
+
+        def response(value: object) -> SimpleNamespace:
+            return SimpleNamespace(stdout=json.dumps(value))
+
+        environment = {
+            "GITHUB_REPOSITORY": "example/project",
+            "GITHUB_REF_NAME": "v1.2.3",
+            "GITHUB_SHA": commit,
+        }
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch(
+                "subprocess.run",
+                side_effect=[response(valid_ref), response(valid_tag), response(valid_main)],
+            ) as run,
+        ):
+            exec(code, {})  # noqa: S102 -- reviewed workflow with mocked subprocesses.
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [
+                [
+                    "gh",
+                    "api",
+                    "--method",
+                    "GET",
+                    "repos/example/project/git/ref/tags/v1.2.3",
+                ],
+                [
+                    "gh",
+                    "api",
+                    "--method",
+                    "GET",
+                    f"repos/example/project/git/tags/{tag_object}",
+                ],
+                [
+                    "gh",
+                    "api",
+                    "--method",
+                    "GET",
+                    "repos/example/project/git/ref/heads/main",
+                ],
+            ],
+        )
+        for call in run.call_args_list:
+            self.assertTrue(call.kwargs["capture_output"])
+            self.assertTrue(call.kwargs["text"])
+            self.assertTrue(call.kwargs["check"])
+            self.assertEqual(call.kwargs["timeout"], 30)
+
+        cases = (
+            [response([])],
+            [response({"object": {"type": "commit", "sha": tag_object}})],
+            [response({"object": {"type": "tag", "sha": "invalid"}})],
+            [response(valid_ref), response({"object": {"type": "tag", "sha": commit}})],
+            [response(valid_ref), response({"object": {"type": "commit", "sha": "c" * 40}})],
+            [response(valid_ref), response(valid_tag), response([])],
+            [
+                response(valid_ref),
+                response(valid_tag),
+                response({"object": {"type": "tag", "sha": commit}}),
+            ],
+            [
+                response(valid_ref),
+                response(valid_tag),
+                response({"object": {"type": "commit", "sha": "c" * 40}}),
+            ],
+        )
+        for responses in cases:
+            with (
+                self.subTest(responses=responses),
+                patch.dict(os.environ, environment, clear=True),
+                patch("subprocess.run", side_effect=responses),
+                self.assertRaises(RuntimeError),
+            ):
+                exec(code, {})  # noqa: S102 -- reviewed workflow with mocked subprocesses.
+
+        for failure in (
+            subprocess.CalledProcessError(1, ["gh"]),
+            subprocess.TimeoutExpired(["gh"], 30),
+        ):
+            with (
+                self.subTest(failure=type(failure)),
+                patch.dict(os.environ, environment, clear=True),
+                patch("subprocess.run", side_effect=failure),
+                self.assertRaises(type(failure)),
+            ):
+                exec(code, {})  # noqa: S102 -- reviewed workflow with mocked subprocesses.
+
     def test_validation_workflows_avoid_duplicate_branch_push_runs(self) -> None:
         for name in ("ci", "security", "secret-scan", "codeql"):
             workflow = (ROOT / ".github/workflows" / f"{name}.yml").read_text(encoding="utf-8")
@@ -336,9 +658,10 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("      security-events: read", release)
         gate = release.index("- name: Verify no open CodeQL alerts")
         self.assertLess(gate, release.index("- name: Install release tooling"))
-        self.assertIn("code-scanning/alerts?state=open", release)
-        self.assertIn("--paginate", release)
-        self.assertIn('page_counts="$(gh api --paginate', release)
+        self.assertIn('"repos/${GITHUB_REPOSITORY}/code-scanning/alerts"', release)
+        self.assertIn("--paginate --method GET", release)
+        self.assertIn('-f state=open -f "ref=$GITHUB_REF" -f per_page=100', release)
+        self.assertIn('page_counts="$(gh api --paginate --method GET', release)
         self.assertIn("--jq 'length')\"", release)
         self.assertIn("open_alerts=$((open_alerts + page_count))", release)
 
@@ -442,6 +765,11 @@ class RepositoryControlTests(unittest.TestCase):
 
     def test_python_support_metadata_workflows_and_audit_policy_agree(self) -> None:
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        version_source = (ROOT / "src/cpe_access_atlas/__init__.py").read_text(encoding="utf-8")
+        version = re.search(r'(?m)^__version__ = "([^"]+)"$', version_source)
+        self.assertIsNotNone(version)
+        assert version is not None
+        self.assertEqual(github_audit._CANDIDATE_RELEASE_TAG, f"v{version.group(1)}")
         prefix = "Programming Language :: Python :: 3."
         versions = tuple(
             entry.rsplit(" :: ", 1)[-1]
@@ -450,7 +778,7 @@ class RepositoryControlTests(unittest.TestCase):
         )
         self.assertEqual(versions, ("3.11", "3.12", "3.13", "3.14", "3.15"))
         self.assertEqual(github_audit._RELEASE_PYTHONS, versions)
-        self.assertEqual(project["project"]["requires-python"], ">=3.11")
+        self.assertEqual(project["project"]["requires-python"], ">=3.11,<3.16")
         for name in ("ci", "release"):
             workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
             matrix = re.search(r"(?m)^        python: (\[.*\])$", workflow)
@@ -543,17 +871,49 @@ class RepositoryControlTests(unittest.TestCase):
         result = github_audit._audit_current_checks(_MappedGitHubApi(responses), "a" * 40)
         self.assertEqual(result.status, github_audit.STATUS_PASS)
 
-        responses["actions/runs/2/attempts/1/jobs?per_page=100"]["jobs"].pop()
-        responses["actions/runs/2/attempts/1/jobs?per_page=100"]["total_count"] = 1
+        jobs = responses["actions/runs/2/attempts/1/jobs?per_page=100"]["jobs"]
+        jobs.pop()
+        responses["actions/runs/2/attempts/1/jobs?per_page=100"]["total_count"] = len(jobs)
         result = github_audit._audit_current_checks(_MappedGitHubApi(responses), "a" * 40)
         self.assertEqual(result.status, github_audit.STATUS_FAIL)
         self.assertIn("dependency-review", result.detail)
+
+    def test_periodic_or_manual_security_run_may_skip_pr_only_dependency_review(self) -> None:
+        for event in ("schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                responses = _successful_workflow_responses()
+                runs = responses[f"actions/runs?head_sha={'a' * 40}&per_page=100"]["workflow_runs"]
+                security = next(run for run in runs if run["name"] == "Security audit")
+                security["event"] = event
+                result = github_audit._audit_current_checks(_MappedGitHubApi(responses), "a" * 40)
+                self.assertEqual(result.status, github_audit.STATUS_PASS)
+
+    def test_weekly_workflow_evidence_must_be_recent_and_not_future_dated(self) -> None:
+        now = datetime(2026, 9, 18, 12, tzinfo=UTC)
+        for workflow_name in ("Security audit", "CodeQL"):
+            for created_at in ("2026-09-01T12:00:00Z", "2026-09-18T12:06:00Z"):
+                with self.subTest(workflow_name=workflow_name, created_at=created_at):
+                    responses = _successful_workflow_responses()
+                    runs = responses[f"actions/runs?head_sha={'a' * 40}&per_page=100"][
+                        "workflow_runs"
+                    ]
+                    workflow = next(run for run in runs if run["name"] == workflow_name)
+                    workflow["created_at"] = created_at
+                    api = _MappedGitHubApi(responses)
+                    workflows = github_audit._audit_workflows(api, "a" * 40, now=now)
+                    checks = github_audit._audit_current_checks(api, "a" * 40, now=now)
+                    self.assertEqual(workflows.status, github_audit.STATUS_FAIL)
+                    self.assertEqual(checks.status, github_audit.STATUS_FAIL)
+                    self.assertIn("stale or future-dated", workflows.detail)
+                    self.assertIn("stale or future-dated", checks.detail)
 
     def test_newer_workflow_failure_cannot_be_hidden_by_historical_success(self) -> None:
         responses = _successful_workflow_responses()
         collection = responses[f"actions/runs?head_sha={'a' * 40}&per_page=100"]
         failed = copy.deepcopy(collection["workflow_runs"][0])
-        failed.update(id=10, created_at="2026-09-05T11:00:00Z", conclusion="failure")
+        baseline = datetime.fromisoformat(failed["created_at"].replace("Z", "+00:00"))
+        created_at = (baseline + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+        failed.update(id=10, created_at=created_at, conclusion="failure")
         collection["workflow_runs"].append(failed)
         collection["total_count"] += 1
         result = github_audit._audit_workflows(_MappedGitHubApi(responses), "a" * 40)
@@ -655,9 +1015,7 @@ class RepositoryControlTests(unittest.TestCase):
         }
         self.assertEqual(github_audit._audit_tag_policy([ruleset]).status, github_audit.STATUS_FAIL)
         ruleset["conditions"]["ref_name"]["exclude"] = ["refs/tags/v2*"]
-        self.assertEqual(
-            github_audit._audit_tag_policy([ruleset]).status, github_audit.STATUS_UNKNOWN
-        )
+        self.assertEqual(github_audit._audit_tag_policy([ruleset]).status, github_audit.STATUS_FAIL)
 
     def test_dependency_graph_uses_capability_evidence_not_an_absent_metadata_key(self) -> None:
         metadata = {
@@ -702,6 +1060,30 @@ class RepositoryControlTests(unittest.TestCase):
             }
         )
         self.assertEqual(names, {"legacy-check", "modern-check", "named-check"})
+        bound = github_audit._github_actions_check_names(
+            {
+                "checks": [
+                    {
+                        "context": "trusted",
+                        "app_id": github_audit._GITHUB_ACTIONS_APP_ID,
+                    },
+                    {"context": "wrong-app", "app_id": 1},
+                    {"context": "float-app", "app_id": float(github_audit._GITHUB_ACTIONS_APP_ID)},
+                    {"name": "name-only", "app_id": github_audit._GITHUB_ACTIONS_APP_ID},
+                    {"context": "", "app_id": github_audit._GITHUB_ACTIONS_APP_ID},
+                    {"context": "unbound"},
+                    "legacy",
+                ]
+            },
+            "app_id",
+        )
+        self.assertEqual(bound, {"trusted"})
+        self.assertEqual(github_audit._github_actions_check_names(None, "app_id"), set())
+        self.assertEqual(
+            github_audit._github_actions_check_names({"checks": None}, "app_id"), set()
+        )
+        self.assertEqual(github_audit._status_check_names({"contexts": [], "checks": None}), set())
+        self.assertEqual(github_audit._github_actions_check_names({"checks": []}, "unknown"), set())
 
     def test_github_api_decodes_utf8_repository_metadata(self) -> None:
         completed = SimpleNamespace(
@@ -739,13 +1121,30 @@ class RepositoryControlTests(unittest.TestCase):
                     "parameters": {
                         "strict_required_status_checks_policy": True,
                         "required_status_checks": [
-                            {"context": name} for name in github_audit._REQUIRED_BRANCH_CHECKS
+                            {
+                                "context": name,
+                                "integration_id": github_audit._GITHUB_ACTIONS_APP_ID,
+                            }
+                            for name in github_audit._REQUIRED_BRANCH_CHECKS
                         ],
                     },
                 },
             ],
         }
         self.assertTrue(github_audit._ruleset_has_required_branch_controls(branch_ruleset))
+        required = next(
+            rule for rule in branch_ruleset["rules"] if rule["type"] == "required_status_checks"
+        )["parameters"]["required_status_checks"]
+        required[0]["integration_id"] = 1
+        self.assertFalse(github_audit._ruleset_has_required_branch_controls(branch_ruleset))
+        required[0]["integration_id"] = github_audit._GITHUB_ACTIONS_APP_ID
+        context = required[0].pop("context")
+        required[0]["name"] = context
+        self.assertFalse(github_audit._ruleset_has_required_branch_controls(branch_ruleset))
+        required[0]["context"] = required[0].pop("name")
+        required[0]["integration_id"] = float(github_audit._GITHUB_ACTIONS_APP_ID)
+        self.assertFalse(github_audit._ruleset_has_required_branch_controls(branch_ruleset))
+        required[0]["integration_id"] = github_audit._GITHUB_ACTIONS_APP_ID
         branch_ruleset["bypass_actors"] = [
             {"actor_type": "RepositoryRole", "bypass_mode": "always"}
         ]
@@ -794,7 +1193,7 @@ class RepositoryControlTests(unittest.TestCase):
             "Verify tag matches package version",
             "Verify changelog entry",
             "Verify annotated release tag",
-            "Verify tag is on main",
+            "Verify tag is current main head",
             "-m pip_audit",
             "actions/attest-build-provenance@",
             "name: release",
@@ -826,6 +1225,92 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("pull_request", dco)
         self.assertIn("Signed-off-by", dco)
         self.assertIn("git rev-list", dco)
+        self.assertIn("git interpret-trailers --parse", dco)
+        self.assertIn("git show -s --format=%ae", dco)
+        self.assertIn('AUTHOR_EMAIL="$author_email" awk', dco)
+        self.assertIn("-f .github/dco-signoff.awk", dco)
+        self.assertIn("check-signoff", github_audit._REQUIRED_BRANCH_CHECKS)
+
+        valid = "Subject\n\nSigned-off-by: Example Person <person@example.test>\n"
+        body_only = (
+            "Subject\n\nSigned-off-by: Example Person <person@example.test>\n"
+            "\nThis is still ordinary body text.\n"
+        )
+        git_executable = shutil.which("git")
+        self.assertIsNotNone(git_executable)
+        assert git_executable is not None
+        for message, expected in ((valid, True), (body_only, False)):
+            with self.subTest(expected=expected):
+                result = subprocess.run(  # noqa: S603 - executable resolved via PATH.
+                    [git_executable, "interpret-trailers", "--parse"],
+                    input=message,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=10,
+                )
+                self.assertIs(
+                    "Signed-off-by: Example Person <person@example.test>" in result.stdout,
+                    expected,
+                )
+
+        awk = shutil.which("awk")
+        git_path = shutil.which("git")
+        if awk is None and git_path is not None:
+            bundled_awk = Path(git_path).parents[1] / "usr" / "bin" / "awk.exe"
+            if bundled_awk.is_file():
+                awk = str(bundled_awk)
+        self.assertIsNotNone(awk)
+        assert awk is not None
+        matcher = ROOT / ".github" / "dco-signoff.awk"
+        large_valid = ("Unrelated: value\n" * 10_000) + valid
+        cases = (
+            (valid, "person@example.test", True),
+            (
+                "Signed-off-by: Example Person <o'connor+tag@example.test>\n",
+                "o'connor+tag@example.test",
+                True,
+            ),
+            (valid, "other@example.test", False),
+            ("Signed-off-by: Person <two@@example.test>\n", "two@@example.test", False),
+            ("Signed-off-by: Person <space @example.test>\n", "space @example.test", False),
+            ("Signed-off-by: Person <a@.>\n", "a@.", False),
+            ("Signed-off-by: Person <.a@example.test>\n", ".a@example.test", False),
+            ("Signed-off-by: Person <a..b@example.test>\n", "a..b@example.test", False),
+            (valid, r"\x70erson@example.test", False),
+            (valid, r"\160erson@example.test", False),
+            (large_valid, "PERSON@EXAMPLE.TEST", True),
+        )
+        for trailers, author_email, expected in cases:
+            with self.subTest(author_email=author_email, expected=expected):
+                result = subprocess.run(  # noqa: S603 - resolved awk executable and fixed program.
+                    [awk, "-f", str(matcher)],
+                    input=trailers,
+                    env={**os.environ, "AUTHOR_EMAIL": author_email},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode == 0, expected)
+
+    def test_public_issue_routes_cover_bugs_and_private_contact_requests(self) -> None:
+        templates = ROOT / ".github" / "ISSUE_TEMPLATE"
+        bug = (templates / "bug-report.yml").read_text(encoding="utf-8")
+        contact = (templates / "security-contact.yml").read_text(encoding="utf-8")
+        self.assertIn("Software bug report", bug)
+        self.assertIn("Do not include configuration exports", bug)
+        self.assertIn("Request a private security contact", contact)
+        self.assertIn("Do not describe the vulnerability", contact)
+        self.assertIn("required: true", contact)
+
+    def test_installation_uses_isolated_hash_locked_reference_environment(self) -> None:
+        installation = (ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+        self.assertIn("--require-hashes -r requirements-ci.lock", installation)
+        self.assertIn("--require-hashes -r requirements-runtime.lock", installation)
+        self.assertIn("--no-deps", installation)
+        self.assertIn("--no-build-isolation", installation)
+        self.assertIn("Upgrade, rollback, and removal", installation)
 
     def test_contributing_documents_signoff_command(self) -> None:
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")

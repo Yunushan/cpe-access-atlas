@@ -40,20 +40,29 @@ LEGACY_UNICODE_CONTAINER = bytes.fromhex(
 
 
 class PrivateContainerTests(unittest.TestCase):
-    def test_independent_unicode_vector_decrypts_and_encryption_matches_exactly(self) -> None:
-        self.assertEqual(
-            unprotect_private_bytes(INDEPENDENT_CONTAINER, INDEPENDENT_PASSPHRASE),
-            INDEPENDENT_PLAINTEXT,
-        )
-        with patch.object(
-            private_container,
-            "_random_bytes",
-            side_effect=[bytes(range(16)), bytes(range(16, 28))],
-        ):
+    def test_independent_v1_unicode_vector_remains_decryptable(self) -> None:
+        with patch.object(private_container, "_scrypt", wraps=private_container._scrypt) as derive:
             self.assertEqual(
-                protect_private_bytes(INDEPENDENT_PLAINTEXT, INDEPENDENT_PASSPHRASE),
-                INDEPENDENT_CONTAINER,
+                unprotect_private_bytes(INDEPENDENT_CONTAINER, INDEPENDENT_PASSPHRASE),
+                INDEPENDENT_PLAINTEXT,
             )
+        self.assertEqual(
+            derive.call_args.args[3:],
+            (
+                private_container._V1_SCRYPT_N,
+                private_container._SCRYPT_R,
+                private_container._SCRYPT_P,
+            ),
+        )
+
+    def test_v1_plaintext_can_be_migrated_to_a_v2_container(self) -> None:
+        plaintext = unprotect_private_bytes(INDEPENDENT_CONTAINER, INDEPENDENT_PASSPHRASE)
+        migrated = protect_private_bytes(plaintext, INDEPENDENT_PASSPHRASE)
+
+        self.assertEqual(migrated[:4], b"CPAP")
+        self.assertEqual(migrated[4], private_container._VERSION_2)
+        self.assertNotEqual(migrated, INDEPENDENT_CONTAINER)
+        self.assertEqual(unprotect_private_bytes(migrated, INDEPENDENT_PASSPHRASE), plaintext)
 
     def test_python_314_container_opens_on_every_supported_unicode_database(self) -> None:
         self.assertEqual(
@@ -121,14 +130,58 @@ class PrivateContainerTests(unittest.TestCase):
 
     def test_round_trip_is_authenticated_and_uses_fresh_randomness(self) -> None:
         plaintext = b"synthetic private configuration=not-a-real-secret"
-        first = protect_private_bytes(plaintext, PASSPHRASE)
-        second = protect_private_bytes(plaintext, PASSPHRASE)
+        with patch.object(private_container, "_scrypt", wraps=private_container._scrypt) as derive:
+            first = protect_private_bytes(plaintext, PASSPHRASE)
+            second = protect_private_bytes(plaintext, PASSPHRASE)
+            self.assertEqual(unprotect_private_bytes(first, PASSPHRASE), plaintext)
+            self.assertEqual(unprotect_private_bytes(second, PASSPHRASE), plaintext)
 
         self.assertNotEqual(first, second)
-        self.assertEqual(unprotect_private_bytes(first, PASSPHRASE), plaintext)
-        self.assertEqual(unprotect_private_bytes(second, PASSPHRASE), plaintext)
+        self.assertEqual(
+            [call.args[3:] for call in derive.call_args_list],
+            [(2**17, 8, 1)] * 4,
+        )
         self.assertTrue(first.startswith(b"CPAP"))
         self.assertEqual(len(first), private_container._HEADER.size + 16 + 12 + len(plaintext) + 16)
+
+        (
+            magic,
+            version,
+            kdf,
+            cipher,
+            salt_length,
+            nonce_length,
+            scrypt_n,
+            scrypt_r,
+            scrypt_p,
+            payload_length,
+        ) = private_container._V2_HEADER.unpack(first[: private_container._V2_HEADER.size])
+        self.assertEqual(
+            (
+                magic,
+                version,
+                kdf,
+                cipher,
+                salt_length,
+                nonce_length,
+                scrypt_n,
+                scrypt_r,
+                scrypt_p,
+                payload_length,
+            ),
+            (
+                b"CPAP",
+                private_container._VERSION_2,
+                private_container._KDF_SCRYPT,
+                private_container._CIPHER_AES_GCM,
+                16,
+                12,
+                2**17,
+                8,
+                1,
+                len(plaintext),
+            ),
+        )
 
     def test_deterministic_random_inputs_make_the_format_reproducible(self) -> None:
         plaintext = b"synthetic"
@@ -169,11 +222,48 @@ class PrivateContainerTests(unittest.TestCase):
         with self.assertRaisesRegex(PrivateContainerError, "authentication failed"):
             unprotect_private_bytes(bytes(tampered), PASSPHRASE)
 
+    def test_v2_header_salt_nonce_ciphertext_and_tag_are_authenticated(self) -> None:
+        plaintext = b"synthetic authenticated fields"
+        artifact = protect_private_bytes(plaintext, PASSPHRASE)
+        header_size = private_container._V2_HEADER.size
+        for offset in (
+            header_size,
+            header_size + private_container._SALT_LENGTH,
+            header_size + private_container._SALT_LENGTH + private_container._NONCE_LENGTH,
+            len(artifact) - 1,
+        ):
+            tampered = bytearray(artifact)
+            tampered[offset] ^= 1
+            with (
+                self.subTest(offset=offset),
+                self.assertRaisesRegex(PrivateContainerError, "authentication failed"),
+            ):
+                unprotect_private_bytes(bytes(tampered), PASSPHRASE)
+
+        # Keep the structural length internally consistent while changing the
+        # authenticated payload-length field and ciphertext together.
+        shortened = bytearray(artifact)
+        struct.pack_into(">Q", shortened, 21, len(plaintext) - 1)
+        del shortened[header_size + 16 + 12 + len(plaintext) - 1]
+        with self.assertRaisesRegex(PrivateContainerError, "authentication failed"):
+            unprotect_private_bytes(bytes(shortened), PASSPHRASE)
+
     def test_parser_rejects_nonbytes_truncation_and_oversized_input(self) -> None:
-        for value in (bytearray(b"x"), b"x" * 10):
+        for value in (bytearray(b"x"), b"CPAP", b"x" * 10):
             with self.subTest(value_type=type(value).__name__):
-                with self.assertRaisesRegex(PrivateContainerError, "safety size|header"):
+                with self.assertRaisesRegex(
+                    PrivateContainerError, "must be bytes|header is truncated|format"
+                ):
                     unprotect_private_bytes(value, PASSPHRASE)  # type: ignore[arg-type]
+        truncated_v1 = INDEPENDENT_CONTAINER[
+            : private_container._V1_HEADER.size
+            + private_container._SALT_LENGTH
+            + private_container._NONCE_LENGTH
+            + private_container._TAG_LENGTH
+            - 1
+        ]
+        with self.assertRaisesRegex(PrivateContainerError, "header is truncated"):
+            unprotect_private_bytes(truncated_v1, PASSPHRASE)
         with patch.object(private_container, "MAX_CONTAINER_BYTES", 1):
             with self.assertRaisesRegex(PrivateContainerError, "safety size"):
                 unprotect_private_bytes(b"x" * 2, PASSPHRASE)
@@ -183,35 +273,68 @@ class PrivateContainerTests(unittest.TestCase):
 
         unknown = bytearray(artifact)
         unknown[0] ^= 1
-        with self.assertRaisesRegex(PrivateContainerError, "format is not recognized"):
-            unprotect_private_bytes(bytes(unknown), PASSPHRASE)
+        with patch.object(private_container, "_require_crypto") as crypto:
+            with self.assertRaisesRegex(PrivateContainerError, "format is not recognized"):
+                unprotect_private_bytes(bytes(unknown), PASSPHRASE)
+            crypto.assert_not_called()
 
-        for offset in (4, 5, 6):
+        malformed = bytearray(artifact)
+        malformed[4] = 3
+        with patch.object(private_container, "_require_crypto") as crypto:
+            with self.assertRaisesRegex(PrivateContainerError, "version is not supported"):
+                unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+            crypto.assert_not_called()
+
+        for offset in (5, 6):
             malformed = bytearray(artifact)
             malformed[offset] = 2
             with (
                 self.subTest(offset=offset),
-                self.assertRaisesRegex(PrivateContainerError, "format is not recognized"),
+                patch.object(private_container, "_require_crypto") as crypto,
             ):
-                unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                with self.assertRaisesRegex(PrivateContainerError, "algorithm identifiers"):
+                    unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                crypto.assert_not_called()
 
         for offset in (7, 8):
             malformed = bytearray(artifact)
             malformed[offset] = 8
             with (
                 self.subTest(offset=offset),
-                self.assertRaisesRegex(PrivateContainerError, "parameters are not supported"),
+                patch.object(private_container, "_require_crypto") as crypto,
             ):
-                unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                with self.assertRaisesRegex(PrivateContainerError, "parameters are not supported"):
+                    unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                crypto.assert_not_called()
+
+        for offset, value in (
+            (9, 2**15),
+            (9, 2**18),
+            (13, 7),
+            (13, 9),
+            (17, 0),
+            (17, 2),
+        ):
+            malformed = bytearray(artifact)
+            struct.pack_into(">I", malformed, offset, value)
+            with (
+                self.subTest(offset=offset, value=value),
+                patch.object(private_container, "_require_crypto") as crypto,
+            ):
+                with self.assertRaisesRegex(PrivateContainerError, "scrypt parameters"):
+                    unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                crypto.assert_not_called()
 
         for payload_length in (0, private_container.MAX_PRIVATE_BYTES + 1):
             malformed = bytearray(artifact)
-            struct.pack_into(">Q", malformed, 9, payload_length)
+            struct.pack_into(">Q", malformed, 21, payload_length)
             with (
                 self.subTest(payload_length=payload_length),
-                self.assertRaisesRegex(PrivateContainerError, "payload size is invalid"),
+                patch.object(private_container, "_require_crypto") as crypto,
             ):
-                unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                with self.assertRaisesRegex(PrivateContainerError, "payload size is invalid"):
+                    unprotect_private_bytes(bytes(malformed), PASSPHRASE)
+                crypto.assert_not_called()
 
         with self.assertRaisesRegex(PrivateContainerError, "length is invalid"):
             unprotect_private_bytes(artifact + b"trailing", PASSPHRASE)
@@ -220,7 +343,7 @@ class PrivateContainerTests(unittest.TestCase):
         self,
     ) -> None:
         artifact = protect_private_bytes(b"synthetic", PASSPHRASE)
-        for malformed in (artifact[: private_container._HEADER.size - 1], artifact[:-1]):
+        for malformed in (artifact[: private_container._V2_HEADER.size - 1], artifact[:-1]):
             with (
                 self.subTest(length=len(malformed)),
                 self.assertRaisesRegex(

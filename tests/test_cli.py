@@ -17,7 +17,7 @@ from xml.etree import ElementTree as ET
 
 from cpe_access_atlas import __version__
 from cpe_access_atlas.catalog import find_recipe
-from cpe_access_atlas.cli import _configure_stdio, _paths_alias, main
+from cpe_access_atlas.cli import _config_identity, _configure_stdio, _paths_alias, main
 from cpe_access_atlas.config import (
     ConfigError,
     decode_config,
@@ -523,6 +523,69 @@ class CliTests(unittest.TestCase):
         self.assertIn("encrypted type-4", stdout)
         self.assertNotIn("NewPass123", stdout + stderr)
         self.assertIn(b'val="NewPass123"', decoded.xml)
+
+    def test_config_generate_accepts_device_identity_from_private_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "encrypted-config.bin"
+            identity = Path(directory) / "identity.json"
+            identity.write_text(
+                json.dumps({"serial": "ZTE12345678", "mac": "00:11:22:33:44:55"}),
+                encoding="utf-8",
+            )
+            stdin = StringIO("NewPass123\n" + "a" * 32 + "\n")
+            with patch("cpe_access_atlas.cli.sys.stdin", stdin):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "config-generate",
+                        *TARGET,
+                        "--output",
+                        str(output),
+                        "--encrypted",
+                        "--identity-file",
+                        str(identity),
+                        "--ssh-password-stdin",
+                        "--device-key-stdin",
+                        "--acknowledge-unverified-compatibility",
+                        "--acknowledge-legacy-crypto",
+                        "--i-own-or-administer-this-device",
+                    ]
+                )
+            decoded = decode_config(
+                output.read_bytes(),
+                device_key="a" * 32,
+                serial="ZTE12345678",
+                mac="00:11:22:33:44:55",
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("encrypted type-4", stdout)
+        self.assertIn(b'val="NewPass123"', decoded.xml)
+
+    def test_private_device_identity_file_is_exact_bounded_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            identity = Path(directory) / "identity.json"
+            args = SimpleNamespace(identity_file=str(identity), serial=None, mac=None)
+            cases = (
+                (b'"not-an-object"', "exactly serial and mac"),
+                (b'{"serial":"private-value"}', "exactly serial and mac"),
+                (b'{"serial":7,"mac":"00:11:22:33:44:55"}', "must be strings"),
+                (b'{"serial":"ZTE12345678","mac":7}', "must be strings"),
+                (b'{"serial":"private-value",', "bounded UTF-8 JSON"),
+            )
+            for data, expected in cases:
+                with self.subTest(expected=expected):
+                    identity.write_bytes(data)
+                    with self.assertRaisesRegex(ConfigError, expected) as raised:
+                        _config_identity(args)
+                    self.assertNotIn("private-value", str(raised.exception))
+
+            identity.write_text(
+                '{"serial":"ZTE12345678","mac":"00:11:22:33:44:55"}',
+                encoding="utf-8",
+            )
+            self.assertEqual(_config_identity(args), ("ZTE12345678", "00:11:22:33:44:55"))
+            args.serial = "ZTE12345678"
+            with self.assertRaisesRegex(ConfigError, "cannot be combined"):
+                _config_identity(args)
 
     def test_config_generate_refuses_overwriting_private_baseline_even_with_force(self) -> None:
         with TemporaryDirectory() as directory:

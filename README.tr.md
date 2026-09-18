@@ -2,6 +2,12 @@
 
 [English](README.md) · [Türkçe](README.tr.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
+> [!NOTE]
+> Bu genel bakış 18 Eylül 2026 tarihinde eşitlendi. Güvenlik açısından kritik
+> sınırlamalar, yeni komut seçenekleri ve sürüm doğrulama adımları için güncel
+> ve bağlayıcı kaynak [İngilizce README](README.md), [güvenlik politikası](SECURITY.md)
+> ve [kurulum/kurtarma kılavuzudur](docs/installation.md).
+
 Türkiye'deki ISS'lerin sağladığı modem ve yönlendiriciler için, yalnızca cihaz
 sahibinin veya açıkça yetkilendirilmiş yöneticinin kullanacağı, cihaz yazılımı
 sürümüne duyarlı erişim araştırması ve güvenli araçlar.
@@ -66,7 +72,7 @@ Ayrıntılar için [uyumluluk tablosuna](SUPPORT.md) ve
 
 ## Hızlı başlangıç
 
-Python 3.11 veya daha yeni bir sürüm gerekir. Kurulum, katalog şemasını çalışma
+Standart CPython 3.11–3.15 gerekir. Kurulum, katalog şemasını çalışma
 zamanında doğrulamak için JSON Schema doğrulayıcısını da yükler.
 
 CI, Windows, Linux ve macOS üzerinde standart CPython 3.11–3.15 sürümlerini
@@ -77,31 +83,35 @@ final sürüm desteğinin doğrulandığını belirtmeden önce tüm matris yeni
 Python uyumluluğu, modem/yapılandırma/firmware uyumluluğunu kanıtlamaz.
 
 ```shell
-python -m pip install -e .
+python -m venv .venv
+python -m pip --python .venv install --require-hashes -r requirements-ci.lock
+python -m pip --python .venv install -e . --no-deps --no-build-isolation
+python -m pip --python .venv check
+```
+
+Ortamı Linux/macOS üzerinde `. .venv/bin/activate`, PowerShell'de ise
+`.venv\Scripts\Activate.ps1` ile etkinleştirin. Ardından şunları çalıştırın:
+
+```shell
 cpe-atlas providers
 cpe-atlas devices
 cpe-atlas recipes
 cpe-atlas validate
 ```
 
+Yayımlanmış wheel kurulumu, güncelleme ve geri alma için
+[kurulum kılavuzuna](docs/installation.md) bakın.
+
 Tam hedefi sorgulayın:
 
 ```shell
-cpe-atlas status \
-  --isp "turk-telekom" \
-  --model "ZTE H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
 Değişiklik yapmayan planı görüntüleyin:
 
 ```shell
-cpe-atlas plan \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas plan --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
 Ağ bağlantısı kurmadan tek yerel hedefi doğrulayın:
@@ -113,13 +123,7 @@ cpe-atlas doctor --host 192.168.1.1
 Tam sürüm için yalnızca okuma yapan root-hazırlık kontrolü:
 
 ```shell
-cpe-atlas root-readiness \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --firmware-input firmware.bin \
-  --expected-sha256 <özel-kayıtlı-sha256>
+cpe-atlas root-readiness --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --firmware-input firmware.bin --expected-sha256 <özel-kayıtlı-sha256>
 ```
 
 Bu komut firmware dosyasını yalnızca opak baytlar olarak hash'ler ve tarar;

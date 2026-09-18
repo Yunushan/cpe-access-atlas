@@ -7,6 +7,7 @@ instead of making any write requests.  A missing permission is reported as
 
 Usage:
     python scripts/check_github_production_settings.py --repo OWNER/REPO
+    python scripts/check_github_production_settings.py --repo OWNER/REPO --prepublication
     python scripts/check_github_production_settings.py --repo OWNER/REPO --json
     Add --require-independent-review to opt into a multi-maintainer policy.
 
@@ -29,12 +30,14 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
-from datetime import datetime
-from typing import Any
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any, cast
 
 STATUS_OK = "PASS"
 STATUS_BAD = "FAIL"
 STATUS_UNKNOWN = "UNVERIFIED"
+STATUS_DEFERRED = "DEFERRED"
 # Backwards-readable aliases keep the result vocabulary obvious at call sites;
 # values are derived from the non-secret-named constants above.
 STATUS_PASS = STATUS_OK
@@ -47,13 +50,50 @@ _WORKFLOW_PATHS = {
     "CodeQL": ".github/workflows/codeql.yml",
     "Secret scan": ".github/workflows/secret-scan.yml",
 }
-_RELEASE_VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?"
+_RELEASE_NUMBER = r"(?:0|[1-9][0-9]*)"
+_RELEASE_VERSION = (
+    rf"{_RELEASE_NUMBER}\.{_RELEASE_NUMBER}\.{_RELEASE_NUMBER}"
+    rf"(?:(?:a|b|rc){_RELEASE_NUMBER})?"
+    rf"(?:\.post{_RELEASE_NUMBER})?"
+    rf"(?:\.dev{_RELEASE_NUMBER})?"
+)
 _RELEASE_TAG = re.compile(rf"v({_RELEASE_VERSION})")
+_CANDIDATE_RELEASE_TAG = "v0.4.0a5"
 _GIT_SHA = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}")
 _ASSET_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_GIT_REF = re.compile(r"refs/(?:heads|tags)/[A-Za-z0-9][A-Za-z0-9._/-]{0,239}")
+_GITHUB_ACTIONS_APP_ID = 15368
+_CODEQL_RISK_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / ".github" / "codeql-accepted-risks.json"
+)
+_CODEQL_RISK_POLICY_KEYS = frozenset({"schema_version", "repository", "accepted_risks"})
+_CODEQL_RISK_KEYS = frozenset(
+    {
+        "alert_number",
+        "rule_id",
+        "security_severity_level",
+        "path",
+        "dismissed_reason",
+        "dismissed_by",
+        "dismissal_approved_by",
+        "dismissed_at",
+        "dismissed_comment",
+        "review_by",
+        "documentation",
+        "compensating_controls",
+        "re_review_triggers",
+    }
+)
+_CODEQL_SECURITY_LEVELS = frozenset({"critical", "high", "medium", "low", "note", "warning"})
+_CODEQL_ACCEPTED_LEVELS = frozenset({"critical", "high"})
+_CODEQL_POLICY_MAX_BYTES = 65_536
 _RELEASE_OSES = ("ubuntu-latest", "windows-latest", "macos-latest")
 _RELEASE_PYTHONS = ("3.11", "3.12", "3.13", "3.14", "3.15")
+_SECURITY_AUDIT_PYTHONS = ("3.11", "3.14")
+_WEEKLY_WORKFLOW_MAX_AGE = timedelta(days=8)
+_WORKFLOW_CLOCK_SKEW = timedelta(minutes=5)
+_WEEKLY_WORKFLOWS = frozenset({"Security audit", "CodeQL"})
 _APPROVED_ACTION_REPOSITORIES = frozenset(
     {
         "actions/checkout",
@@ -71,22 +111,26 @@ _CI_CHECK_NAMES = tuple(
     for operating_system in _RELEASE_OSES
     for python_version in _RELEASE_PYTHONS
 )
+_SECURITY_AUDIT_CHECK_NAMES = tuple(
+    f"dependency-audit ({python_version})" for python_version in _SECURITY_AUDIT_PYTHONS
+)
 _REQUIRED_BRANCH_CHECKS = frozenset(
     (
         *_CI_CHECK_NAMES,
         "package-smoke",
-        "dependency-audit",
+        "check-signoff",
+        *_SECURITY_AUDIT_CHECK_NAMES,
         "dependency-review",
         "analyze",
         "gitleaks",
     )
 )
 _REQUIRED_CURRENT_CHECKS = frozenset(
-    (*_CI_CHECK_NAMES, "package-smoke", "dependency-audit", "analyze", "gitleaks")
+    (*_CI_CHECK_NAMES, "package-smoke", *_SECURITY_AUDIT_CHECK_NAMES, "analyze", "gitleaks")
 )
 _WORKFLOW_CHECKS = {
     "CI": (*_CI_CHECK_NAMES, "package-smoke"),
-    "Security audit": ("dependency-audit", "dependency-review"),
+    "Security audit": (*_SECURITY_AUDIT_CHECK_NAMES, "dependency-review"),
     "CodeQL": ("analyze",),
     "Secret scan": ("gitleaks",),
 }
@@ -97,6 +141,29 @@ class CheckResult:
     name: str
     status: str
     detail: str
+
+
+@dataclass(frozen=True)
+class CodeQLRiskAcceptance:
+    alert_number: int
+    rule_id: str
+    security_severity_level: str
+    path: str
+    dismissed_reason: str
+    dismissed_by: str
+    dismissal_approved_by: str | None
+    dismissed_at: str
+    dismissed_comment: str
+    review_by: date
+    documentation: str
+    compensating_controls: tuple[str, ...]
+    re_review_triggers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CodeQLRiskPolicy:
+    repository: str
+    accepted_risks: tuple[CodeQLRiskAcceptance, ...]
 
 
 def _request_failure(completed: subprocess.CompletedProcess[str]) -> tuple[str, bool]:
@@ -209,6 +276,296 @@ def _get_collection(
     return None, f"pagination safety limit reached for {path}"
 
 
+def _valid_github_ref(value: str) -> bool:
+    if _GIT_REF.fullmatch(value) is None or value.endswith(("/", ".")):
+        return False
+    if "//" in value or "@{" in value or ".." in value:
+        return False
+    return all(part not in {"", ".", ".."} for part in value.split("/"))
+
+
+def _policy_string_list(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    if any(not isinstance(item, str) or not item or len(item) > 300 for item in value):
+        return None
+    items = tuple(value)
+    return items if len(set(items)) == len(items) else None
+
+
+def _parse_codeql_risk_policy(document: object) -> tuple[CodeQLRiskPolicy | None, str | None]:
+    """Parse the exact, repository-bound accepted-risk policy as inert data."""
+
+    if not isinstance(document, dict) or frozenset(document) != _CODEQL_RISK_POLICY_KEYS:
+        return None, "accepted CodeQL risk policy has an invalid top-level schema"
+    if type(document["schema_version"]) is not int or document["schema_version"] != 1:
+        return None, "accepted CodeQL risk policy uses an unsupported schema version"
+    repository = document["repository"]
+    if (
+        not isinstance(repository, str)
+        or _REPOSITORY.fullmatch(repository) is None
+        or repository.split("/", 1)[1] in {".", ".."}
+    ):
+        return None, "accepted CodeQL risk policy has an invalid repository"
+    records = document["accepted_risks"]
+    if not isinstance(records, list) or len(records) > 32:
+        return None, "accepted CodeQL risk policy must contain 0-32 entries"
+
+    accepted: list[CodeQLRiskAcceptance] = []
+    seen: set[int] = set()
+    for record in records:
+        if not isinstance(record, dict) or frozenset(record) != _CODEQL_RISK_KEYS:
+            return None, "accepted CodeQL risk policy entry has an invalid schema"
+        number = record["alert_number"]
+        if type(number) is not int or number < 1 or number in seen:
+            return None, "accepted CodeQL risk policy has an invalid or duplicate alert number"
+        seen.add(number)
+        rule_id = record["rule_id"]
+        severity = record["security_severity_level"]
+        path = record["path"]
+        reason = record["dismissed_reason"]
+        dismissed_by = record["dismissed_by"]
+        approved_by = record["dismissal_approved_by"]
+        dismissed_at = record["dismissed_at"]
+        comment = record["dismissed_comment"]
+        review_by = record["review_by"]
+        documentation = record["documentation"]
+        controls = _policy_string_list(record["compensating_controls"])
+        triggers = _policy_string_list(record["re_review_triggers"])
+        scalar_strings = (rule_id, path, reason, dismissed_by, dismissed_at, comment, documentation)
+        if any(
+            not isinstance(value, str) or not value or len(value) > 1_000
+            for value in scalar_strings
+        ):
+            return None, "accepted CodeQL risk policy entry has invalid text metadata"
+        rule_id = cast(str, rule_id)
+        path = cast(str, path)
+        reason = cast(str, reason)
+        dismissed_by = cast(str, dismissed_by)
+        dismissed_at = cast(str, dismissed_at)
+        comment = cast(str, comment)
+        documentation = cast(str, documentation)
+        if (
+            not re.fullmatch(r"[a-z0-9-]+/[a-z0-9-]+", rule_id)
+            or not isinstance(severity, str)
+            or severity not in _CODEQL_ACCEPTED_LEVELS
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}", path)
+            or ".." in path
+            or "//" in path
+            or reason != "won't fix"
+            or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", dismissed_by)
+            or (
+                approved_by is not None
+                and (
+                    not isinstance(approved_by, str)
+                    or re.fullmatch(r"[A-Za-z0-9-]{1,39}", approved_by) is None
+                )
+            )
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", dismissed_at) is None
+            or not documentation.startswith("docs/")
+            or not re.fullmatch(r"docs/[A-Za-z0-9._/#-]{1,255}", documentation)
+            or controls is None
+            or triggers is None
+        ):
+            return None, "accepted CodeQL risk policy entry has invalid constrained metadata"
+        try:
+            dismissed_timestamp = datetime.strptime(dismissed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=UTC
+            )
+            review_date = date.fromisoformat(review_by) if isinstance(review_by, str) else None
+        except ValueError:
+            return None, "accepted CodeQL risk policy entry has invalid dates"
+        if review_date is None or review_date.isoformat() != review_by:
+            return None, "accepted CodeQL risk policy entry has invalid dates"
+        if review_date < dismissed_timestamp.date():
+            return None, "accepted CodeQL risk review date predates its dismissal"
+        accepted.append(
+            CodeQLRiskAcceptance(
+                alert_number=number,
+                rule_id=rule_id,
+                security_severity_level=severity,
+                path=path,
+                dismissed_reason=reason,
+                dismissed_by=dismissed_by,
+                dismissal_approved_by=approved_by,
+                dismissed_at=dismissed_at,
+                dismissed_comment=comment,
+                review_by=review_date,
+                documentation=documentation,
+                compensating_controls=controls,
+                re_review_triggers=triggers,
+            )
+        )
+    return CodeQLRiskPolicy(repository=repository, accepted_risks=tuple(accepted)), None
+
+
+def _load_codeql_risk_policy(
+    path: Path = _CODEQL_RISK_POLICY_PATH,
+) -> tuple[CodeQLRiskPolicy | None, str | None]:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None, "accepted CodeQL risk policy is unreadable"
+    if not raw or len(raw) > _CODEQL_POLICY_MAX_BYTES:
+        return None, "accepted CodeQL risk policy is empty or exceeds its size limit"
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None, "accepted CodeQL risk policy is not bounded valid UTF-8 JSON"
+    return _parse_codeql_risk_policy(document)
+
+
+def _account_login(value: object) -> tuple[str | None, bool]:
+    if value is None:
+        return None, True
+    if not isinstance(value, dict) or not isinstance(value.get("login"), str):
+        return None, False
+    login = cast(str, value["login"])
+    return (login, bool(login) and len(login) <= 39)
+
+
+def _evaluate_codeql_risk_acceptances(
+    policy: CodeQLRiskPolicy,
+    alerts: object,
+    *,
+    repository: str,
+    expected_ref: str,
+    expected_commit: str,
+    now: datetime,
+) -> tuple[str, ...]:
+    """Return fail-closed differences between GitHub evidence and accepted risks."""
+
+    errors: list[str] = []
+    if policy.repository != repository:
+        errors.append("policy repository does not match the audited repository")
+    if not _valid_github_ref(expected_ref):
+        errors.append("expected CodeQL ref is invalid")
+    if _GIT_SHA.fullmatch(expected_commit) is None:
+        errors.append("expected CodeQL commit is invalid")
+    for acceptance in policy.accepted_risks:
+        if now.date() > acceptance.review_by:
+            errors.append(
+                f"accepted CodeQL risk #{acceptance.alert_number} expired on "
+                f"{acceptance.review_by.isoformat()}"
+            )
+    if not isinstance(alerts, list):
+        return (*errors, "dismissed CodeQL alert inventory is malformed")
+
+    expected = {item.alert_number: item for item in policy.accepted_risks}
+    observed: set[int] = set()
+    for alert in alerts:
+        if not isinstance(alert, dict) or alert.get("state") != "dismissed":
+            errors.append("dismissed CodeQL alert inventory is malformed")
+            continue
+        rule = alert.get("rule")
+        if not isinstance(rule, dict):
+            errors.append("dismissed CodeQL alert inventory has malformed rule metadata")
+            continue
+        severity = rule.get("security_severity_level")
+        if severity is not None and not isinstance(severity, str):
+            errors.append("dismissed CodeQL alert inventory has malformed severity metadata")
+            continue
+        if isinstance(severity, str) and severity not in _CODEQL_SECURITY_LEVELS:
+            errors.append("dismissed CodeQL alert inventory has malformed severity metadata")
+            continue
+        if severity not in _CODEQL_ACCEPTED_LEVELS:
+            continue
+        number = alert.get("number")
+        if type(number) is not int or number < 1 or number in observed:
+            errors.append("dismissed high/critical CodeQL alert identity is invalid or duplicated")
+            continue
+        observed.add(number)
+        expected_acceptance = expected.get(number)
+        if expected_acceptance is None:
+            errors.append(f"unexpected dismissed high/critical CodeQL alert #{number}")
+            continue
+        dismissed_by, dismissed_by_valid = _account_login(alert.get("dismissed_by"))
+        approved_by, approved_by_valid = _account_login(alert.get("dismissal_approved_by"))
+        instance = alert.get("most_recent_instance")
+        location = instance.get("location") if isinstance(instance, dict) else None
+        path = location.get("path") if isinstance(location, dict) else None
+        metadata = {
+            "rule_id": rule.get("id"),
+            "security_severity_level": severity,
+            "path": path,
+            "dismissed_reason": alert.get("dismissed_reason"),
+            "dismissed_by": dismissed_by,
+            "dismissal_approved_by": approved_by,
+            "dismissed_at": alert.get("dismissed_at"),
+            "dismissed_comment": alert.get("dismissed_comment"),
+        }
+        expected_metadata = {
+            "rule_id": expected_acceptance.rule_id,
+            "security_severity_level": expected_acceptance.security_severity_level,
+            "path": expected_acceptance.path,
+            "dismissed_reason": expected_acceptance.dismissed_reason,
+            "dismissed_by": expected_acceptance.dismissed_by,
+            "dismissal_approved_by": expected_acceptance.dismissal_approved_by,
+            "dismissed_at": expected_acceptance.dismissed_at,
+            "dismissed_comment": expected_acceptance.dismissed_comment,
+        }
+        if not dismissed_by_valid or not approved_by_valid or metadata != expected_metadata:
+            errors.append(f"accepted CodeQL risk #{number} metadata differs from policy")
+        if not isinstance(instance, dict) or instance.get("state") != "dismissed":
+            errors.append(f"accepted CodeQL risk #{number} exact instance is not dismissed")
+        if (
+            not isinstance(instance, dict)
+            or instance.get("ref") != expected_ref
+            or instance.get("commit_sha") != expected_commit
+        ):
+            errors.append(f"accepted CodeQL risk #{number} is not present on the exact ref/commit")
+    for number in sorted(expected.keys() - observed):
+        errors.append(f"accepted CodeQL risk #{number} is missing on the exact ref")
+    return tuple(dict.fromkeys(errors))
+
+
+def _audit_codeql_risk_acceptances(
+    api: GitHubApi,
+    repository: str,
+    *,
+    expected_ref: str,
+    expected_commit: str,
+    now: datetime,
+    policy_path: Path = _CODEQL_RISK_POLICY_PATH,
+) -> CheckResult:
+    if not _valid_github_ref(expected_ref) or _GIT_SHA.fullmatch(expected_commit) is None:
+        return CheckResult(
+            "accepted CodeQL risks", STATUS_FAIL, "exact CodeQL ref/commit input is invalid"
+        )
+    policy, policy_error = _load_codeql_risk_policy(policy_path)
+    if policy_error is not None or policy is None:
+        return CheckResult(
+            "accepted CodeQL risks", STATUS_FAIL, policy_error or "accepted-risk policy is invalid"
+        )
+    endpoint = f"code-scanning/alerts?state=dismissed&ref={expected_ref}&per_page=100"
+    alerts, api_error = _get_collection(api, endpoint)
+    if api_error is not None:
+        return CheckResult("accepted CodeQL risks", STATUS_UNVERIFIED, api_error)
+    differences = _evaluate_codeql_risk_acceptances(
+        policy,
+        alerts,
+        repository=repository,
+        expected_ref=expected_ref,
+        expected_commit=expected_commit,
+        now=now,
+    )
+    if differences:
+        return CheckResult("accepted CodeQL risks", STATUS_FAIL, "; ".join(differences))
+    if not policy.accepted_risks:
+        return CheckResult(
+            "accepted CodeQL risks",
+            STATUS_PASS,
+            f"no dismissed high/critical alerts match {expected_ref}; policy has no acceptances",
+        )
+    review_date = min(item.review_by for item in policy.accepted_risks)
+    return CheckResult(
+        "accepted CodeQL risks",
+        STATUS_PASS,
+        f"{len(policy.accepted_risks)} exact dismissed high/critical risk acceptance(s) "
+        f"match {expected_ref}; next review due {review_date.isoformat()}",
+    )
+
+
 def _load_rulesets(api: GitHubApi) -> tuple[list[Any], list[str]]:
     summaries, error = _get_collection(api, "rulesets")
     if error:
@@ -302,6 +659,28 @@ def _status_check_names(statuses: Any) -> set[str]:
     return names
 
 
+def _github_actions_check_names(statuses: Any, binding_field: str) -> set[str]:
+    """Return checks explicitly bound to the GitHub Actions integration."""
+
+    if not isinstance(statuses, dict) or binding_field not in {"app_id", "integration_id"}:
+        return set()
+    checks = statuses.get("checks")
+    if not isinstance(checks, list):
+        return set()
+    names: set[str] = set()
+    for item in checks:
+        if (
+            not isinstance(item, dict)
+            or type(item.get(binding_field)) is not int
+            or item[binding_field] != _GITHUB_ACTIONS_APP_ID
+        ):
+            continue
+        context = item.get("context")
+        if isinstance(context, str) and context:
+            names.add(context)
+    return names
+
+
 def _ruleset_parameters(ruleset: dict[str, Any], rule_type: str) -> dict[str, Any]:
     rules = ruleset.get("rules")
     if not isinstance(rules, list):
@@ -335,7 +714,9 @@ def _ruleset_has_required_branch_controls(
     pull_request = _ruleset_parameters(ruleset, "pull_request")
     status_checks = _ruleset_parameters(ruleset, "required_status_checks")
     required_checks = status_checks.get("required_status_checks")
-    required_check_names = _status_check_names({"checks": required_checks})
+    required_check_names = _github_actions_check_names(
+        {"checks": required_checks}, "integration_id"
+    )
     stale = pull_request.get(
         "dismiss_stale_reviews_on_push", pull_request.get("dismiss_stale_reviews")
     )
@@ -470,7 +851,7 @@ def _audit_branch_policy(
                 STATUS_FAIL,
                 "branch protection returned malformed review/check settings",
             )
-        required_check_names = _status_check_names(statuses)
+        required_check_names = _github_actions_check_names(statuses, "app_id")
         enforce_admins_data = protection.get("enforce_admins")
         force_push_data = protection.get("allow_force_pushes")
         deletion_data = protection.get("allow_deletions")
@@ -554,24 +935,37 @@ def _audit_branch_policy(
 def _audit_tag_policy(
     rulesets: Any, allowed_creators: frozenset[tuple[str, int]] = frozenset()
 ) -> CheckResult:
-    """Prove immutable v* tags separately from authorization to create them.
+    """Prove a rotating candidate-only creation boundary and immutable v* tags.
 
-    A creation-rule bypass must not also bypass update/deletion restrictions.
-    Combine independent rulesets only when they cover the entire namespace.
-    The caller explicitly identifies trusted creation actors; role-wide grants
-    are never inferred to mean a reviewed release maintainer.
+    All noncandidate release tags must match a zero-bypass creation rule. The
+    exact candidate must instead match a separate trusted-creator rule. A broad
+    no-bypass rule independently prevents updates and deletions. The caller
+    identifies trusted creation actors explicitly; role-wide grants are never
+    inferred to mean a reviewed release maintainer.
     """
 
     if not isinstance(rulesets, list):
         return CheckResult("release tag enforcement", STATUS_UNKNOWN, "invalid ruleset list")
+    candidate_ref = f"refs/tags/{_CANDIDATE_RELEASE_TAG}"
+    quarantine = False
     immutable: set[str] = set()
     creator_sets: list[set[tuple[str, int]]] = []
     unavailable = False
+    invalid_policy = False
     for ruleset in rulesets:
         if not isinstance(ruleset, dict):
             unavailable = True
             continue
         if ruleset.get("target") != "tag" or ruleset.get("enforcement") != "active":
+            continue
+        rules = ruleset.get("rules")
+        if not isinstance(rules, list) or any(
+            not isinstance(rule, dict) or not isinstance(rule.get("type"), str) for rule in rules
+        ):
+            unavailable = True
+            continue
+        rule_types = {rule["type"] for rule in rules}
+        if not rule_types.intersection({"creation", "update", "deletion"}):
             continue
         conditions = ruleset.get("conditions")
         refs = conditions.get("ref_name") if isinstance(conditions, dict) else None
@@ -579,54 +973,78 @@ def _audit_tag_policy(
             not isinstance(refs, dict)
             or not isinstance(refs.get("include"), list)
             or not isinstance(refs.get("exclude"), list)
+            or any(not isinstance(pattern, str) for pattern in refs["include"])
+            or any(not isinstance(pattern, str) for pattern in refs["exclude"])
         ):
             unavailable = True
-            continue
-        if refs["exclude"] or not any(
-            isinstance(pattern, str) and pattern in {"~ALL", "refs/tags/*", "refs/tags/v*"}
-            for pattern in refs["include"]
-        ):
-            if _ruleset_has_type(ruleset, "creation"):
-                # A narrower creation rule may prohibit some v* releases even
-                # when a full-namespace rule grants their creator permission.
-                unavailable = True
             continue
         bypass = ruleset.get("bypass_actors")
-        if not isinstance(bypass, list) or not isinstance(ruleset.get("rules"), list):
+        if not isinstance(bypass, list):
             unavailable = True
             continue
-        if not bypass:
-            immutable.update(
-                kind for kind in ("update", "deletion") if _ruleset_has_type(ruleset, kind)
-            )
-        trusted_bypass = all(
-            isinstance(actor, dict)
-            and isinstance(actor.get("actor_type"), str)
-            and type(actor.get("actor_id")) is int
-            and (actor["actor_type"], actor["actor_id"]) in allowed_creators
-            and actor.get("bypass_mode") == "always"
-            for actor in bypass
-        )
-        if _ruleset_has_type(ruleset, "creation"):
-            if not trusted_bypass:
+
+        if rule_types == {"creation"}:
+            if (
+                refs["include"] == ["refs/tags/v*"]
+                and refs["exclude"] == [candidate_ref]
+                and not bypass
+            ):
+                quarantine = True
+                continue
+            if refs["include"] == [candidate_ref] and not refs["exclude"]:
+                trusted_bypass = bool(bypass) and all(
+                    isinstance(actor, dict)
+                    and isinstance(actor.get("actor_type"), str)
+                    and type(actor.get("actor_id")) is int
+                    and (actor["actor_type"], actor["actor_id"]) in allowed_creators
+                    and actor.get("bypass_mode") == "always"
+                    for actor in bypass
+                )
+                if not trusted_bypass:
+                    return CheckResult(
+                        "release tag enforcement",
+                        STATUS_FAIL,
+                        "candidate release creators are not explicitly trusted",
+                    )
+                creator_sets.append({(actor["actor_type"], actor["actor_id"]) for actor in bypass})
+                continue
+            invalid_policy = True
+            continue
+
+        if "creation" in rule_types:
+            invalid_policy = True
+            continue
+        if refs["include"] == ["refs/tags/v*"] and not refs["exclude"] and not bypass:
+            immutable.update(rule_types.intersection({"update", "deletion"}))
+        elif rule_types.intersection({"update", "deletion"}) and (
+            refs["include"] == [candidate_ref] or "refs/tags/v*" in refs["include"]
+        ):
+            if bypass:
                 return CheckResult(
                     "release tag enforcement",
                     STATUS_FAIL,
-                    "release creators are not explicitly trusted",
+                    "release tag updates or deletions have a bypass",
                 )
-            creator_sets.append({(actor["actor_type"], actor["actor_id"]) for actor in bypass})
+            invalid_policy = True
     creators = set.intersection(*creator_sets) if creator_sets else set()
-    if creators and immutable == {"update", "deletion"} and not unavailable:
+    if (
+        quarantine
+        and creators
+        and immutable == {"update", "deletion"}
+        and not unavailable
+        and not invalid_policy
+    ):
         return CheckResult(
             "release tag enforcement",
             STATUS_PASS,
-            "trusted creators can satisfy every v* creation rule; updates/deletions have no bypass",
+            f"only trusted creators can create {_CANDIDATE_RELEASE_TAG}; all other v* "
+            "creations and every update/deletion are denied",
         )
     return CheckResult(
         "release tag enforcement",
         STATUS_UNKNOWN if unavailable else STATUS_FAIL,
-        "v* tags need an operational trusted creator and separate no-bypass "
-        "update/deletion controls",
+        "v* tags need candidate-only trusted creation, a noncandidate creation quarantine, "
+        "and broad no-bypass update/deletion controls",
     )
 
 
@@ -702,24 +1120,86 @@ def _audit_release_environment(
         )
     if policy["protected_branches"] or not policy["custom_branch_policies"]:
         return CheckResult(
-            "release environment", STATUS_FAIL, "release requires selected v* tags only"
+            "release environment", STATUS_FAIL, "release requires one exact candidate tag"
         )
     branches, error = _get_collection(
         api, "environments/release/deployment-branch-policies", "branch_policies"
     )
     if error:
         return CheckResult("release environment", STATUS_UNKNOWN, error)
-    if not branches or any(
-        not isinstance(branch, dict) or branch.get("type") != "tag" or branch.get("name") != "v*"
-        for branch in branches
+    branches = cast(list[Any], branches)
+    if (
+        len(branches) != 1
+        or not isinstance(branches[0], dict)
+        or branches[0].get("type") != "tag"
+        or branches[0].get("name") != _CANDIDATE_RELEASE_TAG
     ):
         return CheckResult(
-            "release environment", STATUS_FAIL, "release must allow only the v* tag namespace"
+            "release environment",
+            STATUS_FAIL,
+            f"release must allow only exact candidate tag {_CANDIDATE_RELEASE_TAG}",
         )
     return CheckResult(
         "release environment",
         STATUS_PASS,
-        "selected approval policy, no administrator bypass, and v* release tags are enforced",
+        "selected approval policy, no administrator bypass, and exact candidate tag "
+        f"{_CANDIDATE_RELEASE_TAG} is enforced",
+    )
+
+
+def _audit_release_immutability_setting(api: GitHubApi) -> CheckResult:
+    setting, error = api.get("immutable-releases")
+    if error is not None:
+        return CheckResult("release immutability setting", STATUS_UNKNOWN, error)
+    if not isinstance(setting, dict) or type(setting.get("enabled")) is not bool:
+        return CheckResult(
+            "release immutability setting", STATUS_UNKNOWN, "setting evidence is malformed"
+        )
+    if not setting["enabled"]:
+        return CheckResult(
+            "release immutability setting",
+            STATUS_FAIL,
+            "repository release immutability is disabled",
+        )
+    return CheckResult(
+        "release immutability setting",
+        STATUS_PASS,
+        "repository release immutability is enabled for future publications",
+    )
+
+
+def _audit_candidate_absence(api: GitHubApi) -> CheckResult:
+    candidate_ref = f"refs/tags/{_CANDIDATE_RELEASE_TAG}"
+    refs, error = _get_collection(api, f"git/matching-refs/tags/{_CANDIDATE_RELEASE_TAG}")
+    if error:
+        return CheckResult("candidate absence", STATUS_UNKNOWN, error)
+    releases, error = _get_collection(api, "releases")
+    if error:
+        return CheckResult("candidate absence", STATUS_UNKNOWN, error)
+    refs = cast(list[Any], refs)
+    releases = cast(list[Any], releases)
+    if any(not isinstance(item, dict) or not isinstance(item.get("ref"), str) for item in refs):
+        return CheckResult(
+            "candidate absence", STATUS_UNKNOWN, "candidate ref evidence is malformed"
+        )
+    if any(
+        not isinstance(item, dict) or not isinstance(item.get("tag_name"), str) for item in releases
+    ):
+        return CheckResult(
+            "candidate absence", STATUS_UNKNOWN, "candidate release evidence is malformed"
+        )
+    if any(item["ref"] == candidate_ref for item in refs) or any(
+        item["tag_name"] == _CANDIDATE_RELEASE_TAG for item in releases
+    ):
+        return CheckResult(
+            "candidate absence",
+            STATUS_FAIL,
+            f"{_CANDIDATE_RELEASE_TAG} already exists as a tag or release",
+        )
+    return CheckResult(
+        "candidate absence",
+        STATUS_PASS,
+        f"{_CANDIDATE_RELEASE_TAG} does not yet exist as a tag or release",
     )
 
 
@@ -1120,7 +1600,7 @@ def _audit_release(api: GitHubApi) -> CheckResult:
                 raise _ReleaseEvidenceError("duplicate or invalid release asset identity")
             found.add(name)
             identifiers.add(asset["id"])
-            if name in expected and (
+            if (
                 asset.get("state") != "uploaded"
                 or type(asset.get("size")) is not int
                 or asset["size"] < 1
@@ -1128,13 +1608,18 @@ def _audit_release(api: GitHubApi) -> CheckResult:
                 or _ASSET_DIGEST.fullmatch(asset["digest"]) is None
             ):
                 raise _ReleaseEvidenceError(
-                    "required release assets must be uploaded, nonempty, and have SHA-256 digests",
+                    "release assets must be uploaded, nonempty, and have SHA-256 digests",
                     STATUS_FAIL,
                 )
         missing = sorted(expected - found)
         if missing:
             raise _ReleaseEvidenceError(
                 "missing required release assets: " + ", ".join(missing), STATUS_FAIL
+            )
+        unexpected = sorted(found - expected)
+        if unexpected:
+            raise _ReleaseEvidenceError(
+                "unexpected release assets: " + ", ".join(unexpected), STATUS_FAIL
             )
         return CheckResult(
             "published release",
@@ -1233,7 +1718,15 @@ def _latest_workflow_runs(api: GitHubApi, head_sha: str) -> tuple[dict[str, Any]
     return latest, None
 
 
-def _audit_workflows(api: GitHubApi, head_sha: str) -> CheckResult:
+def _weekly_workflow_is_fresh(run: dict[str, Any], now: datetime | None) -> bool:
+    if now is None:
+        return True
+    created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+    age = now - created
+    return -_WORKFLOW_CLOCK_SKEW <= age <= _WEEKLY_WORKFLOW_MAX_AGE
+
+
+def _audit_workflows(api: GitHubApi, head_sha: str, *, now: datetime | None = None) -> CheckResult:
     latest, error = _latest_workflow_runs(api, head_sha)
     if error:
         return CheckResult("current required workflows", STATUS_UNVERIFIED, error)
@@ -1244,6 +1737,9 @@ def _audit_workflows(api: GitHubApi, head_sha: str) -> CheckResult:
         or latest[name].get("status") != "completed"
         or latest[name].get("conclusion") != "success"
     )
+    for name in sorted(_WEEKLY_WORKFLOWS & latest.keys()):
+        if not _weekly_workflow_is_fresh(latest[name], now):
+            failed.append(f"{name} (stale or future-dated)")
     if not failed:
         return CheckResult(
             "current required workflows",
@@ -1257,13 +1753,18 @@ def _audit_workflows(api: GitHubApi, head_sha: str) -> CheckResult:
     )
 
 
-def _audit_current_checks(api: GitHubApi, head_sha: str) -> CheckResult:
+def _audit_current_checks(
+    api: GitHubApi, head_sha: str, *, now: datetime | None = None
+) -> CheckResult:
     # Read jobs from the exact latest workflow attempt, not arbitrary check
     # contexts from another app, an older run, or a different workflow file.
     latest, error = _latest_workflow_runs(api, head_sha)
     if error:
         return CheckResult("current required checks", STATUS_UNVERIFIED, error)
     failures: list[str] = []
+    for name in sorted(_WEEKLY_WORKFLOWS & latest.keys()):
+        if not _weekly_workflow_is_fresh(latest[name], now):
+            failures.append(f"{name} (stale or future-dated)")
     for name in sorted(_EXPECTED_WORKFLOWS):
         if name not in latest:
             failures.append(f"{name} (no main execution)")
@@ -1291,7 +1792,11 @@ def _audit_current_checks(api: GitHubApi, head_sha: str) -> CheckResult:
                     "current required checks", STATUS_UNKNOWN, "invalid workflow job metadata"
                 )
             allowed = {"success"}
-            if required == "dependency-review" and run["event"] == "push":
+            if required == "dependency-review" and run["event"] in {
+                "push",
+                "schedule",
+                "workflow_dispatch",
+            }:
                 allowed.add("skipped")
             if (
                 job.get("head_sha") != head_sha
@@ -1310,7 +1815,9 @@ def _audit_current_checks(api: GitHubApi, head_sha: str) -> CheckResult:
     return CheckResult("current required checks", STATUS_FAIL, "; ".join(failures))
 
 
-def audit(repo: str, *, require_independent_review: bool = False) -> list[CheckResult]:
+def audit(
+    repo: str, *, require_independent_review: bool = False, prepublication: bool = False
+) -> list[CheckResult]:
     api = GitHubApi(repo)
     errors: list[str] = []
     repo_data, repo_error = api.get("")
@@ -1358,9 +1865,20 @@ def audit(repo: str, *, require_independent_review: bool = False) -> list[CheckR
     results.append(
         _audit_release_environment(api, require_independent_review=require_independent_review)
     )
+    results.append(_audit_release_immutability_setting(api))
     results.append(_audit_actions_policy(api))
     results.extend(_audit_alerts(api))
-    results.append(_audit_release(api))
+    if prepublication:
+        results.append(_audit_candidate_absence(api))
+        results.append(
+            CheckResult(
+                "published release",
+                STATUS_DEFERRED,
+                "candidate artifacts do not exist yet; run the full audit after publication",
+            )
+        )
+    else:
+        results.append(_audit_release(api))
     results.append(_audit_release_tag(api))
     head_sha, head_error = api.get("commits/main")
     if (
@@ -1376,9 +1894,26 @@ def audit(repo: str, *, require_independent_review: bool = False) -> list[CheckR
                 head_error or "invalid main commit response",
             )
         )
+        results.append(
+            CheckResult(
+                "accepted CodeQL risks",
+                STATUS_UNVERIFIED,
+                head_error or "invalid main commit response",
+            )
+        )
     else:
-        results.append(_audit_workflows(api, head_sha["sha"]))
-        results.append(_audit_current_checks(api, head_sha["sha"]))
+        audit_time = datetime.now(UTC)
+        results.append(
+            _audit_codeql_risk_acceptances(
+                api,
+                repo,
+                expected_ref="refs/heads/main",
+                expected_commit=head_sha["sha"],
+                now=audit_time,
+            )
+        )
+        results.append(_audit_workflows(api, head_sha["sha"], now=audit_time))
+        results.append(_audit_current_checks(api, head_sha["sha"], now=audit_time))
     if errors:
         results.extend(CheckResult("audit diagnostics", STATUS_UNVERIFIED, item) for item in errors)
     profile = "independent-review" if require_independent_review else "solo-maintainer"
@@ -1399,9 +1934,22 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument(
+        "--prepublication",
+        action="store_true",
+        help="defer only the candidate release-instance check until after publication",
+    )
+    parser.add_argument(
         "--require-independent-review",
         action="store_true",
         help="require independent PR/release approvals instead of the solo-maintainer default",
+    )
+    parser.add_argument(
+        "--codeql-risk-ref",
+        help="audit only accepted dismissed CodeQL risks on this exact GitHub ref",
+    )
+    parser.add_argument(
+        "--codeql-risk-commit",
+        help="exact 40-character commit for --codeql-risk-ref",
     )
     return parser
 
@@ -1415,13 +1963,38 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print("--repo OWNER/REPO is required", file=sys.stderr)
         return 2
-    results = audit(args.repo, require_independent_review=args.require_independent_review)
+    risk_arguments = (args.codeql_risk_ref, args.codeql_risk_commit)
+    if (risk_arguments[0] is None) != (risk_arguments[1] is None):
+        print(
+            "--codeql-risk-ref and --codeql-risk-commit must be supplied together", file=sys.stderr
+        )
+        return 2
+    if risk_arguments[0] is not None and (args.prepublication or args.require_independent_review):
+        print("CodeQL risk-only mode cannot be combined with full-audit profiles", file=sys.stderr)
+        return 2
+    if risk_arguments[0] is not None:
+        results = [
+            _audit_codeql_risk_acceptances(
+                GitHubApi(args.repo),
+                args.repo,
+                expected_ref=risk_arguments[0],
+                expected_commit=cast(str, risk_arguments[1]),
+                now=datetime.now(UTC),
+            )
+        ]
+    else:
+        results = audit(
+            args.repo,
+            require_independent_review=args.require_independent_review,
+            prepublication=args.prepublication,
+        )
     if args.json:
         print(json.dumps([asdict(result) for result in results], indent=2))
     else:
         for result in results:
             print(f"[{result.status:<10}] {result.name}: {result.detail}")
-    return 0 if all(result.status == STATUS_PASS for result in results) else 1
+    accepted = {STATUS_PASS, STATUS_DEFERRED} if args.prepublication else {STATUS_PASS}
+    return 0 if all(result.status in accepted for result in results) else 1
 
 
 if __name__ == "__main__":

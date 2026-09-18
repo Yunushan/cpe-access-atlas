@@ -110,18 +110,30 @@ jobs:
     needs: [source-validation, dependency-validation, secret-validation, codeql-validation, runtime-sbom]
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.release-classification.outputs.prerelease }}
     permissions:
-      attestations: write
-      contents: write
-      id-token: write
+      contents: read
       security-events: read
-    environment:
-      name: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify annotated release tag
+        run: |
+          tag_type="$(git cat-file -t "$GITHUB_REF_NAME")"
+          if [ "$tag_type" != "tag" ]; then
+            echo "Release tag $GITHUB_REF_NAME must be an annotated tag."
+            exit 1
+          fi
+      - name: Verify tag is current main head
+        run: |
+          main_sha="$(git rev-parse --verify refs/remotes/origin/main)"
+          if [ "$GITHUB_SHA" != "$main_sha" ]; then
+            echo "Release tag $GITHUB_REF_NAME must point to the current main head."
+            exit 1
+          fi
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
@@ -129,8 +141,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          page_counts="$(gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
+          page_counts="$(gh api --paginate --method GET \
+            -f state=open -f "ref=$GITHUB_REF" -f per_page=100 \
+            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts" \
             --jq 'length')"
           open_alerts=0
           while IFS= read -r page_count; do
@@ -141,6 +154,14 @@ jobs:
             echo "Release blocked: $open_alerts open CodeQL alert(s) remain."
             exit 1
           fi
+      - name: Verify accepted CodeQL risks on the exact release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/check_github_production_settings.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --codeql-risk-ref "$GITHUB_REF" \
+            --codeql-risk-commit "$GITHUB_SHA"
       - name: Install release tooling
         run: |
           python -m pip install --require-hashes -r requirements-release.lock
@@ -157,25 +178,12 @@ jobs:
       - name: Verify changelog entry
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/check_release_candidate.py --tag "$RELEASE_TAG"
+      - name: Classify release publication
+        id: release-classification
         run: |
-          version="${RELEASE_TAG#v}"
-          if ! grep -Fq "## $version" CHANGELOG.md; then
-            echo "CHANGELOG.md has no heading for release $version."
-            exit 1
-          fi
-      - name: Verify annotated release tag
-        run: |
-          tag_type="$(git cat-file -t "$GITHUB_REF_NAME")"
-          if [ "$tag_type" != "tag" ]; then
-            echo "Release tag $GITHUB_REF_NAME must be an annotated tag."
-            exit 1
-          fi
-      - name: Verify tag is on main
-        run: |
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
-            echo "Release tag $GITHUB_REF_NAME does not point to a commit on main."
-            exit 1
-          fi
+          prerelease="$(python -c 'import tomllib; from pathlib import Path; from packaging.version import Version; from cpe_access_atlas import __version__; c=tomllib.loads(Path("pyproject.toml").read_text())["project"]["classifiers"]; print(str(Version(__version__).is_prerelease or not any(x in c for x in ("Development Status :: 5 - Production/Stable", "Development Status :: 6 - Mature"))).lower())')"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
       - name: Validate source
         run: |
           python -m ruff check src tests scripts
@@ -218,16 +226,75 @@ jobs:
           path: dist
       - name: Create checksums
         run: sha256sum dist/*.whl dist/*.tar.gz dist/*.json > "dist/SHA256SUMS"
-      - name: Attest release artifacts
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: "dist/*"
       - name: Upload distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cpe-access-atlas-${{ github.ref_name }}
           path: dist/*
-      - name: Publish GitHub release
+
+  publish-release:
+    needs: validate-release
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    environment:
+      name: release
+    steps:
+      - name: Download validated release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cpe-access-atlas-${{ github.ref_name }}
+          path: dist
+      - name: Verify exact release bundle and checksums
+        run: |
+          set -euo pipefail
+          if [ ! -f dist/SHA256SUMS ]; then
+            echo "Validated release bundle has no checksum manifest."
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          expected=(
+            "dist/cpe_access_atlas-${version}-py3-none-any.whl"
+            "dist/cpe_access_atlas-${version}.tar.gz"
+          )
+          for system in ubuntu-latest windows-latest macos-latest; do
+            for python in 3.11 3.12 3.13 3.14 3.15; do
+              expected+=(
+                "dist/cpe-access-atlas-${GITHUB_REF_NAME}-${system}-python${python}-sbom.cdx.json"
+              )
+            done
+          done
+          mapfile -t expected_paths < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          mapfile -t actual_paths < <(
+            find dist -maxdepth 1 -type f ! -name SHA256SUMS -print | LC_ALL=C sort
+          )
+          mapfile -t listed_paths < <(awk '{print $2}' dist/SHA256SUMS | LC_ALL=C sort)
+          entry_count="$(find dist -mindepth 1 -maxdepth 1 -print | wc -l)"
+          if [ "$entry_count" -ne 18 ] \
+            || [ "${#expected_paths[@]}" -ne 17 ] \
+            || [ "${#actual_paths[@]}" -ne 17 ] \
+            || [ "${#listed_paths[@]}" -ne 17 ]; then
+            echo "Validated release bundle has an unexpected entry count."
+            exit 1
+          fi
+          if ! diff -u \
+            <(printf '%s\n' "${expected_paths[@]}") \
+            <(printf '%s\n' "${actual_paths[@]}"); then
+            echo "Validated release bundle has missing or unexpected assets."
+            exit 1
+          fi
+          if ! diff -u \
+            <(printf '%s\n' "${expected_paths[@]}") \
+            <(printf '%s\n' "${listed_paths[@]}"); then
+            echo "Checksum manifest does not list the exact release assets."
+            exit 1
+          fi
+          sha256sum --check --strict dist/SHA256SUMS
+      - name: Refuse to overwrite an existing release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -235,9 +302,117 @@ jobs:
             echo "Release already exists; published artifacts will not be overwritten."
             exit 1
           fi
-          prerelease="$(python -c 'import tomllib; from pathlib import Path; from packaging.version import Version; from cpe_access_atlas import __version__; c=tomllib.loads(Path("pyproject.toml").read_text())["project"]["classifiers"]; print(str(Version(__version__).is_prerelease or not any(x in c for x in ("Development Status :: 5 - Production/Stable", "Development Status :: 6 - Mature"))).lower())')"
+      - name: Reverify annotated tag and main targets before attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          tag_name = os.environ["GITHUB_REF_NAME"]
+
+          def get(path):
+              result = subprocess.run(
+                  ["gh", "api", "--method", "GET", path],
+                  capture_output=True, text=True, check=True, timeout=30,
+              )
+              value = json.loads(result.stdout)
+              if not isinstance(value, dict):
+                  raise RuntimeError("GitHub returned malformed tag metadata")
+              return value
+
+          ref = get(f"repos/{repository}/git/ref/tags/{tag_name}")
+          tag_object = ref.get("object")
+          if (
+              not isinstance(tag_object, dict)
+              or tag_object.get("type") != "tag"
+              or not isinstance(tag_object.get("sha"), str)
+              or re.fullmatch(r"[0-9a-f]{40}", tag_object["sha"]) is None
+          ):
+              raise RuntimeError("Release ref is no longer the validated annotated tag")
+          annotated = get(f"repos/{repository}/git/tags/{tag_object['sha']}")
+          target = annotated.get("object")
+          if (
+              not isinstance(target, dict)
+              or target.get("type") != "commit"
+              or target.get("sha") != os.environ["GITHUB_SHA"]
+          ):
+              raise RuntimeError("Release tag no longer targets the validated commit")
+          main_ref = get(f"repos/{repository}/git/ref/heads/main")
+          main_target = main_ref.get("object")
+          if (
+              not isinstance(main_target, dict)
+              or main_target.get("type") != "commit"
+              or main_target.get("sha") != os.environ["GITHUB_SHA"]
+          ):
+              raise RuntimeError("Validated release commit is no longer the current main head")
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*"
+      - name: Reverify annotated tag and main targets after attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          tag_name = os.environ["GITHUB_REF_NAME"]
+
+          def get(path):
+              result = subprocess.run(
+                  ["gh", "api", "--method", "GET", path],
+                  capture_output=True, text=True, check=True, timeout=30,
+              )
+              value = json.loads(result.stdout)
+              if not isinstance(value, dict):
+                  raise RuntimeError("GitHub returned malformed tag metadata")
+              return value
+
+          ref = get(f"repos/{repository}/git/ref/tags/{tag_name}")
+          tag_object = ref.get("object")
+          if (
+              not isinstance(tag_object, dict)
+              or tag_object.get("type") != "tag"
+              or not isinstance(tag_object.get("sha"), str)
+              or re.fullmatch(r"[0-9a-f]{40}", tag_object["sha"]) is None
+          ):
+              raise RuntimeError("Release ref is no longer the validated annotated tag")
+          annotated = get(f"repos/{repository}/git/tags/{tag_object['sha']}")
+          target = annotated.get("object")
+          if (
+              not isinstance(target, dict)
+              or target.get("type") != "commit"
+              or target.get("sha") != os.environ["GITHUB_SHA"]
+          ):
+              raise RuntimeError("Release tag no longer targets the validated commit")
+          main_ref = get(f"repos/{repository}/git/ref/heads/main")
+          main_target = main_ref.get("object")
+          if (
+              not isinstance(main_target, dict)
+              or main_target.get("type") != "commit"
+              or main_target.get("sha") != os.environ["GITHUB_SHA"]
+          ):
+              raise RuntimeError("Validated release commit is no longer the current main head")
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate-release.outputs.prerelease }}
+        run: |
+          if [ "$PRERELEASE" != "true" ] && [ "$PRERELEASE" != "false" ]; then
+            echo "Release classification output is invalid."
+            exit 1
+          fi
           release_args=(--repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
-          if [ "$prerelease" = "true" ]; then
+          if [ "$PRERELEASE" = "true" ]; then
             release_args+=(--prerelease)
           fi
           # gh creates a draft, uploads all assets, then publishes it. Repository

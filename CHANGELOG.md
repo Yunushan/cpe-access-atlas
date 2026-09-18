@@ -2,8 +2,24 @@
 
 All notable changes are documented here.
 
-## 0.4.0a4 - Unreleased
+## 0.4.0a5 - Unreleased
 
+- Write new private containers as authenticated format v2 with explicit, bounded
+  scrypt parameters and stronger work factors; retain read-only v1 compatibility
+  and reject unsupported or resource-exhausting parameters before key derivation.
+- Bound web-evidence JSON nesting, canonicalize structural identifiers, aggregate
+  duplicates, and suppress aliases across evidence fields so attacker-controlled
+  status pages cannot exhaust parsing or repeat identifier-shaped secrets.
+- Add `--identity-file` for configuration generation so serial numbers and MAC
+  addresses need not appear in process arguments. Require a small, exact UTF-8
+  JSON object and keep malformed input values out of diagnostics.
+- Add a read-only release-preflight workflow, exact release/changelog validation,
+  ref-scoped CodeQL alert gates, scheduled dependency audits across both lockfile
+  marker branches, DCO trailer parsing, and GitHub-Actions-bound required checks.
+  Split validation from privileged publication, require exact release assets and
+  checksums, and audit a rotating candidate-only tag-creation quarantine so old
+  publishing workflows cannot be revived with a late tag. Add secure
+  installation/rollback guidance and structured public issue routes.
 - Require a standalone `root` token in web evidence so ordinary XML wrappers,
   Buildroot, and rootfs do not trigger the marker. Keep private UART paths out
   of missing-file and filesystem-error diagnostics. Preserve the UART evidence

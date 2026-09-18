@@ -27,8 +27,11 @@ jobs:
           set -euo pipefail
           missing=0
           for commit in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
-            if ! git show -s --format=%B "$commit" | grep -qE '^Signed-off-by: .+ <[^<>]+@[^<>]+>$'; then
-              echo "::error::Commit $commit is missing a DCO 'Signed-off-by' trailer."
+            author_email="$(git show -s --format=%ae "$commit")"
+            trailers="$(git show -s --format=%B "$commit" | git interpret-trailers --parse)"
+            if ! printf '%s\n' "$trailers" \
+              | AUTHOR_EMAIL="$author_email" awk -f .github/dco-signoff.awk; then
+              echo "::error::Commit $commit lacks a valid DCO sign-off matching its author email."
               missing=1
             fi
           done

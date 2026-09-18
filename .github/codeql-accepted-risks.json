@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "repository": "Yunushan/cpe-access-atlas",
+  "accepted_risks": [
+    {
+      "alert_number": 5,
+      "rule_id": "py/weak-sensitive-data-hashing",
+      "security_severity_level": "high",
+      "path": "src/cpe_access_atlas/config.py",
+      "dismissed_reason": "won't fix",
+      "dismissed_by": "Yunushan",
+      "dismissal_approved_by": null,
+      "dismissed_at": "2026-09-18T16:59:24Z",
+      "dismissed_comment": "Accepted vendor-compatibility risk: H3600P type-4 requires this exact SHA-256-derived key/IV; replacing it would break the format. Use is gated by --acknowledge-legacy-crypto. Secure local storage uses scrypt + AES-GCM via private-protect. See docs/config-cryptography.md.",
+      "review_by": "2027-03-18",
+      "documentation": "docs/config-cryptography.md#compatibility-is-security-sensitive",
+      "compensating_controls": [
+        "encrypted vendor output requires an explicit legacy-cryptography acknowledgement",
+        "authenticated local storage uses scrypt and AES-GCM instead of the vendor format",
+        "independent synthetic compatibility vectors pin the required protocol bytes"
+      ],
+      "re_review_triggers": [
+        "the vendor container derivation or encryption behavior changes",
+        "exact-device interoperability evidence changes",
+        "a supported authenticated vendor container becomes available"
+      ]
+    },
+    {
+      "alert_number": 9,
+      "rule_id": "py/weak-sensitive-data-hashing",
+      "security_severity_level": "high",
+      "path": "src/cpe_access_atlas/web_evidence.py",
+      "dismissed_reason": "won't fix",
+      "dismissed_by": "Yunushan",
+      "dismissal_approved_by": null,
+      "dismissed_at": "2026-09-18T16:50:40Z",
+      "dismissed_comment": "TTN.10 firmware requires SHA-256(password + challenge) for device authentication. This is a transient challenge-response, not password storage; replacing it with a KDF would break interoperability. The compatibility exception is isolated and documented.",
+      "review_by": "2027-03-18",
+      "documentation": "docs/research/zte-h3600p-ttn10-260210.md",
+      "compensating_controls": [
+        "web evidence requires an explicit local-HTTP authentication acknowledgement",
+        "the client makes one login attempt with no automatic retry",
+        "security guidance requires a trusted isolated LAN and a unique router password"
+      ],
+      "re_review_triggers": [
+        "the router login protocol changes",
+        "the firmware adds HTTPS or a stronger authenticated login",
+        "web-evidence authentication behavior changes"
+      ]
+    }
+  ]
+}

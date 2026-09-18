@@ -2,7 +2,7 @@ include CHANGELOG.md CODE_OF_CONDUCT.md CONTRIBUTING.md LEGAL.md LICENSE README*
 include requirements-build.lock requirements-ci.lock requirements-release.lock requirements-runtime.lock requirements-security.lock
 include .pre-commit-config.yaml .gitignore .gitleaks.toml .gitattributes
 include .github/CODEOWNERS .github/dependabot.yml .github/pull_request_template.md .github/ISSUE_TEMPLATE/config.yml
-recursive-include .github *.yml
+recursive-include .github *.yml *.awk *.json
 recursive-include docs *.md
 recursive-include scripts *.py
 recursive-include tests *.py

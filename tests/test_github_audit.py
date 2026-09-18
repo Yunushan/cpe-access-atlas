@@ -10,20 +10,59 @@ import os
 import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts import check_github_production_settings as audit
-from tests.test_github_policy import actions, branch_protection, environment_api, tags
+from tests.test_github_policy import actions, branch_protection, environment_api, release_tags, tags
 from tests.test_github_release import Api, fixture
 from tests.test_repository_controls import _successful_workflow_responses
 
 SHA = "a" * 40
+REPOSITORY = "Yunushan/cpe-access-atlas"
+CODEQL_ACCEPTED_ENDPOINT = "code-scanning/alerts?state=dismissed&ref=refs/heads/main&per_page=100"
 ALERT_ENDPOINTS = (
     "dependabot/alerts?state=open&per_page=100",
     "code-scanning/alerts?state=open&per_page=100",
     "secret-scanning/alerts?state=open&per_page=100",
 )
+
+
+def accepted_codeql_alerts(
+    *, ref: str = "refs/heads/main", commit: str = SHA
+) -> list[dict[str, object]]:
+    policy, error = audit._load_codeql_risk_policy()
+    if error is not None or policy is None:
+        raise AssertionError(error)
+    return [
+        {
+            "number": item.alert_number,
+            "state": "dismissed",
+            "dismissed_reason": item.dismissed_reason,
+            "dismissed_comment": item.dismissed_comment,
+            "dismissed_at": item.dismissed_at,
+            "dismissed_by": {"login": item.dismissed_by},
+            "dismissal_approved_by": (
+                {"login": item.dismissal_approved_by}
+                if item.dismissal_approved_by is not None
+                else None
+            ),
+            "rule": {
+                "id": item.rule_id,
+                "security_severity_level": item.security_severity_level,
+            },
+            "most_recent_instance": {
+                "state": "dismissed",
+                "ref": ref,
+                "commit_sha": commit,
+                "location": {"path": item.path},
+            },
+        }
+        for item in policy.accepted_risks
+    ]
 
 
 def complete_fixture(*, require_independent_review: bool = False) -> dict[str, object]:
@@ -32,18 +71,17 @@ def complete_fixture(*, require_independent_review: bool = False) -> dict[str, o
     release_environment = environment(require_independent_review=require_independent_review)
     if require_independent_review:
         release_environment["protection_rules"][0]["reviewers"][0]["reviewer"]["id"] = 456
-    immutable = {"id": 1, **tags(("update", "deletion"))}
-    creator = {
-        "id": 2,
-        **tags(("creation",), [{"actor_type": "User", "actor_id": 123, "bypass_mode": "always"}]),
-    }
+    owner = {"actor_type": "User", "actor_id": 123, "bypass_mode": "always"}
+    quarantine, creator, immutable = (
+        {"id": index, **ruleset} for index, ruleset in enumerate(release_tags(owner), start=1)
+    )
     return {
         **fixture(),
         **actions(),
         **environment_api(release_environment).records,
         **_successful_workflow_responses(),
         "": {
-            "full_name": "example/project",
+            "full_name": REPOSITORY,
             "owner": {"id": 123, "type": "User"},
             "security_and_analysis": {
                 "secret_scanning": {"status": "enabled"},
@@ -53,14 +91,18 @@ def complete_fixture(*, require_independent_review: bool = False) -> dict[str, o
         "dependency-graph/sbom": {"sbom": {"packages": []}},
         "automated-security-fixes": {"enabled": True, "paused": False},
         "private-vulnerability-reporting": {"enabled": True},
-        "rulesets?per_page=100": [{"id": 1}, {"id": 2}],
-        "rulesets/1": immutable,
+        "immutable-releases": {"enabled": True},
+        f"git/matching-refs/tags/{audit._CANDIDATE_RELEASE_TAG}?per_page=100": [],
+        "rulesets?per_page=100": [{"id": 1}, {"id": 2}, {"id": 3}],
+        "rulesets/1": quarantine,
         "rulesets/2": creator,
+        "rulesets/3": immutable,
         "rules/branches/main?per_page=100": [],
         "branches/main/protection": branch_protection(
             require_independent_review=require_independent_review
         ),
         "branches/main": {"protected": True},
+        CODEQL_ACCEPTED_ENDPOINT: accepted_codeql_alerts(),
         **{endpoint: [] for endpoint in ALERT_ENDPOINTS},
     }
 
@@ -304,7 +346,7 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         def transport(command: list[str], **kwargs: object) -> SimpleNamespace:
             self.assertEqual(command[:4], ["synthetic-gh", "api", "--method", "GET"])
             self.assertFalse(kwargs.get("shell", False))
-            prefix = "repos/example/project"
+            prefix = f"repos/{REPOSITORY}"
             self.assertTrue(command[4] == prefix or command[4].startswith(prefix + "/"))
             endpoint = command[4].removeprefix(prefix).removeprefix("/")
             requested.add(endpoint)
@@ -317,7 +359,7 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         with (
             patch.object(audit.shutil, "which", return_value="synthetic-gh"),
             patch.object(audit.subprocess, "run", side_effect=transport),
-            patch.dict(os.environ, {"GITHUB_REPOSITORY": "example/project"}),
+            patch.dict(os.environ, {"GITHUB_REPOSITORY": REPOSITORY}),
             redirect_stdout(out),
             redirect_stderr(err),
         ):
@@ -328,18 +370,446 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         code, output, error, requested = self.run_cli(complete_fixture())
         self.assertEqual(code, 0, output)
         results = json.loads(output)
-        self.assertEqual(len(results), 17)
-        self.assertEqual(len({item["name"] for item in results}), 17)
+        self.assertEqual(len(results), 19)
+        self.assertEqual(len({item["name"] for item in results}), 19)
         self.assertTrue(all(item["status"] == audit.STATUS_PASS for item in results))
         self.assertEqual(error, "")
         self.assertIn("releases/2/assets?per_page=100", requested)
+        self.assertIn("immutable-releases", requested)
         self.assertIn("rulesets/2", requested)
         self.assertTrue(set(ALERT_ENDPOINTS).issubset(requested))
-        code, output, error, _ = self.run_cli(complete_fixture(), ["--repo", "example/project"])
+        self.assertIn(CODEQL_ACCEPTED_ENDPOINT, requested)
+        code, output, error, _ = self.run_cli(complete_fixture(), ["--repo", REPOSITORY])
         self.assertEqual(code, 0)
         self.assertIn("[PASS", output)
         self.assertIn("current required checks", output)
         self.assertEqual(error, "")
+
+    def test_codeql_risk_only_cli_binds_dismissals_to_the_exact_ref_and_commit(self) -> None:
+        arguments = [
+            "--json",
+            "--codeql-risk-ref",
+            "refs/heads/main",
+            "--codeql-risk-commit",
+            SHA,
+        ]
+        code, output, error, requested = self.run_cli(complete_fixture(), arguments)
+        self.assertEqual((code, error), (0, ""), output)
+        self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
+        result = json.loads(output)
+        self.assertEqual(result[0]["name"], "accepted CodeQL risks")
+        self.assertEqual(result[0]["status"], audit.STATUS_PASS)
+
+        for incomplete in (
+            ["--codeql-risk-ref", "refs/heads/main"],
+            ["--codeql-risk-commit", SHA],
+            [
+                "--codeql-risk-ref",
+                "refs/heads/main",
+                "--codeql-risk-commit",
+                SHA,
+                "--prepublication",
+            ],
+        ):
+            with self.subTest(arguments=incomplete):
+                code, _, error, requested = self.run_cli(complete_fixture(), incomplete)
+                self.assertEqual(code, 2)
+                self.assertTrue(error)
+                self.assertEqual(requested, set())
+
+    def test_accepted_codeql_risks_cover_happy_path_and_fail_closed_differences(self) -> None:
+        now = datetime(2026, 9, 18, 20, tzinfo=UTC)
+
+        def result(
+            alerts: object,
+            *,
+            ref: str = "refs/heads/main",
+            commit: str = SHA,
+        ) -> audit.CheckResult:
+            endpoint = f"code-scanning/alerts?state=dismissed&ref={ref}&per_page=100"
+            return audit._audit_codeql_risk_acceptances(
+                Api({endpoint: alerts}),
+                REPOSITORY,
+                expected_ref=ref,
+                expected_commit=commit,
+                now=now,
+            )
+
+        self.assertEqual(result(accepted_codeql_alerts()).status, audit.STATUS_PASS)
+        tag_ref = "refs/tags/v0.4.0a5"
+        self.assertEqual(
+            result(accepted_codeql_alerts(ref=tag_ref), ref=tag_ref).status,
+            audit.STATUS_PASS,
+        )
+
+        missing = accepted_codeql_alerts()[:-1]
+        missing_result = result(missing)
+        self.assertEqual(missing_result.status, audit.STATUS_FAIL)
+        self.assertIn("missing on the exact ref", missing_result.detail)
+
+        extra = accepted_codeql_alerts()
+        unexpected = copy.deepcopy(extra[0])
+        unexpected["number"] = 999
+        extra.append(unexpected)
+        extra_result = result(extra)
+        self.assertEqual(extra_result.status, audit.STATUS_FAIL)
+        self.assertIn("unexpected", extra_result.detail)
+
+        for field, value in (("ref", "refs/heads/other"), ("commit_sha", "b" * 40)):
+            mismatched = accepted_codeql_alerts()
+            mismatched[0]["most_recent_instance"][field] = value
+            mismatch_result = result(mismatched)
+            self.assertEqual(mismatch_result.status, audit.STATUS_FAIL)
+            self.assertIn("exact ref/commit", mismatch_result.detail)
+
+        changed = accepted_codeql_alerts()
+        changed[0]["dismissed_comment"] = "different assessment"
+        changed_result = result(changed)
+        self.assertEqual(changed_result.status, audit.STATUS_FAIL)
+        self.assertIn("metadata differs", changed_result.detail)
+
+        open_instance = accepted_codeql_alerts()
+        open_instance[0]["most_recent_instance"]["state"] = "open"
+        open_instance_result = result(open_instance)
+        self.assertEqual(open_instance_result.status, audit.STATUS_FAIL)
+        self.assertIn("exact instance is not dismissed", open_instance_result.detail)
+
+        missing_instance = accepted_codeql_alerts()
+        missing_instance[0]["most_recent_instance"] = None
+        missing_instance_result = result(missing_instance)
+        self.assertEqual(missing_instance_result.status, audit.STATUS_FAIL)
+        self.assertIn("exact instance is not dismissed", missing_instance_result.detail)
+
+        malformed_result = result([None])
+        self.assertEqual(malformed_result.status, audit.STATUS_FAIL)
+        self.assertIn("malformed", malformed_result.detail)
+
+    def test_accepted_codeql_risk_expiry_and_policy_schema_are_fail_closed(self) -> None:
+        policy, error = audit._load_codeql_risk_policy()
+        self.assertIsNone(error)
+        self.assertIsNotNone(policy)
+        assert policy is not None
+        expired = audit._evaluate_codeql_risk_acceptances(
+            policy,
+            accepted_codeql_alerts(),
+            repository=REPOSITORY,
+            expected_ref="refs/heads/main",
+            expected_commit=SHA,
+            now=datetime(2027, 3, 19, tzinfo=UTC),
+        )
+        self.assertTrue(any("expired" in item for item in expired))
+
+        document = json.loads(audit._CODEQL_RISK_POLICY_PATH.read_text(encoding="utf-8"))
+        parsed, parse_error = audit._parse_codeql_risk_policy(document)
+        self.assertIsNotNone(parsed)
+        self.assertIsNone(parse_error)
+        malformed_documents = (
+            None,
+            {**document, "schema_version": 2},
+            {**document, "repository": "not-a-repository"},
+            {
+                **document,
+                "accepted_risks": [
+                    {**document["accepted_risks"][0], "unexpected": True},
+                ],
+            },
+            {
+                **document,
+                "accepted_risks": [
+                    document["accepted_risks"][0],
+                    document["accepted_risks"][0],
+                ],
+            },
+        )
+        for malformed in malformed_documents:
+            with self.subTest(malformed=malformed):
+                parsed, parse_error = audit._parse_codeql_risk_policy(malformed)
+                self.assertIsNone(parsed)
+                self.assertIsNotNone(parse_error)
+
+    def test_empty_codeql_policy_passes_only_for_an_empty_high_risk_inventory(self) -> None:
+        document = json.loads(audit._CODEQL_RISK_POLICY_PATH.read_text(encoding="utf-8"))
+        document["accepted_risks"] = []
+        policy, error = audit._parse_codeql_risk_policy(document)
+        self.assertIsNone(error)
+        self.assertIsNotNone(policy)
+        assert policy is not None
+        self.assertEqual(policy.accepted_risks, ())
+        now = datetime(2026, 9, 18, tzinfo=UTC)
+        self.assertEqual(
+            audit._evaluate_codeql_risk_acceptances(
+                policy,
+                [],
+                repository=REPOSITORY,
+                expected_ref="refs/heads/main",
+                expected_commit=SHA,
+                now=now,
+            ),
+            (),
+        )
+        differences = audit._evaluate_codeql_risk_acceptances(
+            policy,
+            accepted_codeql_alerts(),
+            repository=REPOSITORY,
+            expected_ref="refs/heads/main",
+            expected_commit=SHA,
+            now=now,
+        )
+        self.assertEqual(len(differences), 2)
+        self.assertTrue(all("unexpected" in item for item in differences))
+
+        arguments = [
+            "--json",
+            "--codeql-risk-ref",
+            "refs/heads/main",
+            "--codeql-risk-commit",
+            SHA,
+        ]
+        records = complete_fixture()
+        records[CODEQL_ACCEPTED_ENDPOINT] = []
+        with patch.object(audit, "_load_codeql_risk_policy", return_value=(policy, None)):
+            code, output, error, requested = self.run_cli(records, arguments)
+        self.assertEqual((code, error), (0, ""), output)
+        self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
+        result = json.loads(output)[0]
+        self.assertEqual(result["status"], audit.STATUS_PASS)
+        self.assertIn("policy has no acceptances", result["detail"])
+
+        records[CODEQL_ACCEPTED_ENDPOINT] = accepted_codeql_alerts()
+        with patch.object(audit, "_load_codeql_risk_policy", return_value=(policy, None)):
+            code, output, error, requested = self.run_cli(records, arguments)
+        self.assertEqual((code, error), (1, ""), output)
+        self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
+        self.assertIn("unexpected dismissed high/critical", output)
+
+    def test_accepted_codeql_policy_and_alert_parsers_reject_defensive_edge_cases(self) -> None:
+        document = json.loads(audit._CODEQL_RISK_POLICY_PATH.read_text(encoding="utf-8"))
+
+        top_level_cases = (
+            {**document, "unexpected": True},
+            {**document, "schema_version": True},
+            {**document, "repository": 3},
+            {**document, "repository": "owner/."},
+            {**document, "accepted_risks": None},
+            {**document, "accepted_risks": [document["accepted_risks"][0]] * 33},
+            {**document, "accepted_risks": [None]},
+        )
+        for malformed in top_level_cases:
+            with self.subTest(top_level=malformed):
+                self.assertIsNotNone(audit._parse_codeql_risk_policy(malformed)[1])
+
+        entry_cases: tuple[tuple[str, object], ...] = (
+            ("alert_number", True),
+            ("alert_number", 0),
+            ("rule_id", None),
+            ("dismissed_comment", ""),
+            ("dismissed_comment", "x" * 1_001),
+            ("rule_id", "INVALID"),
+            ("security_severity_level", None),
+            ("security_severity_level", "medium"),
+            ("path", "/absolute"),
+            ("path", "src/../secret"),
+            ("path", "src//config.py"),
+            ("dismissed_reason", "false positive"),
+            ("dismissed_by", "bad_login"),
+            ("dismissal_approved_by", 3),
+            ("dismissal_approved_by", "bad_login"),
+            ("dismissed_at", "not-a-date"),
+            ("documentation", "README.md"),
+            ("documentation", "docs/bad:name.md"),
+            ("compensating_controls", []),
+            ("compensating_controls", [""]),
+            ("compensating_controls", ["duplicate", "duplicate"]),
+            ("re_review_triggers", []),
+            ("dismissed_at", "2026-99-18T16:59:24Z"),
+            ("review_by", 3),
+            ("review_by", "20270318"),
+            ("review_by", "2026-09-17"),
+        )
+        for field, value in entry_cases:
+            malformed = copy.deepcopy(document)
+            malformed["accepted_risks"][0][field] = value
+            with self.subTest(field=field, value=value):
+                self.assertIsNotNone(audit._parse_codeql_risk_policy(malformed)[1])
+
+        self.assertFalse(audit._valid_github_ref("invalid"))
+        self.assertFalse(audit._valid_github_ref("refs/heads/a..b"))
+        self.assertEqual(audit._policy_string_list("not-a-list"), None)
+        self.assertEqual(audit._account_login({"login": 3}), (None, False))
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = (
+                root / "missing.json",
+                root / "empty.json",
+                root / "oversized.json",
+                root / "invalid-utf8.json",
+                root / "invalid-json.json",
+            )
+            paths[1].write_bytes(b"")
+            paths[2].write_bytes(b"x" * (audit._CODEQL_POLICY_MAX_BYTES + 1))
+            paths[3].write_bytes(b"\xff")
+            paths[4].write_text("{", encoding="utf-8")
+            for path in paths:
+                with self.subTest(path=path.name):
+                    self.assertIsNotNone(audit._load_codeql_risk_policy(path)[1])
+
+        policy, error = audit._load_codeql_risk_policy()
+        self.assertIsNone(error)
+        assert policy is not None
+        invalid_context = audit._evaluate_codeql_risk_acceptances(
+            policy,
+            None,
+            repository="other/repository",
+            expected_ref="invalid",
+            expected_commit="invalid",
+            now=datetime(2026, 9, 18, tzinfo=UTC),
+        )
+        self.assertGreaterEqual(len(invalid_context), 4)
+
+        malformed_alerts = (
+            [{"state": "open"}],
+            [{"state": "dismissed", "rule": None}],
+            [
+                {
+                    "state": "dismissed",
+                    "rule": {"security_severity_level": {}},
+                }
+            ],
+            [
+                {
+                    "state": "dismissed",
+                    "rule": {"security_severity_level": "unknown"},
+                }
+            ],
+            [
+                {
+                    "state": "dismissed",
+                    "number": True,
+                    "rule": {"security_severity_level": "high"},
+                }
+            ],
+            [*accepted_codeql_alerts(), copy.deepcopy(accepted_codeql_alerts()[0])],
+        )
+        for alerts in malformed_alerts:
+            with self.subTest(alerts=alerts):
+                differences = audit._evaluate_codeql_risk_acceptances(
+                    policy,
+                    alerts,
+                    repository=REPOSITORY,
+                    expected_ref="refs/heads/main",
+                    expected_commit=SHA,
+                    now=datetime(2026, 9, 18, tzinfo=UTC),
+                )
+                self.assertTrue(differences)
+
+        for ref, commit in (("invalid", SHA), ("refs/heads/main", "invalid")):
+            result = audit._audit_codeql_risk_acceptances(
+                Api({}),
+                REPOSITORY,
+                expected_ref=ref,
+                expected_commit=commit,
+                now=datetime(2026, 9, 18, tzinfo=UTC),
+            )
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+
+        with TemporaryDirectory() as directory:
+            result = audit._audit_codeql_risk_acceptances(
+                Api({}),
+                REPOSITORY,
+                expected_ref="refs/heads/main",
+                expected_commit=SHA,
+                now=datetime(2026, 9, 18, tzinfo=UTC),
+                policy_path=Path(directory) / "missing.json",
+            )
+        self.assertEqual(result.status, audit.STATUS_FAIL)
+
+    def test_accepted_codeql_risk_pagination_and_api_errors_are_fail_closed(self) -> None:
+        now = datetime(2026, 9, 18, 20, tzinfo=UTC)
+        first_page = [
+            {
+                "state": "dismissed",
+                "rule": {"id": "py/example", "security_severity_level": "low"},
+            }
+        ] * 100
+        records: dict[str, object] = {
+            CODEQL_ACCEPTED_ENDPOINT: first_page,
+            CODEQL_ACCEPTED_ENDPOINT + "&page=2": accepted_codeql_alerts(),
+        }
+        paginated = audit._audit_codeql_risk_acceptances(
+            Api(records),
+            REPOSITORY,
+            expected_ref="refs/heads/main",
+            expected_commit=SHA,
+            now=now,
+        )
+        self.assertEqual(paginated.status, audit.STATUS_PASS)
+
+        for failure_records in (
+            {CODEQL_ACCEPTED_ENDPOINT: (None, "HTTP 403")},
+            {
+                CODEQL_ACCEPTED_ENDPOINT: first_page,
+                CODEQL_ACCEPTED_ENDPOINT + "&page=2": (None, "HTTP 502"),
+            },
+        ):
+            with self.subTest(failure_records=failure_records):
+                result = audit._audit_codeql_risk_acceptances(
+                    Api(failure_records),
+                    REPOSITORY,
+                    expected_ref="refs/heads/main",
+                    expected_commit=SHA,
+                    now=now,
+                )
+                self.assertEqual(result.status, audit.STATUS_UNVERIFIED)
+
+    def test_prepublication_defers_only_candidate_release_instance_checks(self) -> None:
+        records = complete_fixture()
+        records["releases?per_page=100"][0]["immutable"] = False
+        code, output, error, requested = self.run_cli(records, ["--json", "--prepublication"])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(error, "")
+        results = {item["name"]: item for item in json.loads(output)}
+        self.assertEqual(results["published release"]["status"], audit.STATUS_DEFERRED)
+        self.assertEqual(results["candidate absence"]["status"], audit.STATUS_PASS)
+        self.assertEqual(results["release tag integrity"]["status"], audit.STATUS_PASS)
+        self.assertTrue(
+            all(
+                item["status"] == audit.STATUS_PASS
+                for name, item in results.items()
+                if name != "published release"
+            )
+        )
+        self.assertNotIn("releases/2/assets?per_page=100", requested)
+
+        failing = copy.deepcopy(records)
+        failing["private-vulnerability-reporting"] = {"enabled": False}
+        code, output, _, _ = self.run_cli(failing, ["--json", "--prepublication"])
+        self.assertEqual(code, 1, output)
+        for immutability in ({"enabled": False}, {}, (None, "HTTP 403")):
+            failing = copy.deepcopy(records)
+            failing["immutable-releases"] = immutability
+            code, output, _, _ = self.run_cli(failing, ["--json", "--prepublication"])
+            self.assertEqual(code, 1, output)
+        candidate_endpoint = f"git/matching-refs/tags/{audit._CANDIDATE_RELEASE_TAG}?per_page=100"
+        candidate_ref = f"refs/tags/{audit._CANDIDATE_RELEASE_TAG}"
+        for candidate_evidence in (
+            [{"ref": candidate_ref}],
+            [None],
+            (None, "HTTP 403"),
+        ):
+            failing = copy.deepcopy(records)
+            failing[candidate_endpoint] = candidate_evidence
+            code, output, _, _ = self.run_cli(failing, ["--json", "--prepublication"])
+            self.assertEqual(code, 1, output)
+        failing = copy.deepcopy(records)
+        failing["releases?per_page=100"].append({"tag_name": audit._CANDIDATE_RELEASE_TAG})
+        code, output, _, _ = self.run_cli(failing, ["--json", "--prepublication"])
+        self.assertEqual(code, 1, output)
+        for release_evidence in ([None], (None, "HTTP 403")):
+            failing = copy.deepcopy(records)
+            failing["releases?per_page=100"] = release_evidence
+            code, output, _, _ = self.run_cli(failing, ["--json", "--prepublication"])
+            self.assertEqual(code, 1, output)
 
     def test_independent_review_is_explicit_opt_in_and_profiles_are_labelled(self) -> None:
         for independent in (False, True):
@@ -377,7 +847,7 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
                 self.assertEqual(error, "")
 
     def test_real_cli_summarizes_rate_limits_without_private_details_or_more_requests(self) -> None:
-        for arguments in (["--json"], ["--repo", "example/project"]):
+        for arguments in (["--json"], ["--repo", REPOSITORY]):
             records = complete_fixture()
             records["dependency-graph/sbom"] = (
                 None,
@@ -509,7 +979,7 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         self.assertEqual(latest["CI"]["run_attempt"], 2)
         self.assertEqual(audit._audit_workflows(api, SHA).status, audit.STATUS_FAIL)
 
-    def test_missing_workflow_and_non_push_skips_cannot_satisfy_current_checks(self) -> None:
+    def test_missing_workflow_fails_but_scheduled_pr_only_skip_is_allowed(self) -> None:
         records = complete_fixture()
         payload = records[f"actions/runs?head_sha={SHA}&per_page=100"]
         payload["workflow_runs"].pop(0)
@@ -522,8 +992,7 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
             "schedule"
         )
         result = audit._audit_current_checks(Api(records), SHA)
-        self.assertEqual(result.status, audit.STATUS_FAIL)
-        self.assertIn("dependency-review", result.detail)
+        self.assertEqual(result.status, audit.STATUS_PASS)
 
     def test_alert_counts_cover_all_pages_without_printing_sensitive_fields(self) -> None:
         records = complete_fixture()

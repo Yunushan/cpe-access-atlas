@@ -87,13 +87,53 @@ simply be substituted without a separately supported container format.
 ## Authenticated local container
 
 The `private-protect` command provides that separate format for local storage.
-It uses a fresh 128-bit salt, scrypt with fixed version-1 parameters, and
-AES-GCM with a fresh 96-bit nonce and 128-bit authentication tag. The header,
-salt, and nonce are authenticated as associated data, and the format is
-bounded and length-checked before decryption. A wrong passphrase or any
-tampering fails authentication without producing plaintext output.
+New containers use format version 2, a fresh 128-bit salt, scrypt with
+`N=2^17`, `r=8`, `p=1`, and AES-GCM with a fresh 96-bit nonce and 128-bit
+authentication tag. Version 2 records its KDF/cipher identifiers and scrypt
+work factors in the header. The complete header, salt, and nonce are
+authenticated as associated data. Only the exact supported parameter set is
+accepted: unknown versions, algorithms, lengths, or work factors are rejected
+before scrypt runs, preventing an untrusted file from selecting abusive KDF
+costs. The format is also bounded and length-checked before decryption. A wrong
+passphrase or any authenticated-data/ciphertext tampering fails without
+producing plaintext output.
 
-Version-1 local-container passphrases contain 12–256 Unicode scalar values.
+Readers remain compatible with version-1 containers, whose implicit scrypt
+parameters are `N=2^15`, `r=8`, `p=1`. New writes never create version 1. To
+migrate an old container, decrypt it to a protected local file with
+`private-unprotect`, then protect that file again with `private-protect`; the
+replacement is version 2. Do not overwrite or delete the old container until
+the version-2 copy has been authenticated and restored successfully. Version 2
+uses roughly 128 MiB of scrypt working memory by design, so protection and
+restoration are intentionally more resource-intensive than version 1.
+
+All integers are unsigned big-endian. A version-2 container is laid out as:
+
+| Field | Size | Required value |
+|---|---:|---|
+| Magic | 4 bytes | ASCII `CPAP` |
+| Version | 1 byte | `2` |
+| KDF identifier | 1 byte | `1` (scrypt) |
+| Cipher identifier | 1 byte | `1` (AES-256-GCM) |
+| Salt length | 1 byte | `16` |
+| Nonce length | 1 byte | `12` |
+| scrypt `N` | 4 bytes | `131072` |
+| scrypt `r` | 4 bytes | `8` |
+| scrypt `p` | 4 bytes | `1` |
+| Plaintext/ciphertext length | 8 bytes | `1`–`16777216` |
+| Salt | 16 bytes | Cryptographically random |
+| Nonce | 12 bytes | Cryptographically random |
+| Ciphertext | Declared length | AES-GCM output |
+| Authentication tag | 16 bytes | AES-GCM tag |
+
+The 32-byte AES key is the direct scrypt output. Associated data is the exact
+29-byte header followed by the salt and nonce. The tag therefore binds the
+format version, algorithms, work factors, lengths, salt, nonce, and ciphertext.
+Version 1 uses a 17-byte header without explicit `N`, `r`, and `p` fields; its
+remaining field order and authenticated-data rule are otherwise equivalent.
+
+Local-container passphrases contain 12–256 Unicode scalar values in both
+versions.
 C0/C1 controls, line/paragraph separators and surrogate code points are
 rejected using fixed numeric ranges. The policy does not depend on Python's
 Unicode database, so a newly assigned character accepted by one supported
@@ -119,6 +159,11 @@ establish passphrase randomness, provenance, or resistance to guessing. Use
 only the actual passphrase for an authorized device; the project supplies no
 universal key and does not recover or guess it. The SSH login password written
 inside the configuration is distinct from this encryption passphrase.
+
+Prefer `config-generate --identity-file PRIVATE.json` over command-line
+`--serial` and `--mac` values so identifiers do not appear in shell history or
+process listings. The bounded UTF-8 file must contain exactly a JSON `serial`
+string and `mac` string, must remain private, and is never included in output.
 
 The digest feeds encryption keys and IVs and therefore **is used for security**.
 The standard hashlib branch explicitly sets `usedforsecurity=True`. The old
@@ -169,6 +214,10 @@ acceptance is not remediation or proof of safe device behavior. Any scanner
 finding about vendor key derivation must be evaluated against this documented
 use, not silenced by changing a flag or labeling the data non-sensitive. Do not
 claim that removing a suppression resolves the underlying cryptographic risk.
-Record the maintainer's assessment and limitations, preserve compatibility test vectors,
-and validate exact hardware and recovery separately before making a stable
-device-support claim.
+GitHub CodeQL alert `#5` records that accepted residual risk; the separate
+router-login compatibility finding is alert `#9`. Their exact dismissal
+metadata, compensating controls, review deadlines, and re-review triggers live
+in `.github/codeql-accepted-risks.json`. A passing zero-open-alert gate therefore
+does not mean these findings disappeared. Record the maintainer's assessment and
+limitations, preserve compatibility test vectors, and validate exact hardware
+and recovery separately before making a stable device-support claim.

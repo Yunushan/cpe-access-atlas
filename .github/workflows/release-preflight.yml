@@ -1,0 +1,116 @@
+name: Release preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Candidate tag matching the package version, including v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scope-and-input-validation:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify preflight runs from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Release preflight must be dispatched from the main branch."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Verify release-ready package and changelog metadata
+        env:
+          PYTHONPATH: src
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python scripts/check_release_candidate.py --tag "$RELEASE_TAG"
+
+  source-validation:
+    needs: scope-and-input-validation
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  dependency-validation:
+    needs: scope-and-input-validation
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  secret-validation:
+    needs: scope-and-input-validation
+    uses: ./.github/workflows/secret-scan.yml
+    permissions:
+      contents: read
+
+  codeql-validation:
+    needs: scope-and-input-validation
+    uses: ./.github/workflows/codeql.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  candidate-validation:
+    needs: [source-validation, dependency-validation, secret-validation, codeql-validation]
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate commit is current main head
+        run: |
+          main_sha="$(git rev-parse --verify refs/remotes/origin/main)"
+          if [ "$GITHUB_SHA" != "$main_sha" ]; then
+            echo "Release candidate must be the current main head."
+            exit 1
+          fi
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Verify no open CodeQL alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          page_counts="$(gh api --paginate --method GET \
+            -f state=open -f "ref=$GITHUB_REF" -f per_page=100 \
+            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts" \
+            --jq 'length')"
+          open_alerts=0
+          while IFS= read -r page_count; do
+            [ -n "$page_count" ] || continue
+            open_alerts=$((open_alerts + page_count))
+          done <<< "$page_counts"
+          if [ "$open_alerts" -ne 0 ]; then
+            echo "Release blocked: $open_alerts open CodeQL alert(s) remain."
+            exit 1
+          fi
+      - name: Verify accepted CodeQL risks on the exact candidate commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/check_github_production_settings.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --codeql-risk-ref "$GITHUB_REF" \
+            --codeql-risk-commit "$GITHUB_SHA"

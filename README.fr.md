@@ -2,6 +2,13 @@
 
 [English](README.md) · [Türkçe](README.tr.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
+> [!NOTE]
+> Cette vue d'ensemble a été synchronisée le 18 septembre 2026. Pour les
+> limites de sécurité, les nouvelles options et l'installation vérifiée,
+> les références à jour sont le [README anglais](README.md), la
+> [politique de sécurité](SECURITY.md) et le
+> [guide d'installation](docs/installation.md).
+
 Recherche liée au micrologiciel et outils sûrs pour l'accès autorisé par le
 propriétaire aux modems et routeurs fournis par les FAI turcs.
 
@@ -43,25 +50,36 @@ pas que tous ses appareils sont pris en charge.
 | Administrateur Web standard | Pris en charge par le FAI |
 | Administrateur Web privilégié | Bloqué ; recherche nécessaire |
 | Shell root Linux | Non pris en charge |
-| Dernière révision | 13 août 2026 |
+| Dernière révision | 13 septembre 2026 |
 
 Consultez la [compatibilité](SUPPORT.md) et la
 [note de recherche](docs/research/zte-h3600p-ttn10-260210.md).
 
 ## Démarrage rapide
 
-Python 3.11 ou version ultérieure. L'installation inclut aussi le validateur
+CPython standard 3.11–3.15. L'installation inclut aussi le validateur
 JSON Schema :
 
 ```shell
-python -m pip install -e .
+python -m venv .venv
+python -m pip --python .venv install --require-hashes -r requirements-ci.lock
+python -m pip --python .venv install -e . --no-deps --no-build-isolation
+python -m pip --python .venv check
+```
+
+Activez l'environnement avec `. .venv/bin/activate` sous Linux/macOS ou
+`.venv\Scripts\Activate.ps1` dans PowerShell. Exécutez ensuite :
+
+```shell
 cpe-atlas providers
 cpe-atlas devices
 cpe-atlas validate
-cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
+
+Le
+[guide d'installation](docs/installation.md) couvre les wheels publiés, la
+mise à niveau et le retour arrière.
 
 Valider une cible privée sans établir de connexion :
 
@@ -73,13 +91,7 @@ La vérification de préparation, en lecture seule, pour la version exacte peut
 être lancée ainsi :
 
 ```shell
-cpe-atlas root-readiness \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --firmware-input firmware.bin \
-  --expected-sha256 <sha256-documenté-privé>
+cpe-atlas root-readiness --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --firmware-input firmware.bin --expected-sha256 <sha256-documenté-privé>
 ```
 
 Cette commande hache et inspecte le fichier uniquement comme des octets

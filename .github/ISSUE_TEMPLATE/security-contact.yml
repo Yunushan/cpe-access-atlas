@@ -1,0 +1,21 @@
+name: Request a private security contact
+description: Ask the maintainer to establish a confidential channel without disclosing details
+title: "[Private security contact request] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        First try **Report a vulnerability** on the repository Security page. Use
+        this public form only when private vulnerability reporting is unavailable.
+        Do not describe the vulnerability, affected device, exploit, credentials,
+        endpoint, or evidence here. The only purpose of this issue is to request a
+        confidential reply channel.
+  - type: checkboxes
+    id: safe-request
+    attributes:
+      label: Public-request safety confirmation
+      options:
+        - label: I included no vulnerability details, exploit, attachment, or private device data.
+          required: true
+        - label: I will wait for a confidential channel before sending technical details.
+          required: true
