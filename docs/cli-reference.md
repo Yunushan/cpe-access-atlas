@@ -13,8 +13,7 @@ python scripts/generate_cli_reference.py
 
 ```text
 usage: cpe-atlas [-h] [--version]
-                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate}
-                 ...
+                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate} ...
 
 Firmware-aware catalog and safe research tooling for owner-authorized CPE
 access
@@ -57,9 +56,9 @@ options:
 ## `cpe-atlas apply`
 
 ```text
-usage: cpe-atlas apply [-h] --isp ISP --model MODEL --hardware-revision
-                       HARDWARE_REVISION --firmware FIRMWARE
-                       [--i-own-or-administer-this-device]
+usage: cpe-atlas apply [-h] --isp ISP --model MODEL
+                       --hardware-revision HARDWARE_REVISION
+                       --firmware FIRMWARE [--i-own-or-administer-this-device]
 
 options:
   -h, --help            show this help message and exit
@@ -78,14 +77,14 @@ options:
 usage: cpe-atlas config-generate [-h] --isp ISP --model MODEL
                                  --hardware-revision HARDWARE_REVISION
                                  --firmware FIRMWARE
-                                 [--input-config INPUT_CONFIG | --input-xml INPUT_XML]
-                                 --output OUTPUT [--username USERNAME]
-                                 [--ssh-password-stdin] [--device-key-stdin]
-                                 [--serial SERIAL] [--mac MAC]
-                                 [--identity-file IDENTITY_FILE]
-                                 [--signature SIGNATURE]
-                                 [--encrypted | --allow-unencrypted] [--raw]
-                                 [--force] [--i-own-or-administer-this-device]
+                                 [--input-config INPUT_CONFIG |
+                                 --input-xml INPUT_XML] --output OUTPUT
+                                 [--username USERNAME] [--ssh-password-stdin]
+                                 [--device-key-stdin] [--serial SERIAL]
+                                 [--mac MAC] [--identity-file IDENTITY_FILE]
+                                 [--signature SIGNATURE] [--encrypted |
+                                 --allow-unencrypted] [--raw] [--force]
+                                 [--i-own-or-administer-this-device]
                                  [--acknowledge-unverified-compatibility]
                                  [--acknowledge-legacy-crypto]
 
@@ -158,8 +157,9 @@ options:
 ## `cpe-atlas evidence`
 
 ```text
-usage: cpe-atlas evidence [-h] --isp ISP --model MODEL --hardware-revision
-                          HARDWARE_REVISION --firmware FIRMWARE
+usage: cpe-atlas evidence [-h] --isp ISP --model MODEL
+                          --hardware-revision HARDWARE_REVISION
+                          --firmware FIRMWARE
 
 options:
   -h, --help            show this help message and exit
@@ -191,8 +191,9 @@ options:
 ## `cpe-atlas plan`
 
 ```text
-usage: cpe-atlas plan [-h] --isp ISP --model MODEL --hardware-revision
-                      HARDWARE_REVISION --firmware FIRMWARE
+usage: cpe-atlas plan [-h] --isp ISP --model MODEL
+                      --hardware-revision HARDWARE_REVISION
+                      --firmware FIRMWARE
 
 options:
   -h, --help            show this help message and exit
@@ -319,8 +320,9 @@ options:
 ## `cpe-atlas status`
 
 ```text
-usage: cpe-atlas status [-h] --isp ISP --model MODEL --hardware-revision
-                        HARDWARE_REVISION --firmware FIRMWARE [--json]
+usage: cpe-atlas status [-h] --isp ISP --model MODEL
+                        --hardware-revision HARDWARE_REVISION
+                        --firmware FIRMWARE [--json]
 
 options:
   -h, --help            show this help message and exit
@@ -361,9 +363,10 @@ options:
 ## `cpe-atlas web-evidence`
 
 ```text
-usage: cpe-atlas web-evidence [-h] --isp ISP --model MODEL --hardware-revision
-                              HARDWARE_REVISION --firmware FIRMWARE --host
-                              HOST [--username USERNAME] [--password-stdin]
+usage: cpe-atlas web-evidence [-h] --isp ISP --model MODEL
+                              --hardware-revision HARDWARE_REVISION
+                              --firmware FIRMWARE --host HOST
+                              [--username USERNAME] [--password-stdin]
                               [--timeout TIMEOUT]
                               [--i-own-or-administer-this-device]
                               [--acknowledge-local-http-authentication]
