@@ -226,6 +226,21 @@ def _login_succeeded(value: object) -> bool:
     return isinstance(value, str) and value.lower() in {"1", "true", "yes"}
 
 
+def _zte_login_compatibility_digest(password: str, challenge: str) -> str:
+    """Return the exact challenge response required by the router firmware.
+
+    This is a vendor-defined interoperability transform for a single local
+    login request, not password storage. A password KDF would produce a value
+    the device cannot authenticate.
+    """
+
+    # CodeQL would otherwise treat this protocol-mandated operation as generic
+    # password hashing. Keep the exception scoped to the compatibility helper;
+    # docs/research/zte-h3600p-ttn10-260210.md records the protocol constraint.
+    # codeql[py/weak-sensitive-data-hashing]
+    return hashlib.sha256((password + challenge).encode("utf-8")).hexdigest()
+
+
 def _response_kind(response: _Response) -> str:
     media_type = response.content_type.partition(";")[0].strip().lower()
     if "json" in media_type:
@@ -389,7 +404,7 @@ def collect_zte_web_evidence(
             cookies,
         )
     )
-    password_digest = hashlib.sha256((password + challenge).encode("utf-8")).hexdigest()
+    password_digest = _zte_login_compatibility_digest(password, challenge)
     login_body = urlencode(
         {
             "Password": password_digest,

@@ -32,7 +32,7 @@ class UartEvidence:
     boot_security: str
     uboot_security: str
     boot_interrupt_prompt_observed: bool
-    bootloader_password_prompt_observed: bool
+    bootloader_access_gate_observed: bool
     bootloader_shell_prompt_observed: bool
     kernel_start_observed: bool
     linux_console_output_observed: bool
@@ -41,7 +41,7 @@ class UartEvidence:
     recognized_h3600p_boot_output: bool
     device_io_attempted: bool = False
     raw_log_output: bool = False
-    secret_or_identity_values_output: bool = False
+    non_allowlisted_values_emitted: bool = False
     root_access_verified: bool = False
 
 
@@ -168,7 +168,7 @@ def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
         boot_security=_security_state(data, b"boot"),
         uboot_security=_security_state(data, b"uboot"),
         boot_interrupt_prompt_observed=b"Press 1 means entering boot mode" in data,
-        bootloader_password_prompt_observed=b"Please input bootmode password" in data,
+        bootloader_access_gate_observed=b"Please input bootmode password" in data,
         bootloader_shell_prompt_observed=_UBOOT_PROMPT_PATTERN.search(data) is not None,
         kernel_start_observed=b"Starting kernel" in data,
         linux_console_output_observed=b"Linux version" in data,

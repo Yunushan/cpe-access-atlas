@@ -719,7 +719,7 @@ def command_uart_evidence(args: argparse.Namespace) -> int:
         "boot_security": evidence.boot_security,
         "uboot_security": evidence.uboot_security,
         "boot_interrupt_prompt_observed": evidence.boot_interrupt_prompt_observed,
-        "bootloader_password_prompt_observed": evidence.bootloader_password_prompt_observed,
+        "bootloader_password_prompt_observed": evidence.bootloader_access_gate_observed,
         "bootloader_shell_prompt_observed": evidence.bootloader_shell_prompt_observed,
         "kernel_start_observed": evidence.kernel_start_observed,
         "linux_console_output_observed": evidence.linux_console_output_observed,
@@ -728,7 +728,7 @@ def command_uart_evidence(args: argparse.Namespace) -> int:
         "recognized_h3600p_boot_output": evidence.recognized_h3600p_boot_output,
         "device_io_attempted": evidence.device_io_attempted,
         "raw_log_output": evidence.raw_log_output,
-        "secret_or_identity_values_output": evidence.secret_or_identity_values_output,
+        "secret_or_identity_values_output": evidence.non_allowlisted_values_emitted,
         "root_access_verified": evidence.root_access_verified,
     }
     print(

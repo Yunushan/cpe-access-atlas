@@ -891,6 +891,7 @@ class CliTests(unittest.TestCase):
             b"non secure boot\n"
             b"U-Boot 2013.04 (Feb 28 2024 - 16:13:22)\n"
             b"CPU: ZX279128S\n"
+            b"*** Please input bootmode password: ***\n"
             b"password=SYNTHETIC-PRIVATE-PASSWORD\n"
             b"SerialNumber=SYNTHETIC-PRIVATE-SERIAL\n"
         )
@@ -907,10 +908,13 @@ class CliTests(unittest.TestCase):
         evidence = payload["uart_evidence"]
         self.assertEqual(evidence["firmware_identity_status"], "matched")
         self.assertEqual(evidence["boot_security"], "non-secure")
+        self.assertTrue(evidence["bootloader_password_prompt_observed"])
         self.assertFalse(evidence["device_io_attempted"])
         self.assertFalse(evidence["raw_log_output"])
         self.assertFalse(evidence["secret_or_identity_values_output"])
         self.assertFalse(evidence["root_access_verified"])
+        self.assertNotIn("bootloader_access_gate_observed", evidence)
+        self.assertNotIn("non_allowlisted_values_emitted", evidence)
         self.assertNotIn("sha256", evidence)
         self.assertNotIn("SYNTHETIC-PRIVATE", stdout)
         self.assertNotIn(str(source), stdout)
