@@ -48,6 +48,8 @@ class CliReferenceTests(unittest.TestCase):
                     self.assertEqual(reference.main(["--check"]), 1)
                 self.assertFalse(path.exists())
                 self.assertIn("stale", err.getvalue())
+                self.assertIn("--- docs/cli-reference.md (committed)", err.getvalue())
+                self.assertIn("+++ docs/cli-reference.md (generated)", err.getvalue())
                 with redirect_stdout(out):
                     self.assertEqual(reference.main([]), 0)
                 self.assertEqual(path.read_text(encoding="utf-8"), reference.render())
@@ -61,6 +63,7 @@ class CliReferenceTests(unittest.TestCase):
                 with redirect_stderr(err):
                     self.assertEqual(reference.main(["--check"]), 1)
                 self.assertEqual(path.read_text(encoding="utf-8"), "stale content")
+                self.assertIn("-stale content", err.getvalue())
 
     def test_misspelled_check_option_cannot_overwrite_the_document(self) -> None:
         with patch.object(reference, "render") as render, redirect_stderr(io.StringIO()):

@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import sys
 from pathlib import Path
 
@@ -67,6 +68,18 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"{_OUTPUT_PATH} is stale; run "
                 "'python scripts/generate_cli_reference.py' and commit the result.",
+                file=sys.stderr,
+            )
+            print(
+                "\n".join(
+                    difflib.unified_diff(
+                        current.splitlines(),
+                        rendered.splitlines(),
+                        fromfile="docs/cli-reference.md (committed)",
+                        tofile="docs/cli-reference.md (generated)",
+                        lineterm="",
+                    )
+                ),
                 file=sys.stderr,
             )
             return 1
