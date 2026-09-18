@@ -36,17 +36,20 @@
     "single-private-target-validation",
     "non-mutating-port-check",
     "sanitized-research-report",
+    "sanitized-authenticated-web-evidence",
+    "sanitized-offline-uart-evidence",
     "offline-private-config-codec"
   ],
   "blockers": [
     "No public, reproducible privileged-access workflow is verified on this exact firmware.",
     "Community reports state that the older WAN-side TR-069/DHCP method is patched.",
     "The offline codec is experimental; exact TTN.10 field semantics, encryption inputs, firmware acceptance, and recovery remain unverified.",
-    "Public H3600P hardware research places the per-device configuration-encryption passphrase in a personalization area; exact TTN.10 accessibility and a read-only observation path are unverified.",
+    "Older Digi and TTN.5 H3600P research reports a 3.3 V 115200 8N1 UART path, but newer-firmware serial lockdown is also reported and no passive TTN.10_260210 capture is available.",
     "No official public downgrade image or recovery-tested downgrade path was found.",
     "A February 2026 guide claims Türk Telekom H3600P applicability but does not identify this exact build; a follow-up reports failure on TTN.8_250626.",
     "The available guide relies on an unverified third-party VM and provides no exact-build artifact hash or recovery proof.",
-    "A newer public H298A CWMP proof-of-concept hard-codes H298A-specific paths and has no exact H3600P TTN.10 validation."
+    "A newer public H298A CWMP proof-of-concept hard-codes H298A-specific paths and has no exact H3600P TTN.10 validation.",
+    "The exact device's public web shell advertises privilege-level-3 tr069, mirror, capture, and rsc page IDs, but exposes no root, shell, or telnet string and does not establish authenticated access to those pages."
   ],
   "evidence": [
     {
@@ -92,14 +95,14 @@
   ],
   "next_evidence": [
     "Authorized physical-device validation on the exact hardware revision and firmware.",
-    "Exact local UI firmware string and non-secret page behavior after factory reset.",
+    "Sanitized authenticated web-evidence output showing which advertised privilege-level-3 page views the known standard account can read and which parameter names they expose.",
     "Private SHA-256 hash and offline inspection of an exact TTN.10_260210 firmware artifact, if available.",
     "An exact-build parameter inventory showing whether the reported access-control paths exist.",
     "A source-reviewed, isolated observation of the H3600P CWMP data model before any parameter is sent.",
-    "On a spare or recovery-tested unit, a read-only UART boot and non-secret personalization observation that establishes whether the exact build exposes a usable local recovery path.",
+    "On a spare or recovery-tested unit, a passive RX-only UART boot capture analyzed with uart-evidence, followed only if safe by a separate non-secret observation that establishes whether the exact build exposes a usable local recovery path.",
     "A recovery path tested before and after any privileged-access experiment.",
     "Sanitized protocol metadata proving the requested change and a separate login verification.",
     "Independent reproduction that preserves Internet, IPTV, VoIP, and WAN-management safety."
   ],
-  "last_reviewed": "2026-09-13"
+  "last_reviewed": "2026-09-17"
 }

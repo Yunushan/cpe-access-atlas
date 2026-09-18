@@ -783,6 +783,189 @@ class CliTests(unittest.TestCase):
         self.assertIn("tcp/80: open", stdout)
         self.assertIn("tcp/443: closed/unreachable", stdout)
 
+    def test_web_evidence_requires_authorization_before_secret_input(self) -> None:
+        with (
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+            patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
+        ):
+            code, stdout, stderr = self.run_cli(["web-evidence", *TARGET, "--host", "192.168.1.1"])
+        self.assertEqual((code, stdout), (3, ""))
+        self.assertIn("ownership/authorization", stderr)
+        prompt.assert_not_called()
+        collect.assert_not_called()
+
+    def test_web_evidence_requires_http_acknowledgement_before_secret_input(self) -> None:
+        with (
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+            patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--i-own-or-administer-this-device",
+                ]
+            )
+        self.assertEqual((code, stdout), (3, ""))
+        self.assertIn("local login uses HTTP", stderr)
+        prompt.assert_not_called()
+        collect.assert_not_called()
+
+    def test_web_evidence_outputs_only_sanitized_json(self) -> None:
+        evidence = {
+            "authenticated": True,
+            "configuration_mutation_attempted": False,
+            "credentials_cookies_or_parameter_values_output": False,
+        }
+        with (
+            patch("cpe_access_atlas.cli.getpass.getpass", return_value="private-password"),
+            patch(
+                "cpe_access_atlas.cli.collect_zte_web_evidence",
+                return_value=evidence,
+            ) as collect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--username",
+                    "admin",
+                    "--timeout",
+                    "7",
+                    "--i-own-or-administer-this-device",
+                    "--acknowledge-local-http-authentication",
+                ]
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(
+            payload["target"]["id"], "tr.turk-telekom.zte.h3600p.h3600p-v9-ttn10-260210"
+        )
+        self.assertEqual(payload["web_evidence"], evidence)
+        self.assertNotIn("private-password", stdout)
+        collect.assert_called_once_with(
+            "192.168.1.1",
+            "admin",
+            "private-password",
+            timeout=7.0,
+            expected_firmware="H3600P V9.0 TTN.10_260210",
+            expected_model="H3600P V9",
+            expected_hardware="V9.0",
+        )
+
+    def test_web_evidence_adapter_rejects_other_models_before_secret_input(self) -> None:
+        recipe = replace(
+            find_recipe(
+                "turk-telekom",
+                "H3600P",
+                "V9.0",
+                "H3600P V9.0 TTN.10_260210",
+            ),
+            model="H3601P",
+        )
+        with (
+            patch("cpe_access_atlas.cli._recipe_from_args", return_value=recipe),
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--i-own-or-administer-this-device",
+                    "--acknowledge-local-http-authentication",
+                ]
+            )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("limited to ZTE H3600P V9", stderr)
+        prompt.assert_not_called()
+
+    def test_uart_evidence_outputs_sanitized_offline_json(self) -> None:
+        content = (
+            b"H3600P V9.0 TTN.10_260210\n"
+            b"non secure boot\n"
+            b"U-Boot 2013.04 (Feb 28 2024 - 16:13:22)\n"
+            b"CPU: ZX279128S\n"
+            b"*** Please input bootmode password: ***\n"
+            b"password=SYNTHETIC-PRIVATE-PASSWORD\n"
+            b"SerialNumber=SYNTHETIC-PRIVATE-SERIAL\n"
+        )
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "private-uart.log"
+            source.write_bytes(content)
+            code, stdout, stderr = self.run_cli(["uart-evidence", *TARGET, "--input", str(source)])
+
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(
+            payload["target"]["id"], "tr.turk-telekom.zte.h3600p.h3600p-v9-ttn10-260210"
+        )
+        evidence = payload["uart_evidence"]
+        self.assertEqual(evidence["firmware_identity_status"], "matched")
+        self.assertEqual(evidence["boot_security"], "non-secure")
+        self.assertTrue(evidence["bootloader_password_prompt_observed"])
+        self.assertFalse(evidence["device_io_attempted"])
+        self.assertFalse(evidence["raw_log_output"])
+        self.assertFalse(evidence["secret_or_identity_values_output"])
+        self.assertFalse(evidence["root_access_verified"])
+        self.assertNotIn("bootloader_access_gate_observed", evidence)
+        self.assertNotIn("non_allowlisted_values_emitted", evidence)
+        self.assertNotIn("sha256", evidence)
+        self.assertNotIn("SYNTHETIC-PRIVATE", stdout)
+        self.assertNotIn(str(source), stdout)
+
+    def test_uart_evidence_rejects_other_models_before_reading(self) -> None:
+        recipe = replace(
+            find_recipe(
+                "turk-telekom",
+                "H3600P",
+                "V9.0",
+                "H3600P V9.0 TTN.10_260210",
+            ),
+            model="H3601P",
+        )
+        with (
+            patch("cpe_access_atlas.cli._recipe_from_args", return_value=recipe),
+            patch("cpe_access_atlas.cli.inspect_uart_log") as inspect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                ["uart-evidence", *TARGET, "--input", "private-uart.log"]
+            )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("limited to ZTE H3600P V9", stderr)
+        inspect.assert_not_called()
+
+    def test_uart_evidence_errors_are_controlled(self) -> None:
+        code, stdout, stderr = self.run_cli(
+            ["uart-evidence", *TARGET, "--input", "PRIVATE-SUBSCRIBER/missing.log"]
+        )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("UART log does not exist", stderr)
+        self.assertNotIn("PRIVATE-SUBSCRIBER", stderr)
+
+    def test_uart_evidence_filesystem_errors_hide_private_paths(self) -> None:
+        source = "PRIVATE-SUBSCRIBER/capture.log"
+        recipe = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        for operation in ("is_file", "open"):
+            with self.subTest(operation=operation):
+                with (
+                    patch("cpe_access_atlas.cli._recipe_from_args", return_value=recipe),
+                    patch.object(Path, "is_file", return_value=True),
+                ):
+                    with patch.object(
+                        Path, operation, side_effect=PermissionError(13, "denied", source)
+                    ):
+                        code, stdout, stderr = self.run_cli(
+                            ["uart-evidence", *TARGET, "--input", source]
+                        )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertEqual(stderr, "ERROR: unable to read UART log\n")
+
     def test_public_target_is_rejected(self) -> None:
         code, _, stderr = self.run_cli(["doctor", "--host", "1.1.1.1"])
         self.assertEqual(code, 2)

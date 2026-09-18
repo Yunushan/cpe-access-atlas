@@ -13,13 +13,13 @@ python scripts/generate_cli_reference.py
 
 ```text
 usage: cpe-atlas [-h] [--version]
-                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate} ...
+                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate} ...
 
 Firmware-aware catalog and safe research tooling for owner-authorized CPE
 access
 
 positional arguments:
-  {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate}
+  {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate}
     providers           list cataloged providers
     recipes             list exact device recipes
     devices             list devices published on official ISP pages (not
@@ -34,6 +34,10 @@ positional arguments:
     config-generate     generate a private offline H3600P config artifact;
                         never flashes a device
     doctor              validate one private target
+    web-evidence        collect sanitized authenticated read-only evidence
+                        from one local ZTE target
+    uart-evidence       inspect a private UART boot log without printing raw
+                        or secret values
     report-template     generate a sanitized hardware research template
     redact              redact common secrets and identifying network data
                         from text
@@ -326,6 +330,23 @@ options:
   --json
 ```
 
+## `cpe-atlas uart-evidence`
+
+```text
+usage: cpe-atlas uart-evidence [-h] --isp ISP --model MODEL
+                               --hardware-revision HARDWARE_REVISION
+                               --firmware FIRMWARE --input INPUT
+
+options:
+  -h, --help            show this help message and exit
+  --isp ISP             provider ID or name
+  --model MODEL         exact device model
+  --hardware-revision HARDWARE_REVISION
+                        exact hardware revision recorded in the catalog
+  --firmware FIRMWARE   exact firmware string
+  --input INPUT         private UART boot-log file
+```
+
 ## `cpe-atlas validate`
 
 ```text
@@ -333,5 +354,35 @@ usage: cpe-atlas validate [-h]
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `cpe-atlas web-evidence`
+
+```text
+usage: cpe-atlas web-evidence [-h] --isp ISP --model MODEL
+                              --hardware-revision HARDWARE_REVISION
+                              --firmware FIRMWARE --host HOST
+                              [--username USERNAME] [--password-stdin]
+                              [--timeout TIMEOUT]
+                              [--i-own-or-administer-this-device]
+                              [--acknowledge-local-http-authentication]
+
+options:
+  -h, --help            show this help message and exit
+  --isp ISP             provider ID or name
+  --model MODEL         exact device model
+  --hardware-revision HARDWARE_REVISION
+                        exact hardware revision recorded in the catalog
+  --firmware FIRMWARE   exact firmware string
+  --host HOST           one RFC1918 or IPv6 ULA literal
+  --username USERNAME   local web-console username
+  --password-stdin      read the local web password from the first stdin line
+                        instead of prompting
+  --timeout TIMEOUT
+  --i-own-or-administer-this-device
+                        acknowledge ownership or explicit authorization
+  --acknowledge-local-http-authentication
+                        accept the risk of the firmware's challenge-hash login
+                        over local HTTP
 ```
 

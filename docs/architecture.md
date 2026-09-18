@@ -9,6 +9,7 @@ CLI
  ├── exact firmware matcher
  ├── single-private-host policy
  ├── non-mutating diagnostics
+ ├── sanitized offline UART-log inspection
  ├── offline private-config inspection and generation
  └── fail-closed apply gate
 ```
@@ -56,6 +57,10 @@ CLI
    authenticated local-at-rest container using scrypt and AES-GCM; that format
    is intentionally not accepted by a modem and is not a publishing or
    compatibility mechanism.
+10. **UART evidence is input-only.** `uart-evidence` reads one bounded local
+    capture, extracts allow-listed boot metadata, and emits no raw lines,
+    device identity values, or credentials. It never opens a serial port or
+    treats an observed prompt as verified bootloader or root access.
 
 On POSIX, private output checks that the parent directory supports `fsync`
 before creating a temporary file, flushes the file before publication, and

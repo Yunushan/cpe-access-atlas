@@ -163,6 +163,68 @@ private IP:
 cpe-atlas doctor --host 192.168.1.1 --ports 80,443 --probe
 ```
 
+Collect authenticated, read-only web evidence from an owned H3600P without
+printing the password, cookies, parameter values, or raw pages:
+
+```shell
+cpe-atlas web-evidence \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --host 192.168.1.1 \
+  --username admin \
+  --i-own-or-administer-this-device \
+  --acknowledge-local-http-authentication
+```
+
+The password is requested with hidden terminal input. The command makes one
+normal web-console login attempt, then issues only bounded GET requests for the
+authenticated root and device-status views. It also parses the page-access map
+embedded by the firmware and requests the rendered `tr069`, `rsc`, user-manager,
+mirror, and capture page views only when the authenticated root advertises the
+same IDs. It reports response shapes, access levels, route names, parameter
+names, bounded HTML field/element IDs, configuration-object IDs, Lua resource
+names, and the presence of expected identity or root-research strings as
+sanitized JSON. Input values and parameter values are not emitted. It never
+submits those pages and does not send CWMP, configuration, shell, reboot, reset,
+upload, or firmware requests or save raw responses. An incorrect password can
+still contribute to the router's login lockout, so the command never retries
+automatically. The HTTP acknowledgement is required because this firmware
+exposes its challenge-hash login over local HTTP.
+
+This evidence can show what the exact authenticated firmware exposes; it does
+not itself enable root access or make the blocked recipe rootable.
+
+Inspect a private UART boot capture without printing its raw lines, device
+identity values, or possible credentials:
+
+```shell
+cpe-atlas uart-evidence \
+  --isp "turk-telekom" \
+  --model "H3600P" \
+  --hardware-revision "V9.0" \
+  --firmware "H3600P V9.0 TTN.10_260210" \
+  --input h3600p-uart-private.log
+```
+
+The command is offline: it opens no serial port and sends nothing to the
+router. It reports only bounded metadata such as observed H3600P build strings,
+U-Boot/kernel versions, SoC/hardware identifiers, memory size, secure-boot text,
+and prompt-presence booleans. It never prints the input path or raw log, and an
+observed prompt is not reported as verified root access.
+
+Only attempt a new capture on an owned spare or recovery-tested unit. Public
+research for an older Digi H3600P reports a 3.3 V AUX3 header at 115200 8N1,
+with pin 1 VCC, pin 2 router TX, pin 3 router RX, and pin 4 GND, but explicitly
+warns that newer firmware can lock serial. For the first TTN.10 observation,
+power the router off before wiring, leave VCC disconnected, connect common GND
+and router TX to the adapter RX only, and leave the adapter TX disconnected.
+Capture one normal boot without pressing keys. Do not press `1`, enter an old
+bootloader password, run `saveenv`/`nand`, or change boot arguments. Electrical
+damage, warranty, and service-interruption risks remain; the published pinout
+and older firmware behavior are not exact-build validation.
+
 Generate a contribution template:
 
 ```shell
