@@ -239,6 +239,10 @@ current commit, and fails after the earliest `review_by` date. A fixed alert is
 also intentionally a policy failure until its now-stale acceptance is removed.
 Transport or pagination failures remain UNVERIFIED. This control makes the
 residual risk visible; it does not reclassify the vendor cryptography as safe.
+If all accepted findings become fixed, remove their stale entries: an empty
+`accepted_risks` list passes only when the exact-ref dismissed high/critical
+inventory is also empty. Any actual high/critical dismissal then remains an
+unexpected finding and fails closed.
 
 From an authenticated GitHub CLI session with repository-admin visibility:
 

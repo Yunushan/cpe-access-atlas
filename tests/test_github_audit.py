@@ -507,7 +507,6 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
             None,
             {**document, "schema_version": 2},
             {**document, "repository": "not-a-repository"},
-            {**document, "accepted_risks": []},
             {
                 **document,
                 "accepted_risks": [
@@ -527,6 +526,61 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
                 parsed, parse_error = audit._parse_codeql_risk_policy(malformed)
                 self.assertIsNone(parsed)
                 self.assertIsNotNone(parse_error)
+
+    def test_empty_codeql_policy_passes_only_for_an_empty_high_risk_inventory(self) -> None:
+        document = json.loads(audit._CODEQL_RISK_POLICY_PATH.read_text(encoding="utf-8"))
+        document["accepted_risks"] = []
+        policy, error = audit._parse_codeql_risk_policy(document)
+        self.assertIsNone(error)
+        self.assertIsNotNone(policy)
+        assert policy is not None
+        self.assertEqual(policy.accepted_risks, ())
+        now = datetime(2026, 9, 18, tzinfo=UTC)
+        self.assertEqual(
+            audit._evaluate_codeql_risk_acceptances(
+                policy,
+                [],
+                repository=REPOSITORY,
+                expected_ref="refs/heads/main",
+                expected_commit=SHA,
+                now=now,
+            ),
+            (),
+        )
+        differences = audit._evaluate_codeql_risk_acceptances(
+            policy,
+            accepted_codeql_alerts(),
+            repository=REPOSITORY,
+            expected_ref="refs/heads/main",
+            expected_commit=SHA,
+            now=now,
+        )
+        self.assertEqual(len(differences), 2)
+        self.assertTrue(all("unexpected" in item for item in differences))
+
+        arguments = [
+            "--json",
+            "--codeql-risk-ref",
+            "refs/heads/main",
+            "--codeql-risk-commit",
+            SHA,
+        ]
+        records = complete_fixture()
+        records[CODEQL_ACCEPTED_ENDPOINT] = []
+        with patch.object(audit, "_load_codeql_risk_policy", return_value=(policy, None)):
+            code, output, error, requested = self.run_cli(records, arguments)
+        self.assertEqual((code, error), (0, ""), output)
+        self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
+        result = json.loads(output)[0]
+        self.assertEqual(result["status"], audit.STATUS_PASS)
+        self.assertIn("policy has no acceptances", result["detail"])
+
+        records[CODEQL_ACCEPTED_ENDPOINT] = accepted_codeql_alerts()
+        with patch.object(audit, "_load_codeql_risk_policy", return_value=(policy, None)):
+            code, output, error, requested = self.run_cli(records, arguments)
+        self.assertEqual((code, error), (1, ""), output)
+        self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
+        self.assertIn("unexpected dismissed high/critical", output)
 
     def test_accepted_codeql_policy_and_alert_parsers_reject_defensive_edge_cases(self) -> None:
         document = json.loads(audit._CODEQL_RISK_POLICY_PATH.read_text(encoding="utf-8"))

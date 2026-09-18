@@ -308,8 +308,8 @@ def _parse_codeql_risk_policy(document: object) -> tuple[CodeQLRiskPolicy | None
     ):
         return None, "accepted CodeQL risk policy has an invalid repository"
     records = document["accepted_risks"]
-    if not isinstance(records, list) or not 1 <= len(records) <= 32:
-        return None, "accepted CodeQL risk policy must contain 1-32 entries"
+    if not isinstance(records, list) or len(records) > 32:
+        return None, "accepted CodeQL risk policy must contain 0-32 entries"
 
     accepted: list[CodeQLRiskAcceptance] = []
     seen: set[int] = set()
@@ -551,6 +551,12 @@ def _audit_codeql_risk_acceptances(
     )
     if differences:
         return CheckResult("accepted CodeQL risks", STATUS_FAIL, "; ".join(differences))
+    if not policy.accepted_risks:
+        return CheckResult(
+            "accepted CodeQL risks",
+            STATUS_PASS,
+            f"no dismissed high/critical alerts match {expected_ref}; policy has no acceptances",
+        )
     review_date = min(item.review_by for item in policy.accepted_risks)
     return CheckResult(
         "accepted CodeQL risks",
