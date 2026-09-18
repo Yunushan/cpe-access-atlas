@@ -13,6 +13,7 @@ from urllib.parse import parse_qs
 
 from cpe_access_atlas.web_evidence import (
     MAX_COOKIE_VALUE_CHARS,
+    MAX_JSON_NESTING,
     MAX_RESPONSE_BYTES,
     MAX_STRUCTURAL_IDENTIFIERS,
     WebEvidenceError,
@@ -113,7 +114,8 @@ class WebEvidenceTests(unittest.TestCase):
     def test_collects_sanitized_exact_target_evidence(self) -> None:
         firmware = "H3600P V9.0 TTN.10_260210"
         root = (
-            b'<html><a href="/?_type=menuView&_tag=statusMgr">status</a>'
+            b'<html><div id="r"></div>'
+            b'<a href="/?_type=menuView&_tag=statusMgr">status</a>'
             b"H3600P V9 V9.0 CWMP TR-069 InternetGatewayDevice X_TT "
             b"Shell SSH root configDownload"
             b'<script>_PageAccessAuthor["tr069"] = '
@@ -183,6 +185,13 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertTrue(all(result["observed_root_research_string_markers"].values()))
         endpoints = result["endpoints"]
         self.assertEqual(endpoints["authenticated_root"]["route_tags"], ["statusMgr"])
+        self.assertEqual(endpoints["authenticated_root"]["html_element_ids"], [])
+        self.assertEqual(
+            endpoints["authenticated_root"]["redacted_unique_structural_identifier_counts"][
+                "html_element_ids"
+            ],
+            1,
+        )
         self.assertEqual(endpoints["status_data"]["parameter_names"], ["SoftwareVersion"])
         self.assertEqual(
             endpoints["page_view_tr069"]["parameter_names"],
@@ -195,6 +204,20 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(endpoints["page_view_tr069"]["html_field_names"], ["EnableCWMP"])
         self.assertEqual(endpoints["page_view_tr069"]["config_object_ids"], ["OBJ_TR069_ID"])
         self.assertEqual(endpoints["page_view_tr069"]["lua_resource_names"], ["tr069_lua.lua"])
+        self.assertEqual(
+            endpoints["page_view_tr069"]["redacted_unique_structural_identifier_counts"],
+            {
+                "route_types": 0,
+                "route_tags": 0,
+                "xml_element_names": 0,
+                "parameter_names": 0,
+                "page_ids": 0,
+                "html_element_ids": 0,
+                "html_field_names": 0,
+                "config_object_ids": 0,
+                "lua_resource_names": 0,
+            },
+        )
         self.assertFalse(endpoints["page_view_tr069"]["structural_identifier_limit_reached"])
         self.assertEqual(endpoints["page_view_rsc"]["parameter_names"], ["ServiceControl"])
         self.assertIn("ParaValue", endpoints["status_data"]["xml_element_names"])
@@ -479,12 +502,68 @@ class WebEvidenceTests(unittest.TestCase):
             _json_object(response(b"{}", status=403), "login")
         with self.assertRaisesRegex(WebEvidenceError, "valid UTF-8 JSON"):
             _json_object(response(b"\xff", content_type="application/json"), "login")
+        with self.assertRaisesRegex(WebEvidenceError, "valid UTF-8 JSON"):
+            _json_object(response(b"{", content_type="application/json"), "login")
         with self.assertRaisesRegex(WebEvidenceError, "JSON object"):
             _json_object(response(b"[]", content_type="application/json"), "login")
         with self.assertRaisesRegex(WebEvidenceError, "expected ajax_response_xml_root"):
             _login_token(response(b"<wrong>token</wrong>", content_type="text/xml"))
         with self.assertRaisesRegex(WebEvidenceError, "HTTP 500"):
             _login_token(response(b"", status=500))
+
+    def test_json_nesting_is_bounded_before_decoding(self) -> None:
+        at_limit = (b'{"value":' * MAX_JSON_NESTING) + b"0" + (b"}" * MAX_JSON_NESTING)
+        self.assertIsInstance(
+            _json_object(response(at_limit, content_type="application/json"), "login"),
+            dict,
+        )
+
+        excessive_depth = 2_000
+        nested = (b'{"value":' * excessive_depth) + b"0" + (b"}" * excessive_depth)
+        self.assertLess(len(nested), MAX_RESPONSE_BYTES)
+        with patch("cpe_access_atlas.web_evidence.json.loads") as loads:
+            with self.assertRaisesRegex(
+                WebEvidenceError,
+                rf"JSON exceeds the {MAX_JSON_NESTING}-level nesting limit",
+            ):
+                _json_object(response(nested, content_type="application/json"), "login")
+        loads.assert_not_called()
+
+    def test_json_decoder_recursion_error_is_converted_to_protocol_error(self) -> None:
+        with patch(
+            "cpe_access_atlas.web_evidence.json.loads",
+            side_effect=RecursionError("private decoder detail"),
+        ):
+            with self.assertRaises(WebEvidenceError) as caught:
+                _json_object(response(b"{}", content_type="application/json"), "login")
+        self.assertIn("nesting limit", str(caught.exception))
+        self.assertNotIn("private decoder detail", str(caught.exception))
+
+    def test_json_decoder_value_error_is_converted_to_protocol_error(self) -> None:
+        oversized_integer = b'{"value":' + (b"9" * 5_000) + b"}"
+        with self.assertRaises(WebEvidenceError) as caught:
+            _json_object(
+                response(oversized_integer, content_type="application/json"),
+                "login",
+            )
+        self.assertIn("within safety limits", str(caught.exception))
+        self.assertNotIn("4300", str(caught.exception))
+
+        with patch(
+            "cpe_access_atlas.web_evidence.json.loads",
+            side_effect=ValueError("private decoder detail"),
+        ):
+            with self.assertRaises(WebEvidenceError) as patched_caught:
+                _json_object(response(b"{}", content_type="application/json"), "login")
+        self.assertNotIn("private decoder detail", str(patched_caught.exception))
+
+    def test_json_nesting_scan_ignores_delimiters_inside_strings(self) -> None:
+        delimiters = ("[{" * (MAX_JSON_NESTING + 10)) + r"\"" + ("]}" * (MAX_JSON_NESTING + 10))
+        document = json.dumps({"value": delimiters}).encode("utf-8")
+        self.assertEqual(
+            _json_object(response(document, content_type="application/json"), "login"),
+            {"value": delimiters},
+        )
 
     def test_helpers_classify_responses_and_login_values(self) -> None:
         self.assertTrue(_login_succeeded(True))
@@ -526,6 +605,20 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["html_field_names"], [])
         self.assertEqual(evidence["config_object_ids"], [])
         self.assertEqual(evidence["lua_resource_names"], [])
+        self.assertEqual(
+            evidence["redacted_unique_structural_identifier_counts"],
+            {
+                "route_types": 0,
+                "route_tags": 0,
+                "xml_element_names": 0,
+                "parameter_names": 0,
+                "page_ids": 0,
+                "html_element_ids": 0,
+                "html_field_names": 0,
+                "config_object_ids": 0,
+                "lua_resource_names": 0,
+            },
+        )
         self.assertFalse(evidence["structural_identifier_limit_reached"])
 
     def test_endpoint_evidence_reports_access_map_and_login_page(self) -> None:
@@ -547,7 +640,7 @@ class WebEvidenceTests(unittest.TestCase):
             [{"page_id": "tr069", "visibility_level": 3, "limitation": 1}],
         )
 
-    def test_endpoint_evidence_bounds_structural_identifiers(self) -> None:
+    def test_endpoint_evidence_reports_structural_identifier_limit(self) -> None:
         body = b"".join(
             f'<input id="field{index:04d}">'.encode("ascii")
             for index in range(MAX_STRUCTURAL_IDENTIFIERS + 1)
@@ -558,8 +651,157 @@ class WebEvidenceTests(unittest.TestCase):
             expected_model="model",
             expected_hardware="hardware",
         )
-        self.assertEqual(len(evidence["html_element_ids"]), MAX_STRUCTURAL_IDENTIFIERS)
+        self.assertEqual(evidence["html_element_ids"], [])
+        self.assertEqual(
+            evidence["redacted_unique_structural_identifier_counts"]["html_element_ids"],
+            MAX_STRUCTURAL_IDENTIFIERS + 1,
+        )
         self.assertTrue(evidence["structural_identifier_limit_reached"])
+
+    def test_endpoint_evidence_redacts_unreviewed_identifiers_deterministically(self) -> None:
+        private_identifiers = (
+            "subscriber_alice_123",
+            "CustomerSerialNumber",
+            "OBJ_PRIVATE_ACCOUNT_456",
+            "customer_alice_backup.lua",
+        )
+        body = (
+            b'<input id="subscriber_alice_123" name="CustomerSerialNumber">'
+            b'<input id="obj_tr069_id.enablecwmp" name="enablecwmp">'
+            b"OBJ_PRIVATE_ACCOUNT_456 OBJ_TR069_ID "
+            b"customer_alice_backup.lua TR069_LUA.LUA"
+        )
+        first = _endpoint_evidence(
+            response(body, content_type="text/html"),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+        reordered_with_duplicates = (
+            b"tr069_lua.lua customer_alice_backup.lua TR069_LUA.LUA "
+            b"OBJ_TR069_ID OBJ_PRIVATE_ACCOUNT_456 OBJ_PRIVATE_ACCOUNT_456 "
+            b'<input name="enablecwmp" id="OBJ_TR069_ID.EnableCWMP">'
+            b'<input name="CustomerSerialNumber" id="subscriber_alice_123">'
+        )
+        second = _endpoint_evidence(
+            response(reordered_with_duplicates, content_type="text/html"),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+
+        for key in (
+            "html_element_ids",
+            "html_field_names",
+            "config_object_ids",
+            "lua_resource_names",
+            "redacted_unique_structural_identifier_counts",
+            "structural_identifier_limit_reached",
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(first[key], second[key])
+        self.assertEqual(first["html_element_ids"], ["OBJ_TR069_ID.EnableCWMP"])
+        self.assertEqual(first["html_field_names"], ["EnableCWMP"])
+        self.assertEqual(first["config_object_ids"], ["OBJ_TR069_ID"])
+        self.assertEqual(first["lua_resource_names"], ["tr069_lua.lua"])
+        self.assertEqual(
+            first["redacted_unique_structural_identifier_counts"],
+            {
+                "route_types": 0,
+                "route_tags": 0,
+                "xml_element_names": 0,
+                "parameter_names": 0,
+                "page_ids": 0,
+                "html_element_ids": 1,
+                "html_field_names": 1,
+                "config_object_ids": 1,
+                "lua_resource_names": 1,
+            },
+        )
+        serialized = json.dumps(first, sort_keys=True)
+        for private_identifier in private_identifiers:
+            with self.subTest(private_identifier=private_identifier):
+                self.assertNotIn(private_identifier.casefold(), serialized.casefold())
+
+    def test_endpoint_evidence_suppresses_redacted_identifier_aliases(self) -> None:
+        private_identifiers = (
+            "OBJ_PRIVATE_ACCOUNT_456",
+            "customer_alice_backup.lua",
+            "subscriber_alice_123",
+        )
+        body = (
+            b'<OBJ_PRIVATE_ACCOUNT_456><a href="/?_type=subscriber_alice_123'
+            b'&_tag=customer_alice_backup.lua">x</a></OBJ_PRIVATE_ACCOUNT_456>'
+            b"<ParaName>Device.OBJ_PRIVATE_ACCOUNT_456.Value</ParaName>"
+            b'<input id="subscriber_alice_123">'
+            b'<script>_PageAccessAuthor["customer_alice_backup.lua"] = '
+            b'{"VisibilityLevel":3,"Limitation":1};</script>'
+        )
+        evidence = _endpoint_evidence(
+            response(body, content_type="text/html"),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+
+        serialized = json.dumps(evidence, sort_keys=True).casefold()
+        for private_identifier in private_identifiers:
+            with self.subTest(private_identifier=private_identifier):
+                self.assertNotIn(private_identifier.casefold(), serialized)
+        self.assertEqual(evidence["route_types"], [])
+        self.assertEqual(evidence["route_tags"], [])
+        self.assertNotIn("OBJ_PRIVATE_ACCOUNT_456", evidence["xml_element_names"])
+        self.assertEqual(evidence["parameter_names"], [])
+        self.assertEqual(evidence["page_access_entries"], [])
+
+    def test_endpoint_evidence_only_emits_allowlisted_router_identifiers(self) -> None:
+        body = (
+            b'<html><a href="/?_type=menuView&_tag=statusMgr">known</a>'
+            b'<a href="/?_type=CustomerAlice&_tag=Subscriber.Alice">private</a>'
+            b"<CustomerAlice><Subscriber.Alice>private</Subscriber.Alice></CustomerAlice>"
+            b"<ParaName>SoftwareVersion</ParaName>"
+            b"<ParaName>CustomerAlice</ParaName>"
+            b"<ParaName>Subscriber.Alice</ParaName>"
+            b'<script>_PageAccessAuthor["tr069"] = '
+            b'{"VisibilityLevel":3,"Limitation":1};'
+            b'_PageAccessAuthor["CustomerAlice"] = '
+            b'{"VisibilityLevel":3,"Limitation":1};'
+            b'_PageAccessAuthor["Subscriber.Alice"] = '
+            b'{"VisibilityLevel":2,"Limitation":1};</script></html>'
+        )
+        evidence = _endpoint_evidence(
+            response(body, content_type="text/html"),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+
+        self.assertEqual(evidence["route_types"], ["menuView"])
+        self.assertEqual(evidence["route_tags"], ["statusMgr"])
+        self.assertEqual(evidence["xml_element_names"], ["ParaName", "a", "html", "script"])
+        self.assertEqual(evidence["parameter_names"], ["SoftwareVersion"])
+        self.assertEqual(
+            evidence["page_access_entries"],
+            [{"page_id": "tr069", "visibility_level": 3, "limitation": 1}],
+        )
+        self.assertEqual(
+            evidence["redacted_unique_structural_identifier_counts"],
+            {
+                "route_types": 1,
+                "route_tags": 1,
+                "xml_element_names": 2,
+                "parameter_names": 2,
+                "page_ids": 2,
+                "html_element_ids": 0,
+                "html_field_names": 0,
+                "config_object_ids": 0,
+                "lua_resource_names": 0,
+            },
+        )
+        self.assertFalse(evidence["structural_identifier_limit_reached"])
+        serialized = json.dumps(evidence, sort_keys=True).casefold()
+        self.assertNotIn("customeralice", serialized)
+        self.assertNotIn("subscriber.alice", serialized)
 
     def test_result_is_json_serializable(self) -> None:
         minimal = _endpoint_evidence(

@@ -17,6 +17,7 @@ from .policy import parse_single_private_address, parse_timeout
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_COOKIE_VALUE_CHARS = 4_096
 MAX_STRUCTURAL_IDENTIFIERS = 512
+MAX_JSON_NESTING = 64
 
 _LOGIN_RESPONSE_ROOT = "ajax_response_xml_root"
 _ROUTE_TYPE = re.compile(r"_type=([A-Za-z][A-Za-z0-9_.-]{0,95})")
@@ -47,6 +48,28 @@ _LUA_RESOURCE = re.compile(
     rb"\b([A-Za-z_][A-Za-z0-9_.-]{0,123}\.lua)\b",
     re.IGNORECASE,
 )
+
+# Router-controlled identifiers can contain subscriber-specific labels or other
+# private values. Only these reviewed, public firmware identifiers may be
+# emitted verbatim. Matching is case-insensitive, but output is canonicalized so
+# unusual casing cannot be used as an identifier side channel. Unrecognized
+# values are represented only by aggregate counts in endpoint evidence.
+_SAFE_STRUCTURAL_IDENTIFIERS: dict[str, dict[str, str]] = {
+    "html_element_ids": {
+        "obj_tr069_id.enablecwmp": "OBJ_TR069_ID.EnableCWMP",
+    },
+    "html_field_names": {
+        "enablecwmp": "EnableCWMP",
+    },
+    "config_object_ids": {
+        "obj_devinfo_id": "OBJ_DEVINFO_ID",
+        "obj_tr069_id": "OBJ_TR069_ID",
+    },
+    "lua_resource_names": {
+        "devmgr_statusmgr_lua.lua": "devmgr_statusmgr_lua.lua",
+        "tr069_lua.lua": "tr069_lua.lua",
+    },
+}
 _SAFE_COOKIE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 _SAFE_COOKIE_VALUE = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]{0,4096}\Z")
 _TOKEN_BODY = re.compile(
@@ -86,6 +109,44 @@ _ROOT_RESEARCH_PAGE_IDS: tuple[str, ...] = (
     "capture",
 )
 
+# These destination-category values are public protocol/firmware vocabulary.
+# They remain useful evidence even when an unrelated short private identifier
+# would otherwise match them as a substring during cross-field redaction.
+_SAFE_EMITTED_IDENTIFIER_VALUES: dict[str, dict[str, str]] = {
+    "route_types": {
+        "logindata": "loginData",
+        "menuview": "menuView",
+        "menudata": "menuData",
+    },
+    "route_tags": {
+        "statusmgr": "statusMgr",
+        "devmgr_statusmgr_lua.lua": "devmgr_statusmgr_lua.lua",
+        **{page_id.casefold(): page_id for page_id in _ROOT_RESEARCH_PAGE_IDS},
+    },
+    "xml_element_names": {
+        "root": "root",
+        "html": "html",
+        "a": "a",
+        "script": "script",
+        "input": "input",
+        "address": "address",
+        "ajax_response_xml_root": "ajax_response_xml_root",
+        "obj_devinfo_id": "OBJ_DEVINFO_ID",
+        "instance": "Instance",
+        "paraname": "ParaName",
+        "paravalue": "ParaValue",
+    },
+    "parameter_names": {
+        "softwareversion": "SoftwareVersion",
+        "managementserver.enablecwmp": "ManagementServer.EnableCWMP",
+        "servicecontrol": "ServiceControl",
+    },
+    "page_ids": {
+        "homepage": "homePage",
+        **{page_id.casefold(): page_id for page_id in _ROOT_RESEARCH_PAGE_IDS},
+    },
+}
+
 
 class WebEvidenceError(ValueError):
     """Raised when bounded local web evidence collection cannot continue safely."""
@@ -104,6 +165,18 @@ class _PageAccessEvidence(TypedDict):
     limitation: int
 
 
+class _UniqueStructuralIdentifierRedactions(TypedDict):
+    route_types: int
+    route_tags: int
+    xml_element_names: int
+    parameter_names: int
+    page_ids: int
+    html_element_ids: int
+    html_field_names: int
+    config_object_ids: int
+    lua_resource_names: int
+
+
 class _EndpointEvidence(TypedDict):
     http_status: int
     response_bytes: int
@@ -118,6 +191,7 @@ class _EndpointEvidence(TypedDict):
     html_field_names: list[str]
     config_object_ids: list[str]
     lua_resource_names: list[str]
+    redacted_unique_structural_identifier_counts: _UniqueStructuralIdentifierRedactions
     structural_identifier_limit_reached: bool
     root_research_string_markers: dict[str, bool]
     expected_identity_markers: dict[str, bool]
@@ -196,12 +270,62 @@ def _require_ok(response: _Response, label: str) -> None:
 def _json_object(response: _Response, label: str) -> dict[str, Any]:
     _require_ok(response, label)
     try:
-        value = json.loads(response.body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise WebEvidenceError(f"{label} did not return valid UTF-8 JSON") from exc
+        document = response.body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise WebEvidenceError(f"{label} did not return valid UTF-8 JSON") from None
+
+    _require_bounded_json_nesting(document, label)
+    try:
+        value = json.loads(document)
+    except RecursionError:
+        # Defensive fallback in case the decoder's recursion behavior changes or
+        # a non-container input triggers recursion below the explicit depth cap.
+        raise WebEvidenceError(
+            f"{label} JSON exceeds the {MAX_JSON_NESTING}-level nesting limit"
+        ) from None
+    except json.JSONDecodeError:
+        raise WebEvidenceError(f"{label} did not return valid UTF-8 JSON") from None
+    except ValueError:
+        # CPython raises a plain ValueError, for example, when a JSON integer
+        # exceeds its configured digit limit. Keep all decoder limits inside
+        # the same sanitized protocol-error boundary.
+        raise WebEvidenceError(f"{label} JSON could not be decoded within safety limits") from None
     if not isinstance(value, dict):
         raise WebEvidenceError(f"{label} did not return a JSON object")
     return value
+
+
+def _require_bounded_json_nesting(document: str, label: str) -> None:
+    """Reject JSON containers nested beyond the parser safety boundary.
+
+    The scan understands JSON string quoting and escaping. Syntax validation is
+    intentionally left to ``json.loads``; this pass exists only to establish a
+    hard nesting bound before invoking the recursive decoder.
+    """
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in document:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_NESTING:
+                raise WebEvidenceError(
+                    f"{label} JSON exceeds the {MAX_JSON_NESTING}-level nesting limit"
+                )
+        elif character in "]}":
+            # Mismatched closing delimiters are handled by the JSON decoder.
+            depth = max(0, depth - 1)
 
 
 def _required_string(value: object, label: str, maximum: int) -> str:
@@ -266,9 +390,31 @@ def _route_values(pattern: re.Pattern[str], body: bytes) -> list[str]:
     return sorted({match.group(1) for match in pattern.finditer(text)})
 
 
-def _bounded_ascii_matches(pattern: re.Pattern[bytes], body: bytes) -> tuple[list[str], bool]:
-    values = sorted({match.group(1).decode("ascii") for match in pattern.finditer(body)})
-    return values[:MAX_STRUCTURAL_IDENTIFIERS], len(values) > MAX_STRUCTURAL_IDENTIFIERS
+def _allowlisted_ascii_matches(
+    category: str,
+    pattern: re.Pattern[bytes],
+    body: bytes,
+) -> tuple[list[str], set[str], bool]:
+    """Return reviewed identifiers and keep unreviewed values internal."""
+
+    values = sorted({match.group(1).decode("ascii").casefold() for match in pattern.finditer(body)})
+    allowlist = _SAFE_STRUCTURAL_IDENTIFIERS[category]
+    allowed = sorted({allowlist[value] for value in values if value in allowlist})
+    redacted = {value for value in values if value not in allowlist}
+    return allowed, redacted, len(values) > MAX_STRUCTURAL_IDENTIFIERS
+
+
+def _allowlisted_identifier_values(
+    category: str,
+    values: list[str],
+) -> tuple[list[str], set[str], bool]:
+    """Canonicalize reviewed values and expose unknowns only as aggregates."""
+
+    normalized = {value.casefold() for value in values}
+    allowlist = _SAFE_EMITTED_IDENTIFIER_VALUES[category]
+    allowed = sorted({allowlist[value] for value in normalized if value in allowlist})
+    redacted = normalized.difference(allowlist)
+    return allowed, redacted, len(normalized) > MAX_STRUCTURAL_IDENTIFIERS
 
 
 def _marker_presence(body: bytes) -> dict[str, bool]:
@@ -310,30 +456,99 @@ def _endpoint_evidence(
     expected_model: str,
     expected_hardware: str,
 ) -> _EndpointEvidence:
-    html_element_ids, element_ids_limited = _bounded_ascii_matches(_HTML_ELEMENT_ID, response.body)
-    html_field_names, field_names_limited = _bounded_ascii_matches(_HTML_FIELD_NAME, response.body)
-    config_object_ids, object_ids_limited = _bounded_ascii_matches(_CONFIG_OBJECT_ID, response.body)
-    lua_resource_names, lua_names_limited = _bounded_ascii_matches(_LUA_RESOURCE, response.body)
+    html_element_ids, redacted_element_ids, element_ids_limited = _allowlisted_ascii_matches(
+        "html_element_ids", _HTML_ELEMENT_ID, response.body
+    )
+    html_field_names, redacted_field_names, field_names_limited = _allowlisted_ascii_matches(
+        "html_field_names", _HTML_FIELD_NAME, response.body
+    )
+    config_object_ids, redacted_object_ids, object_ids_limited = _allowlisted_ascii_matches(
+        "config_object_ids", _CONFIG_OBJECT_ID, response.body
+    )
+    lua_resource_names, redacted_lua_names, lua_names_limited = _allowlisted_ascii_matches(
+        "lua_resource_names", _LUA_RESOURCE, response.body
+    )
+    route_types, redacted_route_types, route_types_limited = _allowlisted_identifier_values(
+        "route_types", _route_values(_ROUTE_TYPE, response.body)
+    )
+    route_tags, redacted_route_tags, route_tags_limited = _allowlisted_identifier_values(
+        "route_tags", _route_values(_ROUTE_TAG, response.body)
+    )
+    xml_element_names, redacted_xml_names, xml_names_limited = _allowlisted_identifier_values(
+        "xml_element_names", _sorted_ascii_matches(_XML_TAG, response.body)
+    )
+    parameter_names, redacted_parameter_names, parameter_names_limited = (
+        _allowlisted_identifier_values(
+            "parameter_names", _sorted_ascii_matches(_PARAMETER_NAME, response.body)
+        )
+    )
+    raw_page_access_entries = _page_access_entries(response.body)
+    _, redacted_page_ids, page_ids_limited = _allowlisted_identifier_values(
+        "page_ids", [entry["page_id"] for entry in raw_page_access_entries]
+    )
+
+    redacted_identifiers = set().union(
+        redacted_route_types,
+        redacted_route_tags,
+        redacted_xml_names,
+        redacted_parameter_names,
+        redacted_page_ids,
+        redacted_element_ids,
+        redacted_field_names,
+        redacted_object_ids,
+        redacted_lua_names,
+    )
+    aggregate_limit_reached = len(redacted_identifiers) > MAX_STRUCTURAL_IDENTIFIERS
+    page_access_values: set[tuple[str, int, int]] = set()
+    for entry in raw_page_access_entries:
+        page_id = _SAFE_EMITTED_IDENTIFIER_VALUES["page_ids"].get(entry["page_id"].casefold())
+        if page_id is not None:
+            page_access_values.add((page_id, entry["visibility_level"], entry["limitation"]))
+    page_access_entries: list[_PageAccessEvidence] = [
+        {
+            "page_id": page_id,
+            "visibility_level": visibility_level,
+            "limitation": limitation,
+        }
+        for page_id, visibility_level, limitation in sorted(page_access_values)
+    ]
     return {
         "http_status": response.status,
         "response_bytes": len(response.body),
         "response_kind": _response_kind(response),
-        "route_types": _route_values(_ROUTE_TYPE, response.body),
-        "route_tags": _route_values(_ROUTE_TAG, response.body),
-        "xml_element_names": _sorted_ascii_matches(_XML_TAG, response.body),
-        "parameter_names": _sorted_ascii_matches(_PARAMETER_NAME, response.body),
-        "page_access_entries": _page_access_entries(response.body),
+        "route_types": route_types,
+        "route_tags": route_tags,
+        "xml_element_names": xml_element_names,
+        "parameter_names": parameter_names,
+        "page_access_entries": page_access_entries,
         "login_page_detected": _looks_like_login_page(response.body),
         "html_element_ids": html_element_ids,
         "html_field_names": html_field_names,
         "config_object_ids": config_object_ids,
         "lua_resource_names": lua_resource_names,
+        "redacted_unique_structural_identifier_counts": {
+            "route_types": len(redacted_route_types),
+            "route_tags": len(redacted_route_tags),
+            "xml_element_names": len(redacted_xml_names),
+            "parameter_names": len(redacted_parameter_names),
+            "page_ids": len(redacted_page_ids),
+            "html_element_ids": len(redacted_element_ids),
+            "html_field_names": len(redacted_field_names),
+            "config_object_ids": len(redacted_object_ids),
+            "lua_resource_names": len(redacted_lua_names),
+        },
         "structural_identifier_limit_reached": any(
             (
                 element_ids_limited,
                 field_names_limited,
                 object_ids_limited,
                 lua_names_limited,
+                route_types_limited,
+                route_tags_limited,
+                xml_names_limited,
+                parameter_names_limited,
+                page_ids_limited,
+                aggregate_limit_reached,
             )
         ),
         "root_research_string_markers": _marker_presence(response.body),

@@ -25,8 +25,16 @@ Protect `main` with:
 - conversation resolution required;
 - force-pushes and branch deletion disabled;
 - no explicit users, teams, or apps allowed to bypass pull-request requirements;
-- required checks for every CI matrix job, `package-smoke`, `dependency-audit`,
-  `dependency-review`, CodeQL `analyze`, and secret-scan `gitleaks`.
+- required DCO `check-signoff` plus every CI matrix job, `package-smoke`,
+  `dependency-audit (3.11)`, `dependency-audit (3.14)`, `dependency-review`,
+  CodeQL `analyze`, and secret-scan `gitleaks`.
+  Bind every required check to the GitHub Actions source, rather than accepting
+  an unbound legacy context with the same name. The read-only audit verifies
+  GitHub Actions app/integration ID `15368`; another app cannot satisfy a
+  protected check merely by copying its display name. That app ID identifies
+  GitHub Actions globally, not one immutable workflow file, so branch protection
+  and review of `.github/workflows/` plus `.github/dco-signoff.awk` changes remain
+  part of the trust boundary.
 
 The CI matrix checks are:
 
@@ -66,18 +74,24 @@ an authorized administrator updates the repository settings.
   immutability for an existing release. Preserve older artifacts and publish
   a new version through the protected process. See
   [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-- Protect the `v*` tag pattern and restrict release-tag creation to
-  maintainers.
-  Use a creation ruleset with explicitly authorized creators, plus separate
-  update/deletion rules with **no bypass actors**. A creator must not be able
-  to replace or delete an existing release tag using the same bypass grant.
-  The auditor trusts only the personal repository owner's explicit User ID
-  for creation by default; it does not equate the write role with release
-  authorization. A no-bypass creation rule denies all creation and must not
-  be confused with an operational release-creation policy. The auditor requires
-  a trusted creator who can satisfy every full-namespace creation ruleset; an
-  empty or disjoint creator intersection fails. Additional narrow creation
-  conditions require manual policy review instead of an assumed passing result.
+- Protect release-tag creation with three deliberately separate rulesets:
+  1. a rotating quarantine with `include: refs/tags/v*`, only
+     `exclude: refs/tags/v0.4.0a5`, the creation restriction, and **no bypass
+     actors**;
+  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a5`, no
+     exclusions, the creation restriction, and the personal repository owner
+     as the only always-bypass actor; and
+  3. a full `refs/tags/v*` update/deletion restriction with no exclusions and
+     **no bypass actors**.
+
+  GitHub's creation restriction permits only bypass actors to create matching
+  refs. Consequently, the first rule denies every noncandidate release tag,
+  including tags aimed at historical workflows; the second makes the exact
+  reviewed candidate operational; and the third prevents anyone, including
+  the creator, from moving or deleting a release tag. The auditor trusts only
+  the personal repository owner's explicit User ID for candidate creation. It
+  does not equate a repository role with release authorization and does not
+  infer protection from malformed, partial, or additional creation patterns.
 - Enable the repository Dependency graph; the pull-request dependency-review
   check cannot run while it is disabled.
 - Keep Dependabot alerts and security updates enabled; the repository also
@@ -91,13 +105,19 @@ an authorized administrator updates the repository settings.
   or a monitored security address.
 - Configure a `release` environment without mandatory reviewers. The owner
   authorizes publication by creating the protected release tag after checking
-  the candidate. Disable administrator bypass and select deployment refs
-  explicitly: allow tag pattern `v*` only, not unrestricted refs or branches.
+  the candidate. Disable administrator bypass and select exactly the current
+  candidate tag (`v0.4.0a5`), not `v*`, unrestricted refs, or branches. Update
+  that one policy only when the package version advances to a reviewed candidate.
+  This exact-tag boundary prevents a tag created later at an older commit from
+  running that commit's historical publishing workflow with release credentials.
+  It is defense in depth; the creation quarantine remains mandatory because at
+  least one historical publisher did not reference the environment at all.
   Full same-commit CI, dependency/security checks, packaging validation, and
   artifact provenance remain required by the workflow.
 - Publish a new version through the protected release process and independently
-  verify its artifacts. The existing `v0.3.0` release predates these safeguards
-  and must not be overwritten or treated as proof of the current working tree.
+  verify its artifacts. Every existing release through `v0.4.0a3` predates these
+  safeguards, reports `immutable: false`, and must not be overwritten or treated
+  as proof of the current working tree.
 
 ## Read-only evidence checks
 
@@ -110,16 +130,38 @@ python scripts/check_github_production_settings.py \
 ```
 
 The command never writes to GitHub. It reports `PASS`, `FAIL`, or
-`UNVERIFIED`; a missing administrator permission is intentionally not treated
-as proof that a control is disabled. Use `--json` when retaining an audit
-record.
+`UNVERIFIED`; prepublication mode also reports one explicit `DEFERRED` result.
+A missing administrator permission is intentionally not treated as proof that a
+control is disabled. Use `--json` when retaining an audit record.
 
 The default audit uses the solo-maintainer policy and labels branch/release
 results accordingly in both text and JSON. It requires explicit zero-approval,
 no-code-owner, and no-last-push-approval settings; unreadable evidence or another
 effective ruleset's approval requirement cannot silently pass. The release
-environment must have no required-reviewer rule while retaining its tag-only
-deployment policy and disabled administrator bypass. The script remains read-only.
+environment must have no required-reviewer rule while retaining its exact-current-
+candidate deployment policy and disabled administrator bypass. A broad `v*`
+deployment rule fails the audit. Every mode also requires administrator-visible
+`immutable-releases` evidence with `enabled: true`; prepublication mode defers
+the not-yet-created candidate release instance, not this repository setting or
+the integrity of the latest existing release tag. It also requires the exact
+candidate to be absent from both tags and releases so a premature tag or draft
+cannot be mistaken for a valid prepublication state. The script remains read-only.
+
+When rotating from one candidate to the next, avoid a transient open namespace:
+
+1. add the next exact trusted-creator rule while the next tag is still covered
+   by the zero-bypass quarantine;
+2. change the release environment's sole allowed tag to the next exact tag while
+   that tag is still quarantined;
+3. change the quarantine's single exclusion to the next exact tag;
+4. remove the prior candidate's exact creator rule; and
+5. run the prepublication audit successfully before creating the tag.
+
+If a candidate is abandoned, rotate the controls first and never create its tag.
+Already-created release tags are unaffected by adding a creation restriction and
+remain protected by the separate no-bypass update/deletion rule.
+After publishing, rerun the same command without `--prepublication`; all release
+instance, tag, and repository checks must then report `PASS`.
 
 If a second eligible maintainer becomes available and the owner chooses a team
 policy, enable approving/code-owner reviews and independent release reviewers,
@@ -187,6 +229,17 @@ explicit review and an update to that allowlist. Missing policy details are
 unverified, not implicitly passing. Private vulnerability reporting is audited
 through its own endpoint rather than assumed available from an advisory link.
 
+An empty **open** CodeQL inventory does not mean CodeQL found no security
+issue. The repository currently has two explicit high-severity compatibility
+risk acceptances, recorded by immutable alert number and exact GitHub dismissal
+metadata in `.github/codeql-accepted-risks.json`. The audit separately fetches
+all dismissed alerts on the exact `main` ref, requires the high/critical set to
+match that policy with no additions or omissions, binds each instance to the
+current commit, and fails after the earliest `review_by` date. A fixed alert is
+also intentionally a policy failure until its now-stale acceptance is removed.
+Transport or pagination failures remain UNVERIFIED. This control makes the
+residual risk visible; it does not reclassify the vendor cryptography as safe.
+
 From an authenticated GitHub CLI session with repository-admin visibility:
 
 ```shell
@@ -202,9 +255,17 @@ The final audit should show branch protection or an enforced ruleset, at least
 one published release, a protected release-tag policy, enabled Dependabot
 security updates, restricted Actions permissions with SHA-pinning enforcement,
 zero open CodeQL alerts, and successful CI, security, CodeQL, package-smoke,
-dependency-audit, and secret-scan check runs for the merged commit. On a push,
-the dependency-review check may be skipped because it is pull-request-only;
-the branch policy must still require it for pull requests. The latest release
+both dependency-audit matrix jobs, and secret-scan check runs for the merged commit.
+The separate `accepted CodeQL risks` result must also pass. Review or replace
+each acceptance before its policy expiry, and rerun the audit whenever the
+protocol, compatibility evidence, compensating controls, or alert fingerprint
+changes.
+The latest Security audit and CodeQL executions must be no more than eight days
+old (with five minutes of clock-skew tolerance), so a disabled weekly schedule
+cannot leave unchanged `main` looking green indefinitely. DCO
+`check-signoff` and dependency review are pull-request-only, so they have no
+main-push execution; branch policy must still require both for pull requests.
+The latest release
 must also be immutable and use an annotated tag whose commit is reachable from
 `main`.
 

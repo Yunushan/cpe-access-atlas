@@ -1,7 +1,6 @@
 name: Device support research
 description: Propose an exact ISP, device, hardware, and firmware record
 title: "[Device]: "
-labels: ["device-research"]
 body:
   - type: markdown
     attributes:

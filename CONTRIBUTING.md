@@ -52,7 +52,7 @@ person's approval is optional, not mandatory. CODEOWNERS identifies ownership
 without requiring self-approval. Protected `main`, release-tag restrictions,
 and CI/security gates remain in place. See [repository policy](docs/github-production-settings.md).
 
-Use Python 3.11 or newer:
+Use standard CPython 3.11 through 3.15:
 
 ```shell
 python -m pip install --require-hashes -r requirements-ci.lock
@@ -71,8 +71,9 @@ not proof of complete security properties or real-device interoperability.
 The GitHub audit tests use synthetic API evidence and replace external process
 execution, so the test suite does not inspect or change your GitHub settings.
 
-Optionally install the local pre-commit hooks, which run the same checks
-before each commit:
+Optionally install the local pre-commit hooks, which run a fast subset of the
+CI checks before each commit. They do not replace the complete test, coverage,
+generated-reference, archive, or clean-install gates:
 
 ```shell
 python -m pip install pre-commit

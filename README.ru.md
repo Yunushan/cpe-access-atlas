@@ -2,6 +2,12 @@
 
 [English](README.md) · [Türkçe](README.tr.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
+> [!NOTE]
+> Этот обзор синхронизирован 18 сентября 2026 г. Актуальными источниками для
+> ограничений безопасности, новых параметров и проверенной установки являются
+> [английский README](README.md), [политика безопасности](SECURITY.md) и
+> [руководство по установке](docs/installation.md).
+
 Исследования с учетом версии прошивки и безопасные инструменты для
 авторизованного владельцем доступа к модемам и маршрутизаторам турецких
 интернет-провайдеров.
@@ -45,24 +51,34 @@ Telekom, Netspeed, Vodafone Net и Millenicom. Наличие провайдер
 | Обычный Web-admin | Поддерживается провайдером |
 | Привилегированный Web-admin | Заблокирован; требуется исследование |
 | Linux root shell | Не поддерживается |
-| Последняя проверка | 13 августа 2026 г. |
+| Последняя проверка | 13 сентября 2026 г. |
 
 См. [таблицу совместимости](SUPPORT.md) и
 [исследовательскую заметку](docs/research/zte-h3600p-ttn10-260210.md).
 
 ## Быстрый старт
 
-Требуется Python 3.11 или новее. Установка также включает валидатор JSON Schema:
+Требуется стандартный CPython 3.11–3.15. Установка также включает валидатор JSON Schema:
 
 ```shell
-python -m pip install -e .
+python -m venv .venv
+python -m pip --python .venv install --require-hashes -r requirements-ci.lock
+python -m pip --python .venv install -e . --no-deps --no-build-isolation
+python -m pip --python .venv check
+```
+
+Активируйте окружение командой `. .venv/bin/activate` в Linux/macOS или
+`.venv\Scripts\Activate.ps1` в PowerShell. Затем выполните:
+
+```shell
 cpe-atlas providers
 cpe-atlas devices
 cpe-atlas validate
-cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
+
+Установка опубликованного wheel, обновление и откат описаны в
+[руководстве по установке](docs/installation.md).
 
 Проверка одного частного адреса без соединения:
 
@@ -74,13 +90,7 @@ cpe-atlas doctor --host 192.168.1.1
 только чтения:
 
 ```shell
-cpe-atlas root-readiness \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --firmware-input firmware.bin \
-  --expected-sha256 <приватно-сохраненный-sha256>
+cpe-atlas root-readiness --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --firmware-input firmware.bin --expected-sha256 <приватно-сохраненный-sha256>
 ```
 
 Команда хеширует и проверяет файл только как непрозрачный набор байтов; для

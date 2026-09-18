@@ -2,6 +2,13 @@
 
 [English](README.md) · [Türkçe](README.tr.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
+> [!NOTE]
+> Diese Übersicht wurde am 18. September 2026 abgeglichen. Für aktuelle
+> sicherheitskritische Einschränkungen, neue Optionen und verifizierte
+> Installationsschritte gelten die [englische README](README.md), die
+> [Sicherheitsrichtlinie](SECURITY.md) und die
+> [Installationsanleitung](docs/installation.md) als maßgeblich.
+
 Firmwarebezogene Forschung und sichere Werkzeuge für den vom Eigentümer
 autorisierten Zugriff auf Modems und Router türkischer Internetanbieter.
 
@@ -43,24 +50,35 @@ bedeutet nicht, dass alle seine Geräte unterstützt werden.
 | Standard-Webadmin | Vom Anbieter unterstützt |
 | Privilegierter Webadmin | Blockiert; Forschung erforderlich |
 | Linux-Root-Shell | Nicht unterstützt |
-| Letzte Prüfung | 13.08.2026 |
+| Letzte Prüfung | 13.09.2026 |
 
 Siehe [Kompatibilität](SUPPORT.md) und
 [Forschungsnotiz](docs/research/zte-h3600p-ttn10-260210.md).
 
 ## Schnellstart
 
-Python 3.11 oder neuer. Die Installation enthält auch den JSON-Schema-Validator:
+Standard-CPython 3.11–3.15. Die Installation enthält auch den JSON-Schema-Validator:
 
 ```shell
-python -m pip install -e .
+python -m venv .venv
+python -m pip --python .venv install --require-hashes -r requirements-ci.lock
+python -m pip --python .venv install -e . --no-deps --no-build-isolation
+python -m pip --python .venv check
+```
+
+Aktivieren Sie die Umgebung mit `. .venv/bin/activate` unter Linux/macOS oder
+`.venv\Scripts\Activate.ps1` in PowerShell. Führen Sie anschließend aus:
+
+```shell
 cpe-atlas providers
 cpe-atlas devices
 cpe-atlas validate
-cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
+
+Die
+[Installationsanleitung](docs/installation.md) beschreibt Release-Wheels,
+Aktualisierung und Rollback.
 
 Eine private Zieladresse kann ohne Verbindung geprüft werden:
 
@@ -72,13 +90,7 @@ Die schreibgeschützte Bereitschaftsprüfung für die exakte Firmware kann so
 ausgeführt werden:
 
 ```shell
-cpe-atlas root-readiness \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --firmware-input firmware.bin \
-  --expected-sha256 <privat-dokumentierter-sha256>
+cpe-atlas root-readiness --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --firmware-input firmware.bin --expected-sha256 <privat-dokumentierter-sha256>
 ```
 
 Der Befehl hasht und durchsucht die Firmwaredatei nur als undurchsichtige

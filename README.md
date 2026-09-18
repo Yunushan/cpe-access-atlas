@@ -79,9 +79,9 @@ instead of doing something unsafe.
 
 ## Quick start
 
-Requirements: Python 3.11 or newer. Installation also installs the pinned
-major-version range of the JSON Schema validator used by the runtime catalog
-validator.
+Requirements: standard CPython 3.11 through 3.15. Use a dedicated virtual environment and
+the committed hash-locked dependencies so evaluation does not silently resolve
+a different runtime or build backend.
 
 CI targets standard CPython 3.11–3.15 on Windows, Linux, and macOS. Python 3.15
 is currently a release candidate: local compatibility checks use 3.15.0rc2,
@@ -91,12 +91,27 @@ Free-threaded Python and PyPy are not part of this support matrix. Interpreter
 compatibility does not establish modem/config/firmware compatibility.
 
 ```shell
-python -m pip install -e .
+python -m venv .venv
+python -m pip --python .venv install --require-hashes -r requirements-ci.lock
+python -m pip --python .venv install -e . --no-deps --no-build-isolation
+python -m pip --python .venv check
+```
+
+Activate it with `. .venv/bin/activate` on Linux/macOS or
+`.venv\Scripts\Activate.ps1` in PowerShell. Then run:
+
+```shell
 cpe-atlas providers
 cpe-atlas devices
 cpe-atlas recipes
 cpe-atlas validate
 ```
+
+Alternatively, use the executable's full path under `.venv/bin` on Linux/macOS
+and `.venv\Scripts` on Windows. See
+[installation and rollback](docs/installation.md) for verified release-wheel,
+upgrade, rollback, pipx, and removal guidance. There is currently no
+production-stable PyPI distribution.
 
 See [the full CLI reference](docs/cli-reference.md) for every command and
 option, generated directly from the CLI so it cannot drift out of date.
@@ -109,33 +124,19 @@ unit. See [the official device inventory](docs/official-device-inventory.md).
 Check the exact target:
 
 ```shell
-cpe-atlas status \
-  --isp "turk-telekom" \
-  --model "ZTE H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas status --isp "turk-telekom" --model "ZTE H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
 Render the decision plan:
 
 ```shell
-cpe-atlas plan \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210"
+cpe-atlas plan --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210"
 ```
 
 Check root-access readiness without touching the device:
 
 ```shell
-cpe-atlas root-readiness \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --firmware-input firmware.bin \
-  --expected-sha256 <private-recorded-sha256>
+cpe-atlas root-readiness --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --firmware-input firmware.bin --expected-sha256 <private-recorded-sha256>
 ```
 
 This command only hashes and scans the optional firmware file as opaque bytes.
@@ -167,15 +168,7 @@ Collect authenticated, read-only web evidence from an owned H3600P without
 printing the password, cookies, parameter values, or raw pages:
 
 ```shell
-cpe-atlas web-evidence \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --host 192.168.1.1 \
-  --username admin \
-  --i-own-or-administer-this-device \
-  --acknowledge-local-http-authentication
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
 ```
 
 The password is requested with hidden terminal input. The command makes one
@@ -200,12 +193,7 @@ Inspect a private UART boot capture without printing its raw lines, device
 identity values, or possible credentials:
 
 ```shell
-cpe-atlas uart-evidence \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --input h3600p-uart-private.log
+cpe-atlas uart-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --input h3600p-uart-private.log
 ```
 
 The command is offline: it opens no serial port and sends nothing to the
@@ -228,12 +216,7 @@ and older firmware behavior are not exact-build validation.
 Generate a contribution template:
 
 ```shell
-cpe-atlas report-template \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --output h3600p-research.md
+cpe-atlas report-template --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --output h3600p-research.md
 ```
 
 Sanitize a text report before manual review and sharing:
@@ -250,10 +233,7 @@ redaction does not make a `config.bin` safe to upload.
 Inspect a private firmware artifact without executing or changing it:
 
 ```shell
-cpe-atlas firmware-inspect \
-  --input firmware.bin \
-  --expected-version "H3600P V9.0 TTN.10_260210" \
-  --json
+cpe-atlas firmware-inspect --input firmware.bin --expected-version "H3600P V9.0 TTN.10_260210" --json
 ```
 
 This records a SHA-256 hash and scans opaque bytes for complete H3600P build
@@ -275,15 +255,7 @@ private modem backup. The [v0.4.0a2 correction and reference tests](docs/config-
 do not establish safe import or root access on the exact target firmware.
 
 ```shell
-cpe-atlas config-generate \
-  --isp "turk-telekom" \
-  --model "H3600P" \
-  --hardware-revision "V9.0" \
-  --firmware "H3600P V9.0 TTN.10_260210" \
-  --output h3600p-config.bin \
-  --allow-unencrypted \
-  --acknowledge-unverified-compatibility \
-  --i-own-or-administer-this-device
+cpe-atlas config-generate --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --output h3600p-config.bin --allow-unencrypted --acknowledge-unverified-compatibility --i-own-or-administer-this-device
 ```
 
 The command refuses credential-bearing unencrypted output unless
@@ -297,7 +269,10 @@ preserved by default; use `--encrypted` with the serial, MAC, passphrase, and
 or a new template. This acknowledgement is required because the vendor format
 uses legacy SHA-256 derivation and unauthenticated CBC; it does not make the
 artifact a modern secure backup. Passphrases are read locally and never
-printed. Use `--input-xml` only with a private
+printed. To keep device identifiers out of shell history and process listings,
+store exactly `{"serial":"...","mac":"..."}` in a protected UTF-8 JSON file
+and pass `--identity-file` instead of `--serial` and `--mac`. The file is read
+with a 1 KiB bound and its contents are never printed. Use `--input-xml` only with a private
 decoded XML baseline. `--raw` emits the raw binary container. Generated config
 files are atomically written with owner-only POSIX permissions or an explicit,
 protected Windows ACL granted only to the creating account. On Windows, the
@@ -348,23 +323,24 @@ To protect an existing private artifact at rest, use the separate authenticated
 local container format:
 
 ```shell
-cpe-atlas private-protect \
-  --input config.bin \
-  --output config.bin.cpap \
-  --passphrase-stdin \
-  --i-am-authorized-to-handle-this-private-file
+cpe-atlas private-protect --input config.bin --output config.bin.cpap --passphrase-stdin --i-am-authorized-to-handle-this-private-file
 ```
 
-The command uses a fresh salt, scrypt, and AES-GCM authentication. The matching
-`private-unprotect` command restores a private local copy after the same hidden
-passphrase is supplied. This container is **not** a modem-import format and does
-not redact credentials, prove firmware compatibility, or make a backup safe to
-publish. Keep the protected file and passphrase separate; do not commit either
-one or attach them to an issue. The passphrase must contain 12–256 Unicode
-characters, excluding C0/C1 controls, line/paragraph separators, and surrogates.
-This policy is stable across supported Python versions. Preserve its exact text:
-no Unicode normalization or whitespace trimming occurs. Supply it through a
-hidden prompt or a private pipe, never as a command-line argument.
+New containers use format version 2 with a fresh salt, AES-GCM authentication,
+and scrypt parameters `N=2^17`, `r=8`, `p=1`. The matching `private-unprotect`
+command also reads legacy version-1 containers. Re-protect a successfully
+restored version-1 file to migrate it; new writes always use version 2. Unknown
+or excessive KDF parameters are rejected before key derivation. This container
+is **not** a modem-import format and does not redact credentials, prove firmware
+compatibility, or make a backup safe to publish. Keep the protected file and
+passphrase separate; do not commit either one or attach them to an issue. The
+passphrase must contain 12–256 Unicode characters, excluding C0/C1 controls,
+line/paragraph separators, and surrogates. This policy is stable across
+supported Python versions. Preserve its exact text: no Unicode normalization or
+whitespace trimming occurs. Supply it through a hidden prompt or a private pipe,
+never as a command-line argument. See the authenticated local-container section
+of [the cryptography notes](docs/config-cryptography.md#authenticated-local-container)
+for format, resource-cost, and migration details.
 
 ## Access terminology
 

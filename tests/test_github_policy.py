@@ -41,14 +41,34 @@ def actions() -> dict[str, object]:
     }
 
 
-def tags(kinds: tuple[str, ...], bypass: list[object] | None = None) -> dict[str, object]:
+def tags(
+    kinds: tuple[str, ...],
+    bypass: list[object] | None = None,
+    *,
+    include: list[object] | None = None,
+    exclude: list[object] | None = None,
+) -> dict[str, object]:
     return {
         "target": "tag",
         "enforcement": "active",
-        "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+        "conditions": {
+            "ref_name": {
+                "include": ["refs/tags/v*"] if include is None else include,
+                "exclude": [] if exclude is None else exclude,
+            }
+        },
         "rules": [{"type": kind} for kind in kinds],
         "bypass_actors": [] if bypass is None else bypass,
     }
+
+
+def release_tags(*actors: object) -> list[dict[str, object]]:
+    candidate = f"refs/tags/{audit._CANDIDATE_RELEASE_TAG}"
+    return [
+        tags(("creation",), include=["refs/tags/v*"], exclude=[candidate]),
+        tags(("creation",), list(actors), include=[candidate]),
+        tags(("update", "deletion")),
+    ]
 
 
 def environment(*, require_independent_review: bool = True) -> dict[str, object]:
@@ -72,7 +92,7 @@ def environment_api(value: object) -> Api:
         {
             "environments/release": value,
             "environments/release/deployment-branch-policies?per_page=100": {
-                "branch_policies": [{"id": 1, "name": "v*", "type": "tag"}],
+                "branch_policies": [{"id": 1, "name": audit._CANDIDATE_RELEASE_TAG, "type": "tag"}],
                 "total_count": 1,
             },
         }
@@ -91,6 +111,10 @@ def branch_protection(*, require_independent_review: bool = True) -> dict[str, o
         "required_status_checks": {
             "strict": True,
             "contexts": sorted(audit._REQUIRED_BRANCH_CHECKS),
+            "checks": [
+                {"context": name, "app_id": audit._GITHUB_ACTIONS_APP_ID}
+                for name in sorted(audit._REQUIRED_BRANCH_CHECKS)
+            ],
         },
         "enforce_admins": {"enabled": True},
         "allow_force_pushes": {"enabled": False},
@@ -107,6 +131,34 @@ def branch_api(value: object) -> Api:
             "branches/main": {"protected": False},
         }
     )
+
+
+class GitHubCheckBindingTests(unittest.TestCase):
+    def test_classic_branch_checks_must_be_bound_to_github_actions(self) -> None:
+        policy = branch_protection(require_independent_review=False)
+        checks = policy["required_status_checks"]["checks"]
+        checks[0]["app_id"] = 1
+        result = audit._audit_branch_policy(
+            branch_api(policy), [], [], require_independent_review=False
+        )
+        self.assertEqual(result.status, audit.STATUS_FAIL)
+        self.assertIn("missing checks", result.detail)
+
+        for malformed in (
+            {"name": checks[0]["context"], "app_id": audit._GITHUB_ACTIONS_APP_ID},
+            {
+                "context": checks[0]["context"],
+                "app_id": float(audit._GITHUB_ACTIONS_APP_ID),
+            },
+        ):
+            with self.subTest(malformed=malformed):
+                policy = branch_protection(require_independent_review=False)
+                policy["required_status_checks"]["checks"][0] = malformed
+                result = audit._audit_branch_policy(
+                    branch_api(policy), [], [], require_independent_review=False
+                )
+                self.assertEqual(result.status, audit.STATUS_FAIL)
+                self.assertIn("missing checks", result.detail)
 
 
 class GitHubPolicyTests(unittest.TestCase):
@@ -146,7 +198,7 @@ class GitHubPolicyTests(unittest.TestCase):
                 audit.STATUS_FAIL,
             )
         item = copy.deepcopy(baseline)
-        item["required_status_checks"]["contexts"].pop()
+        item["required_status_checks"]["checks"].pop()
         self.assertEqual(
             audit._audit_branch_policy(
                 branch_api(item), [], [], require_independent_review=False
@@ -173,7 +225,11 @@ class GitHubPolicyTests(unittest.TestCase):
                 "parameters": {
                     "strict_required_status_checks_policy": True,
                     "required_status_checks": [
-                        {"context": name} for name in audit._REQUIRED_BRANCH_CHECKS
+                        {
+                            "context": name,
+                            "integration_id": audit._GITHUB_ACTIONS_APP_ID,
+                        }
+                        for name in audit._REQUIRED_BRANCH_CHECKS
                     ],
                 },
             },
@@ -321,7 +377,7 @@ class GitHubPolicyTests(unittest.TestCase):
                 audit._audit_branch_policy(branch_api(value), [], []).status, audit.STATUS_FAIL
             )
         value = branch_protection()
-        value["required_status_checks"]["contexts"].pop()
+        value["required_status_checks"]["checks"].pop()
         result = audit._audit_branch_policy(branch_api(value), [], [])
         self.assertEqual(result.status, audit.STATUS_FAIL)
         self.assertIn("missing checks", result.detail)
@@ -377,7 +433,11 @@ class GitHubPolicyTests(unittest.TestCase):
                 "parameters": {
                     "strict_required_status_checks_policy": True,
                     "required_status_checks": [
-                        {"context": name} for name in audit._REQUIRED_BRANCH_CHECKS
+                        {
+                            "context": name,
+                            "integration_id": audit._GITHUB_ACTIONS_APP_ID,
+                        }
+                        for name in audit._REQUIRED_BRANCH_CHECKS
                     ],
                 },
             },
@@ -425,7 +485,11 @@ class GitHubPolicyTests(unittest.TestCase):
                 "parameters": {
                     "strict_required_status_checks_policy": True,
                     "required_status_checks": [
-                        {"context": name} for name in audit._REQUIRED_BRANCH_CHECKS
+                        {
+                            "context": name,
+                            "integration_id": audit._GITHUB_ACTIONS_APP_ID,
+                        }
+                        for name in audit._REQUIRED_BRANCH_CHECKS
                     ],
                 },
             },
@@ -522,17 +586,33 @@ class GitHubPolicyTests(unittest.TestCase):
         trusted = frozenset({("User", 123)})
         combined = tags(("creation", "update", "deletion"), [owner])
         self.assertEqual(audit._audit_tag_policy([combined], trusted).status, audit.STATUS_FAIL)
-        policies = [tags(("creation",), [owner]), tags(("update",)), tags(("deletion",))]
+        policies = release_tags(owner)
         self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_PASS)
         self.assertEqual(audit._audit_tag_policy(policies).status, audit.STATUS_FAIL)
-        policies[0]["bypass_actors"] = [
+        policies[1]["bypass_actors"] = [
             {"actor_type": "RepositoryRole", "actor_id": 4, "bypass_mode": "always"}
         ]
         self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_FAIL)
 
     def test_tag_rules_require_full_coverage_and_visible_bypasses(self) -> None:
-        policy = tags(("creation", "update", "deletion"))
-        self.assertEqual(audit._audit_tag_policy([policy]).status, audit.STATUS_FAIL)
+        owner = {"actor_type": "User", "actor_id": 123, "bypass_mode": "always"}
+        trusted = frozenset({("User", 123)})
+        policies = release_tags(owner)
+        self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_PASS)
+
+        # Unrelated tag rules do not weaken the required release-tag rules, but
+        # any matching update/deletion bypass is an explicit policy failure.
+        unrelated = tags(("required_signatures",))
+        other_namespace = tags(("update",), include=["refs/tags/internal-*"])
+        self.assertEqual(
+            audit._audit_tag_policy([*policies, unrelated, other_namespace], trusted).status,
+            audit.STATUS_PASS,
+        )
+        bypassed_mutation = tags(("update",), [owner])
+        self.assertEqual(
+            audit._audit_tag_policy([*policies, bypassed_mutation], trusted).status,
+            audit.STATUS_FAIL,
+        )
         for field, value, expected in (
             ("bypass_actors", None, audit.STATUS_UNKNOWN),
             ("rules", None, audit.STATUS_UNKNOWN),
@@ -540,18 +620,28 @@ class GitHubPolicyTests(unittest.TestCase):
             ("target", "branch", audit.STATUS_FAIL),
             ("enforcement", "disabled", audit.STATUS_FAIL),
         ):
-            item = copy.deepcopy(policy)
-            item[field] = value
-            self.assertEqual(audit._audit_tag_policy([item]).status, expected)
-        for refs, expected in (
-            ({"include": None, "exclude": []}, audit.STATUS_UNKNOWN),
-            ({"include": ["refs/tags/v*"], "exclude": None}, audit.STATUS_UNKNOWN),
-            ({"include": ["refs/tags/v*"], "exclude": ["refs/tags/v2*"]}, audit.STATUS_UNKNOWN),
-            ({"include": ["refs/tags/v1*"], "exclude": []}, audit.STATUS_UNKNOWN),
+            items = copy.deepcopy(policies)
+            items[0][field] = value
+            self.assertEqual(audit._audit_tag_policy(items, trusted).status, expected)
+        malformed_refs = (
+            {"include": None, "exclude": []},
+            {"include": ["refs/tags/v*"], "exclude": None},
+            {"include": [None], "exclude": []},
+            {"include": ["refs/tags/v*"], "exclude": [None]},
+        )
+        for refs in malformed_refs:
+            items = copy.deepcopy(policies)
+            items[0]["conditions"]["ref_name"] = refs
+            self.assertEqual(audit._audit_tag_policy(items, trusted).status, audit.STATUS_UNKNOWN)
+        for index, refs in (
+            (0, {"include": ["refs/tags/v*"], "exclude": []}),
+            (0, {"include": ["refs/tags/v1*"], "exclude": []}),
+            (1, {"include": ["refs/tags/v*"], "exclude": []}),
+            (2, {"include": ["refs/tags/v*"], "exclude": ["refs/tags/v1*"]}),
         ):
-            item = copy.deepcopy(policy)
-            item["conditions"]["ref_name"] = refs
-            self.assertEqual(audit._audit_tag_policy([item]).status, expected)
+            items = copy.deepcopy(policies)
+            items[index]["conditions"]["ref_name"] = refs
+            self.assertEqual(audit._audit_tag_policy(items, trusted).status, audit.STATUS_FAIL)
         for value in (None, {}, [None]):
             self.assertEqual(audit._audit_tag_policy(value).status, audit.STATUS_UNKNOWN)
 
@@ -559,15 +649,14 @@ class GitHubPolicyTests(unittest.TestCase):
         owner = {"actor_type": "User", "actor_id": 1, "bypass_mode": "always"}
         other = {"actor_type": "User", "actor_id": 2, "bypass_mode": "always"}
         trusted = frozenset({("User", 1), ("User", 2)})
-        policies = [
-            tags(("creation",), [owner, other]),
-            tags(("creation",), [owner]),
-            tags(("update", "deletion")),
-        ]
+        policies = release_tags(owner, other)
         self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_PASS)
-        policies[0]["bypass_actors"] = [other]
+        candidate = f"refs/tags/{audit._CANDIDATE_RELEASE_TAG}"
+        policies.insert(2, tags(("creation",), [owner], include=[candidate]))
+        self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_PASS)
+        policies[1]["bypass_actors"] = [other]
         self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_FAIL)
-        policies[0]["bypass_actors"] = []
+        policies[1]["bypass_actors"] = []
         self.assertEqual(audit._audit_tag_policy(policies, trusted).status, audit.STATUS_FAIL)
 
     def test_release_environment_requires_real_independent_review(self) -> None:
@@ -637,10 +726,14 @@ class GitHubPolicyTests(unittest.TestCase):
         for policies in (
             [],
             [{"name": "*", "type": "tag"}],
+            [{"name": "v*", "type": "tag"}],
             [{"name": "v*", "type": "branch"}],
             [{"name": "main", "type": "branch"}],
             [None],
-            [{"name": "v*", "type": "tag"}, {"name": "*", "type": "branch"}],
+            [
+                {"name": audit._CANDIDATE_RELEASE_TAG, "type": "tag"},
+                {"name": "*", "type": "branch"},
+            ],
         ):
             api = environment_api(environment())
             api.records["environments/release/deployment-branch-policies?per_page=100"] = {
@@ -674,3 +767,19 @@ class GitHubPolicyTests(unittest.TestCase):
                 ).status,
                 expected,
             )
+
+    def test_release_immutability_setting_requires_explicit_enabled_evidence(self) -> None:
+        for value, expected in (
+            ({"enabled": True}, audit.STATUS_PASS),
+            ({"enabled": False}, audit.STATUS_FAIL),
+            ({}, audit.STATUS_UNKNOWN),
+            ({"enabled": None}, audit.STATUS_UNKNOWN),
+            ((None, "HTTP 403"), audit.STATUS_UNKNOWN),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    audit._audit_release_immutability_setting(
+                        Api({"immutable-releases": value})
+                    ).status,
+                    expected,
+                )

@@ -54,6 +54,8 @@ from .report import build_research_template
 from .uart_evidence import UartEvidenceError, inspect_uart_log
 from .web_evidence import WebEvidenceError, collect_zte_web_evidence
 
+MAX_CONFIG_IDENTITY_BYTES = 1_024
+
 
 def _recipe_from_args(args: argparse.Namespace) -> Recipe:
     return find_recipe(
@@ -399,6 +401,27 @@ def _read_private_file(path: str | Path, maximum: int, label: str) -> bytes:
     return data
 
 
+def _config_identity(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Read device identifiers without requiring command-line disclosure."""
+
+    if args.identity_file is None:
+        return args.serial, args.mac
+    if args.serial is not None or args.mac is not None:
+        raise ConfigError("--identity-file cannot be combined with --serial or --mac")
+    data = _read_private_file(args.identity_file, MAX_CONFIG_IDENTITY_BYTES, "device identity file")
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise ConfigError("device identity file must contain bounded UTF-8 JSON") from exc
+    if not isinstance(value, dict) or set(value) != {"serial", "mac"}:
+        raise ConfigError("device identity file must contain exactly serial and mac fields")
+    serial = value["serial"]
+    mac = value["mac"]
+    if not isinstance(serial, str) or not isinstance(mac, str):
+        raise ConfigError("device identity serial and mac fields must be strings")
+    return serial, mac
+
+
 def command_config_generate(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
     if not args.i_own_or_administer_this_device:
@@ -427,6 +450,8 @@ def command_config_generate(args: argparse.Namespace) -> int:
             "while accepting that the target may reject it and recovery may be unavailable"
         )
 
+    serial, mac = _config_identity(args)
+
     output = Path(args.output)
     baseline = args.input_config or args.input_xml
     if baseline is not None and _paths_alias(Path(baseline), output):
@@ -452,8 +477,10 @@ def command_config_generate(args: argparse.Namespace) -> int:
         if metadata.signature not in (None, H3600P_SIGNATURE):
             raise ConfigError("configuration baseline signature does not match the selected codec")
         private_config_encrypted = metadata.encrypted
-        if private_config_encrypted and (not args.serial or not args.mac):
-            raise ConfigError("encrypted input requires --serial and --mac for local decryption")
+        if private_config_encrypted and (not serial or not mac):
+            raise ConfigError(
+                "encrypted input requires --serial/--mac or --identity-file for local decryption"
+            )
         source_xml = None
     elif args.input_xml:
         source_label = "private XML baseline"
@@ -466,8 +493,8 @@ def command_config_generate(args: argparse.Namespace) -> int:
         raise ConfigError(
             "unencrypted output requires explicit --allow-unencrypted acknowledgement"
         )
-    if encrypted_output and (not args.serial or not args.mac):
-        raise ConfigError("encrypted output requires --serial and --mac")
+    if encrypted_output and (not serial or not mac):
+        raise ConfigError("encrypted output requires --serial/--mac or --identity-file")
     if encrypted_output and not args.acknowledge_legacy_crypto:
         raise ConfigError(
             "vendor-compatible encryption uses legacy SHA-256 derivation and unauthenticated "
@@ -493,8 +520,8 @@ def command_config_generate(args: argparse.Namespace) -> int:
         decoded = decode_config(
             private_config,
             device_key=device_key,
-            serial=args.serial,
-            mac=args.mac,
+            serial=serial,
+            mac=mac,
         )
         source_xml = decoded.xml
     if encrypted_output and device_key is None:
@@ -516,14 +543,14 @@ def command_config_generate(args: argparse.Namespace) -> int:
         base64_wrap=not args.raw,
         encrypted=encrypted_output,
         device_key=device_key,
-        serial=args.serial,
-        mac=args.mac,
+        serial=serial,
+        mac=mac,
     )
     verification = decode_config(
         artifact,
         device_key=device_key if encrypted_output else None,
-        serial=args.serial if encrypted_output else None,
-        mac=args.mac if encrypted_output else None,
+        serial=serial if encrypted_output else None,
+        mac=mac if encrypted_output else None,
     )
     if verification.xml != source_xml:
         raise ConfigError("generated configuration failed its in-memory round-trip check")
@@ -950,6 +977,10 @@ def build_parser() -> argparse.ArgumentParser:
     config_generate.add_argument(
         "--mac",
         help="lower-case colon-separated device MAC required for type-4 crypto",
+    )
+    config_generate.add_argument(
+        "--identity-file",
+        help="private bounded JSON file containing serial and mac instead of CLI values",
     )
     config_generate.add_argument("--signature", default=H3600P_SIGNATURE)
     output_format = config_generate.add_mutually_exclusive_group()

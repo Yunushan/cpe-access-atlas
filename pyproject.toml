@@ -7,7 +7,7 @@ name = "cpe-access-atlas"
 dynamic = ["version"]
 description = "Owner-authorized, firmware-aware access research for ISP-provided modems and routers"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.16"
 license = "0BSD"
 license-files = ["LICENSE"]
 authors = [

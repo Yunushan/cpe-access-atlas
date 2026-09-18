@@ -13,10 +13,25 @@ setting is not evidence of enforcement. Keep this administrator check outside
 the release job so its token does not gain repository-administration privileges.
 Before creating a tag:
 
-1. Confirm the catalog, schemas, documentation, and a matching version heading
-   in `CHANGELOG.md` describe the same version.
+1. Confirm the catalog, schemas, documentation, and the release entry in
+   `CHANGELOG.md` describe the same version. The candidate must be the first H2
+   immediately after the fixed changelog introduction, use the exact version
+   and an ISO release date, and have no second heading-like occurrence for that
+   version. `Unreleased`, displaced entries, and prefix matches fail; ordinary
+   prose that merely mentions the version remains valid.
 2. Run the development checks from `CONTRIBUTING.md`.
-3. Build both artifacts and validate them in clean environments:
+3. For early feedback, manually dispatch **Release preflight** from the
+   candidate commit on `main` with the intended `vX.Y.Z` tag. This recommended,
+   non-publishing workflow first rejects a non-`main` ref or invalid candidate
+   metadata, then reruns the reusable source, dependency, secret, and CodeQL
+   validations and confirms the commit is the current `main` head,
+   requires an empty readable **open** CodeQL alert inventory, and requires the
+   exact dismissed high/critical alerts on that same ref and commit to match the
+   unexpired `.github/codeql-accepted-risks.json` policy. It has no contents-write,
+   attestation-write, or OIDC permission and cannot create a release.
+   Its result is not trusted as a publication authorization: the tag-triggered
+   workflow reruns the substantive checks against the exact tagged commit.
+4. Build both artifacts and validate them in clean environments:
 
    ```shell
    python -m pip install --require-hashes -r requirements-release.lock
@@ -25,14 +40,43 @@ Before creating a tag:
    python -m twine check dist/*
    ```
 
-4. Review the candidate yourself as the solo maintainer, then create an
+5. Review the candidate yourself as the solo maintainer, then create an
    annotated `vX.Y.Z` tag and push it through the protected release process.
+   Before pushing, make the `release` environment's sole deployment policy that
+   exact tag—not `v*`—and rotate the candidate-only tag-creation rules as
+   described in `docs/github-production-settings.md`. Run the read-only
+   prepublication audit before any tag is created:
+
+   ```shell
+   python scripts/check_github_production_settings.py \
+     --repo Yunushan/cpe-access-atlas --prepublication
+   ```
+
+   It must exit successfully with only `published release` marked `DEFERRED`;
+   every other result, including `candidate absence` and the existing latest
+   release-tag integrity, must be `PASS`.
    A second person's approval is optional, not a required PR or release gate.
    Automated checks and the protected tag/environment controls still apply.
 
 The workflow rejects a tag unless it is annotated, exactly matches the package
-version, has a matching `CHANGELOG.md` heading, and points to a commit
-reachable from `main`, for example `v0.4.0a1` for package version `0.4.0a1`.
+version, has a unique exact and dated `CHANGELOG.md` heading, and points to the
+current `main` head, for example `v0.4.0a1` for package version `0.4.0a1`. A
+version bump is part of every release candidate so the current workflow rejects
+an older version. Workflow definitions are nevertheless resolved from the tagged
+commit, so this source-level gate cannot retroactively harden old commits. The
+rotating tag-creation quarantine is the mandatory external fail-closed boundary:
+it blocks historical tag pushes before GitHub can select and run an old workflow.
+The exact-tag `release` environment policy adds a second boundary for every
+historical publisher that used that environment.
+
+`v0.2.0` and `v0.4.0a4` are permanently skipped. Commit
+`c73cbc9ce235d4cf94702130304b50bb7d33f2c4` declared `0.2.0` in a historical
+publisher that did not use the `release` environment. Commit
+`e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
+while carrying the earlier broad publishing workflow. Never create or publish
+either tag. Keep the creation quarantine open only for `v0.4.0a5` and bind the
+environment to that same exact candidate. A broad creation bypass or `v*`
+environment rule would reopen a historical-workflow path.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen
@@ -42,11 +86,22 @@ checks or independent push workflows cannot satisfy this dependency graph.
 No publishing job runs if a prerequisite workflow fails or is cancelled.
 The pull-request-only dependency-review job remains intentionally skipped on
 release-tag pushes; dependency-audit still runs and is required.
+Dependency audit uses Python 3.11 and 3.14 on Linux so every supported
+`python_full_version` marker branch in all five distributed lock files is
+installed and scanned; one interpreter cannot activate both sides of the
+pre-3.12/pre-3.13 dependency boundaries.
 Validation workflows run on pull requests and on pushes to `main`; feature
 branch pushes are not run a second time when the same commit is tested by its
 pull request. The release job also queries the open CodeQL alert inventory and
-stops before building or publishing if any alert remains. An inaccessible
-alert inventory is a failure, not an implicit clean result.
+scopes that query to the exact analyzed tag ref; it stops before building or
+publishing if any alert remains. It then fetches dismissed alerts separately
+and requires the exact high/critical set, alert numbers, dismissal metadata,
+tag ref, tag commit, exact-instance dismissed state, and review dates recorded in
+`.github/codeql-accepted-risks.json`. Missing, fixed-but-still-listed, expired,
+changed, or additional high/critical dismissals fail. An inaccessible or
+partially paginated inventory is a failure, not an implicit clean result.
+Passing these gates means the two documented compatibility risks were explicitly
+accepted and remain under review; it does not mean CodeQL produced zero findings.
 
 Python 3.15 is included in both matrices, with prerelease fallback until final
 is available. Each 3.15 CI job also builds wheel/sdist artifacts, tests the
@@ -67,7 +122,16 @@ into 3.14. A final check requires a nonempty inventory and exact name/version
 agreement with the SBOM, rejecting missing, extra, or duplicated components.
 Audit failures still block publication; there are no vulnerability exemptions.
 
-Publishing permissions remain confined to the final release job. The reusable
+Publishing permissions remain confined to the final release job. The read-only
+validation job builds, tests, and uploads a candidate bundle; the protected
+publishing job neither checks out, installs, nor imports tagged project code.
+It accepts only the exact wheel, source archive, fifteen named SBOMs, and a
+checksum manifest listing exactly those seventeen artifacts before attestation
+or publication. After the environment gate, it resolves both the annotated tag
+and `refs/heads/main` again, requiring each target to remain the validated
+`GITHUB_SHA` immediately before attestation. It repeats the same live checks
+after attestation and immediately before publication, so a main-branch advance
+during attestation also fails closed. The reusable
 checks do not inherit release secrets, contents-write, attestation-write, or
 OIDC permissions; only CodeQL gets the security-events permission needed to
 upload its analysis. Successful analysis is not proof of an empty alert
@@ -119,16 +183,18 @@ build provenance. A release is not
 considered supported until its artifacts have also been installed and
 validated from the published release itself.
 
-For a release declaring Python 3.11–3.15, the required asset count is 18: wheel,
-source archive, checksum manifest, and 15 SBOMs. The repository audit derives
+For a release declaring Python 3.11–3.15, the required asset inventory is
+exactly 18 files: wheel, source archive, checksum manifest, and 15 SBOMs; extra
+assets fail both the publishing boundary and repository audit. The audit derives
 the inventory from that release commit's classifiers; older releases declaring
 only 3.11–3.14 still require 15 assets, not retroactive 3.15 inventories.
 
 Alpha/Beta package metadata and prerelease/development version identifiers must
 be published as a GitHub prerelease. Publication uses `--verify-tag` so a tag
 removed after validation cannot be silently recreated by the release command.
-Existing published assets are never overwritten by a rerun: release a new version when
-artifacts change. The existing v0.3.0 release predates these safeguards.
+Existing published assets are never overwritten by a rerun: release a new version
+when artifacts change. Every existing release through `v0.4.0a3` predates these
+safeguards and currently reports `immutable: false`.
 
 The current `gh release create` command attaches every asset before publication:
 GitHub CLI creates a draft, uploads the files, and then publishes it, which is
@@ -140,6 +206,18 @@ the repository setting was disabled. Preserve that release, correct the setting,
 and prepare a new version. Do not delete or replace published assets to make a
 failed verification look successful. See the
 [GitHub CLI release-create reference](https://cli.github.com/manual/gh_release_create).
+
+Immediately after publication, rerun the production-settings audit without
+`--prepublication`:
+
+```shell
+python scripts/check_github_production_settings.py \
+  --repo Yunushan/cpe-access-atlas
+```
+
+Every result must now be `PASS`; `DEFERRED` is accepted only before the candidate
+exists. A release with a failed or unverifiable postpublication audit is not a
+supported release, even if the publishing job itself completed.
 
 ## Published-artifact verification
 
@@ -174,7 +252,8 @@ Inspect the authenticated checksum manifest: it must list each expected wheel,
 source archive, and OS/Python SBOM exactly once, with no unexpected paths. The
 current workflow records `dist/`-prefixed filenames. From the isolated directory
 containing `dist`, verify all listed SHA-256 values; for example, on Linux,
-`sha256sum --check dist/SHA256SUMS`. Any missing asset, mismatch, untrusted signer,
+`sha256sum --check --strict dist/SHA256SUMS`. Any missing asset, malformed
+manifest line, mismatch, untrusted signer,
 wrong source commit, or unavailable attestation means verification is incomplete.
 
 Only then repeat clean wheel/sdist installation and catalog validation using
@@ -182,6 +261,23 @@ hash-verified dependency locks from that same reviewed release commit. Preserve
 verification results and cross-platform CI evidence. Checksums alone establish
 consistency, not authorship; attestations do not replace source review or device
 compatibility and recovery testing.
+
+## Security incident and release revocation
+
+Handle a suspected vulnerability, credential compromise, or malicious release
+privately until coordinated disclosure is safe. Freeze publication, preserve
+logs and immutable artifacts, rotate affected GitHub credentials, and review
+workflow, environment, ruleset, and audit-log changes. Do not delete or replace
+an immutable asset or move its tag: publish any correction under a new version.
+
+Use a private GitHub security advisory for assessment and the fix when
+available. Mark affected public releases with a clear warning, update the
+supported-version statement, and publish a patched release through the complete
+protected workflow. Re-run provenance, checksum, clean-install, repository-
+settings, and post-publication verification. If provenance or signing authority
+may be compromised, explicitly state that prior attestations are not trusted
+until the compromise boundary has been established. After disclosure, retain a
+timeline and corrective-action record without exposing reporter or device data.
 
 ## Dependency lock maintenance
 
@@ -217,7 +313,7 @@ Repository administrators should also keep these GitHub controls enabled:
 
 - pull requests and passing CI, security, and CodeQL checks on `main`, with
   zero mandatory approvals under the solo-maintainer policy;
-- signed or verified release tags and no direct pushes to `main`;
+- annotated, protected release tags and no direct pushes to `main`;
 - release immutability enabled, with the latest publication confirmed immutable;
 - Dependabot security updates and alerts;
 - secret scanning and push protection;

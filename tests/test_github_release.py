@@ -170,7 +170,18 @@ class GitHubReleaseTests(unittest.TestCase):
         records = fixture()
         records["releases?per_page=100"] *= 2
         self.assertEqual(audit._audit_release(Api(records)).status, audit.STATUS_UNKNOWN)
-        for tag in (None, "v0.4.0/../main", "latest", "v" + "1" * 129):
+        for tag in (
+            None,
+            "v0.4.0/../main",
+            "latest",
+            "v" + "1" * 129,
+            "v00.4.0",
+            "v0.04.0",
+            "v0.4.00",
+            "v0.4.0rc01",
+            "v0.4.0.post01",
+            "v0.4.0.dev01",
+        ):
             records = fixture()
             records["releases?per_page=100"][0]["tag_name"] = tag
             self.assertEqual(audit._audit_release(Api(records)).status, audit.STATUS_FAIL)
@@ -280,14 +291,40 @@ class GitHubReleaseTests(unittest.TestCase):
             {
                 "id": 1,
                 "name": "not-a-package.whl.tar.gz.sbom.cdx.json.SHA256SUMS.txt",
-                "size": 0,
-                "state": "new",
+                "size": 123,
+                "state": "uploaded",
+                "digest": "sha256:" + "d" * 64,
             }
         ]
         result = audit._audit_release(Api(records))
         self.assertEqual(result.status, audit.STATUS_FAIL)
         self.assertIn("missing required", result.detail)
         self.assertIn("windows-latest-python3.11-sbom.cdx.json", result.detail)
+
+    def test_unexpected_release_asset_is_rejected_even_with_valid_metadata(self) -> None:
+        records = fixture()
+        records["releases/2/assets?per_page=100"].append(
+            {
+                "id": 99,
+                "name": "unreviewed-installer.exe",
+                "size": 123,
+                "state": "uploaded",
+                "digest": "sha256:" + "e" * 64,
+            }
+        )
+        result = audit._audit_release(Api(records))
+        self.assertEqual(result.status, audit.STATUS_FAIL)
+        self.assertIn("unexpected release assets", result.detail)
+        self.assertIn("unreviewed-installer.exe", result.detail)
+
+    def test_unexpected_asset_metadata_is_validated_before_inventory(self) -> None:
+        records = fixture()
+        records["releases/2/assets?per_page=100"].append(
+            {"id": 99, "name": "extra.bin", "size": 0, "state": "new", "digest": None}
+        )
+        result = audit._audit_release(Api(records))
+        self.assertEqual(result.status, audit.STATUS_FAIL)
+        self.assertIn("must be uploaded, nonempty", result.detail)
 
     def test_every_environment_inventory_and_each_separate_distribution_is_required(self) -> None:
         baseline = fixture()
