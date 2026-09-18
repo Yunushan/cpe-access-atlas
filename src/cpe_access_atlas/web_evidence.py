@@ -66,6 +66,7 @@ _ROOT_RESEARCH_MARKERS: dict[str, tuple[bytes, ...]] = {
     "root_literal": (b"root",),
     "configuration_export": (b"configdownload", b"configexport", b"backupconfig"),
 }
+_ROOT_LITERAL = re.compile(rb"(?<![a-z0-9_])root(?![a-z0-9_])")
 
 _READ_ONLY_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("authenticated_root", "/"),
@@ -257,10 +258,14 @@ def _bounded_ascii_matches(pattern: re.Pattern[bytes], body: bytes) -> tuple[lis
 
 def _marker_presence(body: bytes) -> dict[str, bool]:
     lowered = body.lower()
-    return {
+    markers = {
         label: any(marker in lowered for marker in markers)
         for label, markers in _ROOT_RESEARCH_MARKERS.items()
     }
+    # The normal ajax_response_xml_root wrapper and Buildroot/rootfs strings
+    # do not establish the presence of a standalone root token.
+    markers["root_literal"] = _ROOT_LITERAL.search(lowered) is not None
+    return markers
 
 
 def _page_access_entries(body: bytes) -> list[_PageAccessEvidence]:

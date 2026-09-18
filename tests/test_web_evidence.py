@@ -272,6 +272,54 @@ class WebEvidenceTests(unittest.TestCase):
                     collect_zte_web_evidence(**arguments)
         self.assertEqual(FakeConnection.requests, [])
 
+    def test_normal_status_xml_does_not_report_a_root_literal(self) -> None:
+        status_xml = (
+            b"<ajax_response_xml_root><ParaName>SoftwareVersion</ParaName>"
+            b"<ParaValue>H3600P V9.0 TTN.10_260210</ParaValue></ajax_response_xml_root>"
+        )
+        with patch(
+            "cpe_access_atlas.web_evidence._request",
+            side_effect=[
+                response(b'{"lockingTime":0,"sess_token":"session"}'),
+                response(b"<ajax_response_xml_root>challenge</ajax_response_xml_root>"),
+                response(b'{"login_need_refresh":true}'),
+                response(b"<html>Device status</html>"),
+                response(b"<html>Buildroot rootfs</html>"),
+                response(status_xml),
+            ],
+        ):
+            result = collect_zte_web_evidence(
+                "192.168.1.1",
+                "admin",
+                "secret",
+                timeout=5,
+                expected_firmware="H3600P V9.0 TTN.10_260210",
+                expected_model="H3600P V9",
+                expected_hardware="V9.0",
+            )
+        self.assertFalse(result["observed_root_research_string_markers"]["root_literal"])
+        self.assertFalse(
+            result["endpoints"]["status_data"]["root_research_string_markers"]["root_literal"]
+        )
+
+    def test_root_literal_requires_a_standalone_token(self) -> None:
+        cases = (
+            (b"ajax_response_xml_root Buildroot rootfs root_account", False),
+            (b"ROOT", True),
+            (b'<input value="root">', True),
+            (b"<ParaValue>root</ParaValue>", True),
+            (b"/root/.ssh", True),
+        )
+        for body, expected in cases:
+            with self.subTest(body=body):
+                evidence = _endpoint_evidence(
+                    response(body),
+                    expected_firmware="firmware",
+                    expected_model="model",
+                    expected_hardware="hardware",
+                )
+                self.assertEqual(evidence["root_research_string_markers"]["root_literal"], expected)
+
     def test_collect_rejects_failed_login_without_status_requests(self) -> None:
         with patch(
             "cpe_access_atlas.web_evidence._request",

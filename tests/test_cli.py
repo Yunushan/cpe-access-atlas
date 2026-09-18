@@ -938,10 +938,29 @@ class CliTests(unittest.TestCase):
 
     def test_uart_evidence_errors_are_controlled(self) -> None:
         code, stdout, stderr = self.run_cli(
-            ["uart-evidence", *TARGET, "--input", "does-not-exist.log"]
+            ["uart-evidence", *TARGET, "--input", "PRIVATE-SUBSCRIBER/missing.log"]
         )
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("UART log does not exist", stderr)
+        self.assertNotIn("PRIVATE-SUBSCRIBER", stderr)
+
+    def test_uart_evidence_filesystem_errors_hide_private_paths(self) -> None:
+        source = "PRIVATE-SUBSCRIBER/capture.log"
+        recipe = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        for operation in ("is_file", "open"):
+            with self.subTest(operation=operation):
+                with (
+                    patch("cpe_access_atlas.cli._recipe_from_args", return_value=recipe),
+                    patch.object(Path, "is_file", return_value=True),
+                ):
+                    with patch.object(
+                        Path, operation, side_effect=PermissionError(13, "denied", source)
+                    ):
+                        code, stdout, stderr = self.run_cli(
+                            ["uart-evidence", *TARGET, "--input", source]
+                        )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertEqual(stderr, "ERROR: unable to read UART log\n")
 
     def test_public_target_is_rejected(self) -> None:
         code, _, stderr = self.run_cli(["doctor", "--host", "1.1.1.1"])

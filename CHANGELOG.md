@@ -4,6 +4,9 @@ All notable changes are documented here.
 
 ## 0.4.0a4 - Unreleased
 
+- Require a standalone `root` token in web evidence so ordinary XML wrappers,
+  Buildroot, and rootfs do not trigger the marker. Keep private UART paths out
+  of missing-file and filesystem-error diagnostics.
 - Add an offline `uart-evidence` command for private H3600P boot captures. It
   recognizes bounded bootloader, kernel, SoC, hardware, prompt, and secure-boot
   markers while omitting raw lines and secret/identity values. Document a

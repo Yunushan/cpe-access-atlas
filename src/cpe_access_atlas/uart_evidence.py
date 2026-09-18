@@ -125,13 +125,15 @@ def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
 
     _validate_arguments(path, expected_firmware)
     source = Path(path)
-    if not source.is_file():
-        raise UartEvidenceError(f"UART log does not exist or is not a regular file: {source}")
     try:
+        if not source.is_file():
+            raise UartEvidenceError("UART log does not exist or is not a regular file")
         with source.open("rb") as stream:
             data = stream.read(MAX_UART_LOG_BYTES + 1)
-    except OSError as exc:
-        raise UartEvidenceError(f"unable to read UART log: {exc}") from exc
+    except OSError:
+        # OS exceptions can embed the private path. Suppress their text and
+        # exception chain in both CLI diagnostics and library tracebacks.
+        raise UartEvidenceError("unable to read UART log") from None
     if len(data) > MAX_UART_LOG_BYTES:
         raise UartEvidenceError("UART log exceeds the 8 MiB safety limit")
 
