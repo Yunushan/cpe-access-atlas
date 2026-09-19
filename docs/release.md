@@ -36,7 +36,7 @@ Before creating a tag:
    ```shell
    python -m pip install --require-hashes -r requirements-release.lock
    python -m pip install -e . --no-deps --no-build-isolation
-   python -m build --wheel --sdist --no-isolation
+   python scripts/build_reproducible.py --dist-dir dist
    python -m twine check dist/*
    ```
 
@@ -80,9 +80,10 @@ environment rule would reopen a historical-workflow path.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen
-supported OS/Python test jobs and package-smoke. Local workflow references
-resolve at the same commit as the release caller, so another commit's green
-checks or independent push workflows cannot satisfy this dependency graph.
+supported OS/Python test jobs, cross-platform artifact equality, and
+package-smoke. Local workflow references resolve at the same commit as the
+release caller, so another commit's green checks or independent push workflows
+cannot satisfy this dependency graph.
 No publishing job runs if a prerequisite workflow fails or is cancelled.
 The pull-request-only dependency-review job remains intentionally skipped on
 release-tag pushes; dependency-audit still runs and is required.
@@ -90,9 +91,11 @@ Dependency audit uses Python 3.11 and 3.14 on Linux so every supported
 `python_full_version` marker branch in all five distributed lock files is
 installed and scanned; one interpreter cannot activate both sides of the
 pre-3.12/pre-3.13 dependency boundaries.
-Validation workflows run on pull requests and on pushes to `main`; feature
-branch pushes are not run a second time when the same commit is tested by its
-pull request. The release job also queries the open CodeQL alert inventory and
+Validation workflows run on pull requests and on pushes to `main`; full CI,
+dependency audit, and CodeQL also exercise unchanged `main` weekly and may be
+dispatched for the recovery checks in `docs/operations.md`. Feature branch
+pushes are not run a second time when the same commit is tested by its pull
+request. The release job also queries the open CodeQL alert inventory and
 scopes that query to the exact analyzed tag ref; it stops before building or
 publishing if any alert remains. It then fetches dismissed alerts separately
 and requires the exact high/critical set, alert numbers, dismissal metadata,
@@ -107,9 +110,12 @@ Python 3.15 is included in both matrices, with prerelease fallback until final
 is available. Each 3.15 CI job also builds wheel/sdist artifacts, tests the
 bundled source archive, and installs both artifacts into separate clean virtual
 environments before isolated CLI validation outside the checkout. No 3.15
-failure is optional. The canonical documentation and publishing-tool interpreter
-remains 3.14. Current local 3.15 evidence uses 3.15.0rc2; final-release claims
-require a fresh successful matrix on final. Free-threaded builds are not tested.
+failure is optional. The three operating-system builds upload distinct artifact
+sets; a downstream gate requires identical filenames and SHA-256 digests. Release
+validation also requires its Python 3.14 artifact pair to match all three Python
+3.15 pairs before any upload. The canonical documentation and publishing-tool
+interpreter remains 3.14. Final-release claims require a fresh successful matrix
+on the final interpreter. Free-threaded builds are not tested.
 
 Audit-tool compatibility is separate from runtime compatibility. The latest
 published `pip-api` (0.0.34, used by pip-audit) still imports `sre_constants`,
@@ -144,6 +150,35 @@ for the build step. Default build isolation would install the backend again
 without those lockfile hashes. Keep the prerequisite tooling installation:
 `--no-isolation` alone does not install missing build dependencies.
 
+`scripts/build_reproducible.py` derives `SOURCE_DATE_EPOCH` from the reviewed
+Git commit unless an explicit valid epoch is supplied. It resolves `GITHUB_SHA`
+or `HEAD` to an immutable commit and materializes only that tree's Git blob bytes;
+modified and untracked checkout files cannot enter the artifacts. It builds in
+two separate source trees and then rewrites the wheel as platform-neutral
+`ZIP_STORED` entries with a verified and regenerated `RECORD`. It rewrites the
+source archive as sorted USTAR inside a fixed-header, stored-DEFLATE gzip stream,
+so neither host metadata nor the host's zlib implementation affects the bytes.
+Before invoking the backend, it captures the reviewed package bytes and the
+project's package identity, version, Python range, dependencies, extras, console
+scripts, and license. The resulting pure-Python wheel must contain exactly those
+package bytes plus the expected generated metadata; unexpected top-level modules,
+`.pth` files, `.data` scripts, or extra metadata fail the build. Critical
+`METADATA`, `WHEEL`, entry-point, top-level-package, and license values must match
+the captured source expectations. Only backend-generated text metadata receives
+CRLF-to-LF normalization; reviewed package payloads remain byte-exact.
+
+Portable path validation is applied to every component before writing: traversal,
+drive-relative names, alternate data streams, Windows device/invalid names,
+control or surrogate characters, non-NFC names, oversized components, and
+case-insensitive file/directory hierarchy collisions fail closed. Git snapshots
+are staged and published transactionally so a later blob or size failure cannot
+leave a partial source tree. Links, special files, invalid records or signatures,
+excessive members, expanded data, and canonical output size also fail closed.
+Only the first artifact pair is published to the requested output directory, and
+only after the independent byte-for-byte comparison succeeds. Matching local and
+cross-platform rebuilds prove deterministic packaging of the reviewed commit
+inputs; they do not replace provenance or source review.
+
 Both CI package-smoke and the publishing job test their freshly built source
 archive before installation/publication:
 
@@ -153,12 +188,15 @@ python scripts/check_sdist.py --dist-dir dist
 
 Use the hash-locked CI or release environment. This gate requires exactly one
 archive, safely extracts regular files/directories into a new disposable
-directory, and checks runtime/data, scripts, tests, schemas, documentation,
-workflow/governance files, and locks against the reviewed checkout. Missing,
-modified, or unexpected inputs fail before execution. Only known non-code
-setuptools metadata may be additional. Root-level modules, stray source files,
-and bundled bytecode are rejected; local generated bytecode is not required in
-the archive.
+directory with platform-independent path, member-count, and expanded-size
+validation, and checks runtime/data, scripts, tests, schemas, documentation,
+workflow/governance files, and locks against the same immutable Git commit used
+by the builder. The verifier materializes Git blob bytes instead of trusting the
+mutable checkout, so host line-ending conversion, local modifications, and
+untracked files cannot change the expected inputs. Missing, modified, or
+unexpected inputs fail before execution. Only known non-code setuptools metadata
+may be additional. Root-level modules, stray source files, and bundled bytecode
+are rejected; local generated bytecode is not required in the archive.
 
 It then runs the bundled tests and the unchanged coverage threshold with the
 archive's own working directory, `src`, and configuration. Missing tests cannot
@@ -168,8 +206,8 @@ timeout and any test/coverage failure stops the gate. The extracted directory
 is removed afterward, including on failure.
 
 This executes test code and is **not an untrusted-archive sandbox**. Run it only
-against a locally built archive from the reviewed checkout; downloading an
-unknown archive and passing this helper is not independent security review.
+against a locally built archive from the reviewed commit; downloading an unknown
+archive and passing this helper is not independent security review.
 
 The workflow installs the locked runtime dependencies, installs the pinned
 build backend from `requirements-build.lock`, and validates both freshly built
@@ -264,6 +302,11 @@ compatibility and recovery testing.
 
 ## Security incident and release revocation
 
+Use the complete [operational-resilience runbook](operations.md) for incident
+classification, containment, sensitive-evidence handling, recovery validation,
+consumer communication, and closure. The summary below does not replace its
+fail-closed steps or prove that a recovery exercise has occurred.
+
 Handle a suspected vulnerability, credential compromise, or malicious release
 privately until coordinated disclosure is safe. Freeze publication, preserve
 logs and immutable artifacts, rotate affected GitHub credentials, and review
@@ -284,6 +327,11 @@ timeline and corrective-action record without exposing reporter or device data.
 The lock files use exact versions, conditional dependency markers, and SHA-256
 distribution hashes. CI and release installs require those hashes. Changes to
 dependency constraints and their lock files must be reviewed together.
+Dependabot monitors the direct Python constraints in `pyproject.toml`, but its
+pip ecosystem support does not regenerate these custom `requirements-*.lock`
+outputs. Treat an automated constraint pull request as an input to this manual,
+reviewed lock-regeneration procedure rather than as a complete dependency
+update.
 
 The current locks were resolved with uv 0.12.10. After updating the intended
 exact version pins, regenerate every affected file, for example:

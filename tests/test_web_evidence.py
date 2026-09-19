@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
-import hashlib
 import json
 import unittest
 from email.message import Message
@@ -27,6 +26,7 @@ from cpe_access_atlas.web_evidence import (
     _required_string,
     _Response,
     _response_kind,
+    _zte_login_compatibility_digest,
     collect_zte_web_evidence,
 )
 
@@ -257,8 +257,10 @@ class WebEvidenceTests(unittest.TestCase):
             ],
         )
         posted = parse_qs(FakeConnection.requests[2]["body"].decode("ascii"))
-        expected_digest = hashlib.sha256(b"private-passwordchallenge8").hexdigest()
-        self.assertEqual(posted["Password"], [expected_digest])
+        self.assertEqual(
+            posted["Password"],
+            ["aa8e88b063bf667aac90fd3ef8d25174681c8d5ab9ddf718970f025b8e4c3a28"],
+        )
         self.assertNotIn("private-password", FakeConnection.requests[2]["body"].decode("ascii"))
         self.assertEqual(posted["_sessionTOKEN"], ["session-token"])
         self.assertEqual(FakeConnection.requests[2]["headers"]["Cookie"], "SID=first-cookie")
@@ -563,6 +565,22 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(
             _json_object(response(document, content_type="application/json"), "login"),
             {"value": delimiters},
+        )
+
+    def test_vendor_login_digest_uses_the_exact_order_and_utf8_encoding(self) -> None:
+        # Fixed external protocol vectors: do not recompute these expectations
+        # with the implementation's hashlib primitive.
+        self.assertEqual(
+            _zte_login_compatibility_digest("secret", "ABC123xy"),
+            "4ba02a5de8fc34296f18bc10aec1f091bdb20b335f5af1bb4144c10303ee66f6",
+        )
+        self.assertEqual(
+            _zte_login_compatibility_digest("pässwörd", "Δ8"),
+            "ba5eda932011a0f651b1c2000ddcff984f609385d102a41680e686e3e9eb305c",
+        )
+        self.assertNotEqual(
+            _zte_login_compatibility_digest("ABC123xy", "secret"),
+            "4ba02a5de8fc34296f18bc10aec1f091bdb20b335f5af1bb4144c10303ee66f6",
         )
 
     def test_helpers_classify_responses_and_login_values(self) -> None:

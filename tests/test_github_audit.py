@@ -9,7 +9,7 @@ import json
 import os
 import subprocess
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -335,9 +335,425 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual(api.calls.count("rulesets/1"), 1)
 
 
+class LocalAuditSourceTests(unittest.TestCase):
+    def _git(self, root: Path, *arguments: str) -> bytes:
+        executable = audit.shutil.which("git")
+        self.assertIsNotNone(executable)
+        assert executable is not None
+        completed = subprocess.run(  # noqa: S603 -- resolved Git executable, temp repository
+            [executable, *arguments],
+            cwd=root,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
+        return completed.stdout
+
+    def _repository(self, root: Path) -> tuple[str, dict[str, bytes]]:
+        contents: dict[str, bytes] = {}
+        for relative in sorted(audit._REQUIRED_LOCAL_AUDIT_FILES):
+            data = f"reviewed control: {relative}\n".encode()
+            path = root.joinpath(*relative.split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            contents[relative] = data
+        self._git(root, "init", "--quiet")
+        self._git(root, "add", "--all")
+        self._git(
+            root,
+            "-c",
+            "user.name=Audit Test",
+            "-c",
+            "user.email=audit@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        )
+        commit = self._git(root, "rev-parse", "HEAD").decode("ascii").strip()
+        return commit, contents
+
+    def _tree_record(
+        self,
+        path: str,
+        *,
+        mode: str = "100644",
+        object_type: str = "blob",
+        object_id: str = "a" * 40,
+    ) -> bytes:
+        return f"{mode} {object_type} {object_id}\t{path}\0".encode()
+
+    def _git_stub(
+        self,
+        root: Path,
+        overrides: dict[str, tuple[subprocess.CompletedProcess[bytes] | None, str | None]]
+        | None = None,
+    ) -> object:
+        configured = overrides or {}
+
+        def completed(
+            stdout: bytes = b"", returncode: int = 0
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr=b"")
+
+        defaults = {
+            "top": (completed(os.fsencode(root)), None),
+            "head": (completed((SHA + "\n").encode("ascii")), None),
+            "index": (completed(), None),
+            "tree": (completed(b"synthetic tree"), None),
+            "hash": (completed(("a" * 40 + "\n").encode("ascii")), None),
+        }
+
+        def run(
+            _executable: str,
+            _root: Path,
+            arguments: list[str],
+            *,
+            input_data: bytes | None = None,
+        ) -> tuple[subprocess.CompletedProcess[bytes] | None, str | None]:
+            del input_data
+            if arguments[:2] == ["rev-parse", "--show-toplevel"]:
+                operation = "top"
+            elif arguments[:2] == ["rev-parse", "--verify"]:
+                operation = "head"
+            else:
+                operation = {"diff": "index", "ls-tree": "tree", "hash-object": "hash"}[
+                    arguments[0]
+                ]
+            return configured.get(operation, defaults[operation])
+
+        return run
+
+    def test_local_git_failures_are_bounded_and_sanitized(self) -> None:
+        failures = (
+            (subprocess.TimeoutExpired("git", 30), "timed out"),
+            (OSError(13, "private"), "OS error 13"),
+            (OSError("private"), "unable to inspect"),
+        )
+        for failure, expected in failures:
+            with (
+                self.subTest(expected=expected),
+                patch.object(audit.subprocess, "run", side_effect=failure),
+            ):
+                completed, error = audit._run_local_git("git", Path(), ["status"])
+            self.assertIsNone(completed)
+            self.assertIn(expected, error)
+            self.assertNotIn("private", error)
+
+    def test_local_control_tree_parser_rejects_every_unsafe_shape(self) -> None:
+        complete = b"".join(
+            self._tree_record(path) for path in sorted(audit._REQUIRED_LOCAL_AUDIT_FILES)
+        )
+        records, error = audit._parse_local_control_tree(complete)
+        self.assertIsNone(error)
+        self.assertEqual(set(records or ()), audit._REQUIRED_LOCAL_AUDIT_FILES)
+
+        malformed = (
+            b"not metadata\0",
+            b"100644 blob " + b"a" * 40 + b"\t\xff\0",
+        )
+        unsafe = (
+            self._tree_record("/absolute"),
+            self._tree_record(""),
+            self._tree_record("../escape"),
+            self._tree_record("outside.txt"),
+            self._tree_record(".github/workflows/ci.yml", object_type="tree"),
+            self._tree_record(".github/workflows/ci.yml", mode="120000"),
+            self._tree_record(".github/workflows/ci.yml", object_id="invalid"),
+            self._tree_record(".github/workflows/ci.yml") * 2,
+        )
+        for raw in (*malformed, *unsafe):
+            with self.subTest(raw=raw):
+                records, error = audit._parse_local_control_tree(raw)
+                self.assertIsNone(records)
+                self.assertIsNotNone(error)
+
+        records, error = audit._parse_local_control_tree(b"")
+        self.assertIsNone(records)
+        self.assertIn("missing required", error)
+        with patch.object(audit, "_LOCAL_CONTROL_MAX_FILES", 0):
+            records, error = audit._parse_local_control_tree(self._tree_record(".gitleaks.toml"))
+        self.assertIsNone(records)
+        self.assertIn("file-count", error)
+
+    def test_local_control_inventory_rejects_unsafe_and_unbounded_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory, error = audit._local_control_inventory(root)
+            self.assertIsNone(inventory)
+            self.assertIn(".github", error)
+
+            (root / ".github").mkdir()
+            inventory, error = audit._local_control_inventory(root)
+            self.assertIsNone(inventory)
+            self.assertIn("required local control", error)
+
+            (root / ".gitleaks.toml").write_bytes(b"x")
+            script = root / "scripts" / "check_github_production_settings.py"
+            script.parent.mkdir()
+            script.write_bytes(b"x")
+            nested = root / ".github" / "nested"
+            nested.mkdir()
+            control = nested / "control.yml"
+            control.write_bytes(b"x")
+
+            original_is_symlink = Path.is_symlink
+            with patch.object(
+                Path,
+                "is_symlink",
+                lambda path: path.name == "control.yml" or original_is_symlink(path),
+            ):
+                inventory, error = audit._local_control_inventory(root)
+            self.assertIsNone(inventory)
+            self.assertIn("symbolic link", error)
+
+            original_is_file = Path.is_file
+            original_is_dir = Path.is_dir
+            with (
+                patch.object(
+                    Path,
+                    "is_file",
+                    lambda path: False if path.name == "control.yml" else original_is_file(path),
+                ),
+                patch.object(
+                    Path,
+                    "is_dir",
+                    lambda path: False if path.name == "control.yml" else original_is_dir(path),
+                ),
+            ):
+                inventory, error = audit._local_control_inventory(root)
+            self.assertIsNone(inventory)
+            self.assertIn("not a regular file", error)
+
+            with patch.object(Path, "rglob", side_effect=OSError("private")):
+                inventory, error = audit._local_control_inventory(root)
+            self.assertIsNone(inventory)
+            self.assertIn("unable to inventory", error)
+
+            with patch.object(audit, "_LOCAL_CONTROL_MAX_FILES", 0):
+                inventory, error = audit._local_control_inventory(root)
+            self.assertIsNone(inventory)
+            self.assertIn("file-count", error)
+
+    def test_local_source_rejects_invalid_git_and_checkout_identities(self) -> None:
+        result, policy = audit._audit_local_control_checkout("invalid")
+        self.assertEqual(result.status, audit.STATUS_FAIL)
+        self.assertIsNone(policy)
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing"
+            with patch.object(audit.shutil, "which", return_value="git"):
+                result, policy = audit._audit_local_control_checkout(SHA, root=missing)
+            self.assertEqual(result.status, audit.STATUS_UNVERIFIED)
+            self.assertIsNone(policy)
+
+            other = root / "other"
+            other.mkdir()
+
+            def completed(
+                stdout: bytes = b"", returncode: int = 0
+            ) -> subprocess.CompletedProcess[bytes]:
+                return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr=b"")
+
+            cases = (
+                ("top", (None, "synthetic top error"), "UNVERIFIED", "top error"),
+                ("top", (completed(returncode=2), None), "UNVERIFIED", "root is unreadable"),
+                (
+                    "top",
+                    (completed(os.fsencode(root / "absent")), None),
+                    "UNVERIFIED",
+                    "root identity",
+                ),
+                ("top", (completed(os.fsencode(other)), None), "FAIL", "repository root"),
+                ("head", (None, "synthetic head error"), "UNVERIFIED", "head error"),
+                ("head", (completed(returncode=2), None), "UNVERIFIED", "HEAD is unreadable"),
+                ("head", (completed(b"\xff"), None), "UNVERIFIED", "HEAD identity"),
+                ("head", (completed(b"not-a-sha"), None), "UNVERIFIED", "HEAD identity"),
+                ("index", (None, "synthetic index error"), "UNVERIFIED", "index error"),
+                ("index", (completed(returncode=2), None), "UNVERIFIED", "index is unreadable"),
+                ("tree", (None, "synthetic tree error"), "UNVERIFIED", "tree error"),
+                ("tree", (completed(returncode=2), None), "UNVERIFIED", "tree is unreadable"),
+            )
+            for operation, response, status, detail in cases:
+                with (
+                    self.subTest(operation=operation, detail=detail),
+                    patch.object(audit.shutil, "which", return_value="git"),
+                    patch.object(
+                        audit,
+                        "_run_local_git",
+                        side_effect=self._git_stub(root, {operation: response}),
+                    ),
+                ):
+                    result, policy = audit._audit_local_control_checkout(SHA, root=root)
+                self.assertEqual(result.status, status)
+                self.assertIn(detail, result.detail)
+                self.assertIsNone(policy)
+
+    def test_local_source_rejects_invalid_control_evidence_and_read_races(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = root / ".github" / "codeql-accepted-risks.json"
+            policy_path.parent.mkdir()
+            policy_path.write_bytes(b"policy\n")
+            tracked = {".github/codeql-accepted-risks.json": "a" * 40}
+
+            with (
+                patch.object(audit.shutil, "which", return_value="git"),
+                patch.object(audit, "_run_local_git", side_effect=self._git_stub(root)),
+                patch.object(audit, "_parse_local_control_tree", return_value=(None, "bad tree")),
+            ):
+                result, policy = audit._audit_local_control_checkout(SHA, root=root)
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("bad tree", result.detail)
+            self.assertIsNone(policy)
+
+            with (
+                patch.object(audit.shutil, "which", return_value="git"),
+                patch.object(audit, "_run_local_git", side_effect=self._git_stub(root)),
+                patch.object(audit, "_parse_local_control_tree", return_value=(tracked, None)),
+                patch.object(
+                    audit, "_local_control_inventory", return_value=(None, "bad inventory")
+                ),
+            ):
+                result, policy = audit._audit_local_control_checkout(SHA, root=root)
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("bad inventory", result.detail)
+            self.assertIsNone(policy)
+
+            many = {f".github/control-{index}.yml": "a" * 40 for index in range(10)}
+            with (
+                patch.object(audit.shutil, "which", return_value="git"),
+                patch.object(audit, "_run_local_git", side_effect=self._git_stub(root)),
+                patch.object(audit, "_parse_local_control_tree", return_value=(many, None)),
+                patch.object(audit, "_local_control_inventory", return_value=(set(), None)),
+            ):
+                result, policy = audit._audit_local_control_checkout(SHA, root=root)
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("and 2 more", result.detail)
+            self.assertIsNone(policy)
+
+            def run_with(
+                *extra_patches: object,
+                git_overrides: dict[
+                    str, tuple[subprocess.CompletedProcess[bytes] | None, str | None]
+                ]
+                | None = None,
+            ) -> tuple[audit.CheckResult, bytes | None]:
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(audit.shutil, "which", return_value="git"))
+                    stack.enter_context(
+                        patch.object(
+                            audit,
+                            "_run_local_git",
+                            side_effect=self._git_stub(root, git_overrides),
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(
+                            audit, "_parse_local_control_tree", return_value=(tracked, None)
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(
+                            audit, "_local_control_inventory", return_value=(set(tracked), None)
+                        )
+                    )
+                    for extra_patch in extra_patches:
+                        stack.enter_context(extra_patch)
+                    return audit._audit_local_control_checkout(SHA, root=root)
+
+            with patch.object(audit, "_LOCAL_CONTROL_MAX_FILE_BYTES", 0):
+                result, policy = run_with()
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("file size", result.detail)
+            self.assertIsNone(policy)
+
+            with patch.object(audit, "_LOCAL_CONTROL_MAX_TOTAL_BYTES", 0):
+                result, policy = run_with()
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("size limit", result.detail)
+            self.assertIsNone(policy)
+
+            result, policy = run_with(patch.object(Path, "read_bytes", side_effect=OSError()))
+            self.assertEqual(result.status, audit.STATUS_UNVERIFIED)
+            self.assertIn("unreadable", result.detail)
+            self.assertIsNone(policy)
+
+            result, policy = run_with(patch.object(Path, "read_bytes", return_value=b""))
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("changed while read", result.detail)
+            self.assertIsNone(policy)
+
+            completed = subprocess.CompletedProcess([], 2, stdout=b"", stderr=b"")
+            result, policy = run_with(git_overrides={"hash": (completed, None)})
+            self.assertEqual(result.status, audit.STATUS_UNVERIFIED)
+            self.assertIn("unable to hash", result.detail)
+            self.assertIsNone(policy)
+
+            completed = subprocess.CompletedProcess([], 0, stdout=b"\xff", stderr=b"")
+            result, policy = run_with(git_overrides={"hash": (completed, None)})
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("differs from HEAD", result.detail)
+            self.assertIsNone(policy)
+
+            completed = subprocess.CompletedProcess([], 0, stdout=b"b" * 40, stderr=b"")
+            result, policy = run_with(git_overrides={"hash": (completed, None)})
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("differs from HEAD", result.detail)
+            self.assertIsNone(policy)
+
+    def test_local_source_binds_head_and_exact_control_blobs(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            commit, contents = self._repository(root)
+            result, policy = audit._audit_local_control_checkout(commit, root=root)
+            self.assertEqual(result.status, audit.STATUS_PASS)
+            self.assertIn(commit, result.detail)
+            self.assertIn("control files exactly match", result.detail)
+            self.assertEqual(policy, contents[".github/codeql-accepted-risks.json"])
+
+            result, policy = audit._audit_local_control_checkout("b" * 40, root=root)
+            self.assertEqual(result.status, audit.STATUS_FAIL)
+            self.assertIn("does not equal", result.detail)
+            self.assertIsNone(policy)
+
+        with patch.object(audit.shutil, "which", return_value=None):
+            result, policy = audit._audit_local_control_checkout(SHA)
+        self.assertEqual(result.status, audit.STATUS_UNVERIFIED)
+        self.assertIsNone(policy)
+
+    def test_local_source_rejects_modified_untracked_missing_and_staged_controls(self) -> None:
+        mutations = ("modified", "untracked", "missing", "staged")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), TemporaryDirectory() as directory:
+                root = Path(directory)
+                commit, contents = self._repository(root)
+                target = root / ".github" / "workflows" / "ci.yml"
+                if mutation == "modified":
+                    target.write_bytes(b"modified\n")
+                elif mutation == "untracked":
+                    (target.parent / "unexpected.yml").write_bytes(b"unexpected\n")
+                elif mutation == "missing":
+                    target.unlink()
+                else:
+                    target.write_bytes(b"staged\n")
+                    self._git(root, "add", target.relative_to(root).as_posix())
+                    target.write_bytes(contents[".github/workflows/ci.yml"])
+
+                result, policy = audit._audit_local_control_checkout(commit, root=root)
+                self.assertEqual(result.status, audit.STATUS_FAIL)
+                self.assertIsNone(policy)
+
+
 class GitHubAuditIntegrationTests(unittest.TestCase):
     def run_cli(
-        self, records: dict[str, object], arguments: list[str] | None = None
+        self,
+        records: dict[str, object],
+        arguments: list[str] | None = None,
+        *,
+        local_evidence: tuple[audit.CheckResult, bytes | None] | None = None,
     ) -> tuple[int, str, str, set[str]]:
         """Run real CLI/adapter/orchestrator; replace only the external process."""
 
@@ -355,10 +771,30 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
                 return SimpleNamespace(returncode=1, stdout="", stderr=payload[1])
             return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
 
+        def verified_local_source(
+            expected_commit: str,
+        ) -> tuple[audit.CheckResult, bytes | None]:
+            self.assertEqual(expected_commit, SHA)
+            if local_evidence is not None:
+                return local_evidence
+            return (
+                audit.CheckResult(
+                    "local audit source",
+                    audit.STATUS_PASS,
+                    f"synthetic local controls match {expected_commit}",
+                ),
+                audit._CODEQL_RISK_POLICY_PATH.read_bytes(),
+            )
+
         out, err = io.StringIO(), io.StringIO()
         with (
             patch.object(audit.shutil, "which", return_value="synthetic-gh"),
             patch.object(audit.subprocess, "run", side_effect=transport),
+            patch.object(
+                audit,
+                "_audit_local_control_checkout",
+                side_effect=verified_local_source,
+            ),
             patch.dict(os.environ, {"GITHUB_REPOSITORY": REPOSITORY}),
             redirect_stdout(out),
             redirect_stderr(err),
@@ -370,9 +806,12 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         code, output, error, requested = self.run_cli(complete_fixture())
         self.assertEqual(code, 0, output)
         results = json.loads(output)
-        self.assertEqual(len(results), 19)
-        self.assertEqual(len({item["name"] for item in results}), 19)
+        self.assertEqual(len(results), 20)
+        self.assertEqual(len({item["name"] for item in results}), 20)
         self.assertTrue(all(item["status"] == audit.STATUS_PASS for item in results))
+        self.assertIn(
+            SHA, next(item for item in results if item["name"] == "local audit source")["detail"]
+        )
         self.assertEqual(error, "")
         self.assertIn("releases/2/assets?per_page=100", requested)
         self.assertIn("immutable-releases", requested)
@@ -397,8 +836,11 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         self.assertEqual((code, error), (0, ""), output)
         self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
         result = json.loads(output)
-        self.assertEqual(result[0]["name"], "accepted CodeQL risks")
-        self.assertEqual(result[0]["status"], audit.STATUS_PASS)
+        self.assertEqual(
+            [item["name"] for item in result],
+            ["local audit source", "accepted CodeQL risks"],
+        )
+        self.assertTrue(all(item["status"] == audit.STATUS_PASS for item in result))
 
         for incomplete in (
             ["--codeql-risk-ref", "refs/heads/main"],
@@ -416,6 +858,34 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertTrue(error)
                 self.assertEqual(requested, set())
+
+    def test_unverified_local_source_blocks_full_and_risk_only_policy_audits(self) -> None:
+        local_failure = (
+            audit.CheckResult("local audit source", audit.STATUS_FAIL, "synthetic mismatch"),
+            None,
+        )
+        modes = (
+            None,
+            [
+                "--json",
+                "--codeql-risk-ref",
+                "refs/heads/main",
+                "--codeql-risk-commit",
+                SHA,
+            ],
+        )
+        for arguments in modes:
+            with self.subTest(arguments=arguments):
+                code, output, error, requested = self.run_cli(
+                    complete_fixture(),
+                    arguments,
+                    local_evidence=local_failure,
+                )
+                self.assertEqual((code, error), (1, ""), output)
+                results = {item["name"]: item for item in json.loads(output)}
+                self.assertEqual(results["local audit source"]["status"], audit.STATUS_FAIL)
+                self.assertEqual(results["accepted CodeQL risks"]["status"], audit.STATUS_UNKNOWN)
+                self.assertNotIn(CODEQL_ACCEPTED_ENDPOINT, requested)
 
     def test_accepted_codeql_risks_cover_happy_path_and_fail_closed_differences(self) -> None:
         now = datetime(2026, 9, 18, 20, tzinfo=UTC)
@@ -567,16 +1037,18 @@ class GitHubAuditIntegrationTests(unittest.TestCase):
         ]
         records = complete_fixture()
         records[CODEQL_ACCEPTED_ENDPOINT] = []
-        with patch.object(audit, "_load_codeql_risk_policy", return_value=(policy, None)):
+        with patch.object(audit, "_load_codeql_risk_policy_bytes", return_value=(policy, None)):
             code, output, error, requested = self.run_cli(records, arguments)
         self.assertEqual((code, error), (0, ""), output)
         self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})
-        result = json.loads(output)[0]
+        result = next(
+            item for item in json.loads(output) if item["name"] == "accepted CodeQL risks"
+        )
         self.assertEqual(result["status"], audit.STATUS_PASS)
         self.assertIn("policy has no acceptances", result["detail"])
 
         records[CODEQL_ACCEPTED_ENDPOINT] = accepted_codeql_alerts()
-        with patch.object(audit, "_load_codeql_risk_policy", return_value=(policy, None)):
+        with patch.object(audit, "_load_codeql_risk_policy_bytes", return_value=(policy, None)):
             code, output, error, requested = self.run_cli(records, arguments)
         self.assertEqual((code, error), (1, ""), output)
         self.assertEqual(requested, {CODEQL_ACCEPTED_ENDPOINT})

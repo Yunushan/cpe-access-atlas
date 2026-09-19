@@ -25,7 +25,8 @@ Protect `main` with:
 - conversation resolution required;
 - force-pushes and branch deletion disabled;
 - no explicit users, teams, or apps allowed to bypass pull-request requirements;
-- required DCO `check-signoff` plus every CI matrix job, `package-smoke`,
+- required DCO `check-signoff` plus every CI matrix job,
+  `cross-platform-artifact-reproducibility`, `package-smoke`,
   `dependency-audit (3.11)`, `dependency-audit (3.14)`, `dependency-review`,
   CodeQL `analyze`, and secret-scan `gitleaks`.
   Bind every required check to the GitHub Actions source, rather than accepting
@@ -54,13 +55,14 @@ test (macos-latest, 3.12)
 test (macos-latest, 3.13)
 test (macos-latest, 3.14)
 test (macos-latest, 3.15)
+cross-platform-artifact-reproducibility
 ```
 
-When adopting the Python 3.15 matrix, first run its three jobs on the proposed
-branch, then add their exact names to the required checks without removing the
-existing checks or DCO sign-off gate. Editing workflow YAML does not update
-GitHub branch rules. The read-only audit reports missing 3.15 requirements until
-an authorized administrator updates the repository settings.
+When adopting the Python 3.15 matrix and artifact-equality gate, first run those
+jobs on the proposed branch, then add their exact names to the required checks
+without removing the existing checks or DCO sign-off gate. Editing workflow YAML
+does not update GitHub branch rules. The read-only audit reports missing
+requirements until an authorized administrator updates the repository settings.
 
 ## Releases and security
 
@@ -122,7 +124,11 @@ an authorized administrator updates the repository settings.
 ## Read-only evidence checks
 
 Run the repository's read-only audit from an authenticated GitHub CLI session
-with administrator-visible repository access:
+with administrator-visible repository access, using a Git checkout whose `HEAD`
+is the exact current remote `main` commit. The complete local `.github` tree,
+`.gitleaks.toml`, and the audit script must be clean, regular files whose bytes
+match their `HEAD` blobs; do not run the retained evidence check from a feature
+branch, an older checkout, a copied script, or a source archive:
 
 ```shell
 python scripts/check_github_production_settings.py \
@@ -132,7 +138,12 @@ python scripts/check_github_production_settings.py \
 The command never writes to GitHub. It reports `PASS`, `FAIL`, or
 `UNVERIFIED`; prepublication mode also reports one explicit `DEFERRED` result.
 A missing administrator permission is intentionally not treated as proof that a
-control is disabled. Use `--json` when retaining an audit record.
+control is disabled. The `local audit source` result prints the full matching
+commit and the number of byte-matched control files. A different local `HEAD`,
+staged control change, modified/deleted control, extra local `.github` file,
+symbolic link, unreadable Git evidence, or blob mismatch fails closed. The
+accepted-risk audit parses the already captured verified policy bytes rather
+than reopening a mutable path. Use `--json` when retaining an audit record.
 
 The default audit uses the solo-maintainer policy and labels branch/release
 results accordingly in both text and JSON. It requires explicit zero-approval,
@@ -264,9 +275,9 @@ The separate `accepted CodeQL risks` result must also pass. Review or replace
 each acceptance before its policy expiry, and rerun the audit whenever the
 protocol, compatibility evidence, compensating controls, or alert fingerprint
 changes.
-The latest Security audit and CodeQL executions must be no more than eight days
-old (with five minutes of clock-skew tolerance), so a disabled weekly schedule
-cannot leave unchanged `main` looking green indefinitely. DCO
+The latest CI, Security audit, and CodeQL executions must be no more than eight
+days old (with five minutes of clock-skew tolerance), so a disabled weekly
+schedule cannot leave unchanged `main` looking green indefinitely. DCO
 `check-signoff` and dependency review are pull-request-only, so they have no
 main-push execution; branch policy must still require both for pull requests.
 The latest release

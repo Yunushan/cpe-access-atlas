@@ -24,6 +24,7 @@ class CliReferenceTests(unittest.TestCase):
     def test_generated_reference_matches_committed_doc(self) -> None:
         self.assertTrue(reference._OUTPUT_PATH.exists(), "CLI reference missing; run the generator")
         committed = reference._OUTPUT_PATH.read_text(encoding="utf-8")
+        self.assertNotIn(b"\r", reference._OUTPUT_PATH.read_bytes())
         self.assertEqual(
             committed,
             reference.render(),
@@ -53,6 +54,7 @@ class CliReferenceTests(unittest.TestCase):
                 with redirect_stdout(out):
                     self.assertEqual(reference.main([]), 0)
                 self.assertEqual(path.read_text(encoding="utf-8"), reference.render())
+                self.assertEqual(path.read_bytes(), reference.render().encode("utf-8"))
                 before = path.stat().st_mtime_ns
                 with patch.object(sys, "argv", ["generate_cli_reference.py", "--check"]):
                     with redirect_stdout(out):

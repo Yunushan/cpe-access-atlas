@@ -31,7 +31,7 @@ import sys
 import tomllib
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 STATUS_OK = "PASS"
@@ -67,6 +67,31 @@ _GITHUB_ACTIONS_APP_ID = 15368
 _CODEQL_RISK_POLICY_PATH = (
     Path(__file__).resolve().parents[1] / ".github" / "codeql-accepted-risks.json"
 )
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_LOCAL_AUDIT_CONTROL_ROOTS = (
+    ".github",
+    ".gitleaks.toml",
+    "scripts/check_github_production_settings.py",
+)
+_REQUIRED_LOCAL_AUDIT_FILES = frozenset(
+    {
+        ".github/codeql-accepted-risks.json",
+        ".github/dco-signoff.awk",
+        ".github/dependabot.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/dco.yml",
+        ".github/workflows/release-preflight.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/secret-scan.yml",
+        ".github/workflows/security.yml",
+        ".gitleaks.toml",
+        "scripts/check_github_production_settings.py",
+    }
+)
+_LOCAL_CONTROL_MAX_FILES = 256
+_LOCAL_CONTROL_MAX_FILE_BYTES = 2 * 1024 * 1024
+_LOCAL_CONTROL_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 _CODEQL_RISK_POLICY_KEYS = frozenset({"schema_version", "repository", "accepted_risks"})
 _CODEQL_RISK_KEYS = frozenset(
     {
@@ -93,7 +118,7 @@ _RELEASE_PYTHONS = ("3.11", "3.12", "3.13", "3.14", "3.15")
 _SECURITY_AUDIT_PYTHONS = ("3.11", "3.14")
 _WEEKLY_WORKFLOW_MAX_AGE = timedelta(days=8)
 _WORKFLOW_CLOCK_SKEW = timedelta(minutes=5)
-_WEEKLY_WORKFLOWS = frozenset({"Security audit", "CodeQL"})
+_WEEKLY_WORKFLOWS = frozenset({"CI", "Security audit", "CodeQL"})
 _APPROVED_ACTION_REPOSITORIES = frozenset(
     {
         "actions/checkout",
@@ -111,12 +136,14 @@ _CI_CHECK_NAMES = tuple(
     for operating_system in _RELEASE_OSES
     for python_version in _RELEASE_PYTHONS
 )
+_CROSS_PLATFORM_CHECK_NAME = "cross-platform-artifact-reproducibility"
 _SECURITY_AUDIT_CHECK_NAMES = tuple(
     f"dependency-audit ({python_version})" for python_version in _SECURITY_AUDIT_PYTHONS
 )
 _REQUIRED_BRANCH_CHECKS = frozenset(
     (
         *_CI_CHECK_NAMES,
+        _CROSS_PLATFORM_CHECK_NAME,
         "package-smoke",
         "check-signoff",
         *_SECURITY_AUDIT_CHECK_NAMES,
@@ -126,10 +153,17 @@ _REQUIRED_BRANCH_CHECKS = frozenset(
     )
 )
 _REQUIRED_CURRENT_CHECKS = frozenset(
-    (*_CI_CHECK_NAMES, "package-smoke", *_SECURITY_AUDIT_CHECK_NAMES, "analyze", "gitleaks")
+    (
+        *_CI_CHECK_NAMES,
+        _CROSS_PLATFORM_CHECK_NAME,
+        "package-smoke",
+        *_SECURITY_AUDIT_CHECK_NAMES,
+        "analyze",
+        "gitleaks",
+    )
 )
 _WORKFLOW_CHECKS = {
-    "CI": (*_CI_CHECK_NAMES, "package-smoke"),
+    "CI": (*_CI_CHECK_NAMES, _CROSS_PLATFORM_CHECK_NAME, "package-smoke"),
     "Security audit": (*_SECURITY_AUDIT_CHECK_NAMES, "dependency-review"),
     "CodeQL": ("analyze",),
     "Secret scan": ("gitleaks",),
@@ -234,6 +268,251 @@ class GitHubApi:
             return None, "GitHub returned invalid or excessively nested JSON"
         self._cache[path] = payload
         return payload, None
+
+
+def _run_local_git(
+    executable: str,
+    root: Path,
+    arguments: list[str],
+    *,
+    input_data: bytes | None = None,
+) -> tuple[subprocess.CompletedProcess[bytes] | None, str | None]:
+    """Run one bounded, non-shell Git inspection without exposing local paths."""
+
+    try:
+        completed = subprocess.run(  # noqa: S603 -- resolved Git executable, fixed arguments
+            [executable, "-C", str(root), *arguments],
+            input=input_data,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "local Git inspection timed out"
+    except OSError as exc:
+        suffix = f" (OS error {exc.errno})" if type(exc.errno) is int else ""
+        return None, "unable to inspect the local Git checkout" + suffix
+    return completed, None
+
+
+def _parse_local_control_tree(raw: bytes) -> tuple[dict[str, str] | None, str | None]:
+    """Parse the bounded regular-file inventory for the audited control tree."""
+
+    records: dict[str, str] = {}
+    for encoded in raw.split(b"\0"):
+        if not encoded:
+            continue
+        try:
+            metadata, encoded_path = encoded.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split(" ")
+            path = encoded_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            return None, "local control tree has malformed Git metadata"
+        candidate = PurePosixPath(path)
+        if (
+            candidate.is_absolute()
+            or not candidate.parts
+            or any(part in {"", ".", ".."} for part in candidate.parts)
+            or (path not in _LOCAL_AUDIT_CONTROL_ROOTS and not path.startswith(".github/"))
+            or object_type != "blob"
+            or mode not in {"100644", "100755"}
+            or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
+            or path in records
+        ):
+            return None, "local control tree has invalid or unsafe entries"
+        records[path] = object_id
+        if len(records) > _LOCAL_CONTROL_MAX_FILES:
+            return None, "local control tree exceeds its file-count limit"
+    if not _REQUIRED_LOCAL_AUDIT_FILES.issubset(records):
+        return None, "the audited commit is missing required control files"
+    return records, None
+
+
+def _local_control_inventory(root: Path) -> tuple[set[str] | None, str | None]:
+    """List every local control-tree file without following symbolic links."""
+
+    inventory: set[str] = set()
+    github = root / ".github"
+    try:
+        if github.is_symlink() or not github.is_dir():
+            return None, "the local .github control directory is missing or unsafe"
+        for path in github.rglob("*"):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                return None, f"local control path is a symbolic link: {relative}"
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                return None, f"local control path is not a regular file: {relative}"
+            inventory.add(relative)
+        for relative in (".gitleaks.toml", "scripts/check_github_production_settings.py"):
+            path = root.joinpath(*PurePosixPath(relative).parts)
+            if path.is_symlink() or not path.is_file():
+                return None, f"required local control file is missing or unsafe: {relative}"
+            inventory.add(relative)
+    except OSError:
+        return None, "unable to inventory local audit control files"
+    if len(inventory) > _LOCAL_CONTROL_MAX_FILES:
+        return None, "local control inventory exceeds its file-count limit"
+    return inventory, None
+
+
+def _audit_local_control_checkout(
+    expected_commit: str,
+    *,
+    root: Path = _REPOSITORY_ROOT,
+) -> tuple[CheckResult, bytes | None]:
+    """Bind this checker and its local controls to the audited commit."""
+
+    name = "local audit source"
+    if _GIT_SHA.fullmatch(expected_commit) is None:
+        return CheckResult(name, STATUS_FAIL, "audited commit identity is invalid"), None
+    executable = shutil.which("git")
+    if executable is None:
+        return CheckResult(name, STATUS_UNVERIFIED, "git CLI was not found on PATH"), None
+    try:
+        root = root.resolve(strict=True)
+    except OSError:
+        return CheckResult(name, STATUS_UNVERIFIED, "local repository root is unavailable"), None
+
+    top, error = _run_local_git(executable, root, ["rev-parse", "--show-toplevel"])
+    if error is not None or top is None or top.returncode != 0:
+        return CheckResult(name, STATUS_UNVERIFIED, error or "local Git root is unreadable"), None
+    try:
+        discovered_root = Path(os.fsdecode(top.stdout).strip()).resolve(strict=True)
+    except (OSError, ValueError):
+        return CheckResult(name, STATUS_UNVERIFIED, "local Git root identity is invalid"), None
+    if discovered_root != root:
+        return CheckResult(
+            name, STATUS_FAIL, "checker is not running from its repository root"
+        ), None
+
+    head, error = _run_local_git(executable, root, ["rev-parse", "--verify", "HEAD^{commit}"])
+    if error is not None or head is None or head.returncode != 0:
+        return CheckResult(name, STATUS_UNVERIFIED, error or "local HEAD is unreadable"), None
+    try:
+        local_head = head.stdout.decode("ascii").strip()
+    except UnicodeDecodeError:
+        local_head = ""
+    if _GIT_SHA.fullmatch(local_head) is None:
+        return CheckResult(name, STATUS_UNVERIFIED, "local HEAD identity is invalid"), None
+    if local_head != expected_commit:
+        return (
+            CheckResult(
+                name,
+                STATUS_FAIL,
+                f"local HEAD {local_head} does not equal audited commit {expected_commit}",
+            ),
+            None,
+        )
+
+    index, error = _run_local_git(
+        executable,
+        root,
+        [
+            "diff",
+            "--cached",
+            "--quiet",
+            "--no-ext-diff",
+            expected_commit,
+            "--",
+            *_LOCAL_AUDIT_CONTROL_ROOTS,
+        ],
+    )
+    if error is not None or index is None or index.returncode not in {0, 1}:
+        return CheckResult(
+            name, STATUS_UNVERIFIED, error or "local control index is unreadable"
+        ), None
+    if index.returncode == 1:
+        return CheckResult(name, STATUS_FAIL, "local control index differs from HEAD"), None
+
+    tree, error = _run_local_git(
+        executable,
+        root,
+        [
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            expected_commit,
+            "--",
+            *_LOCAL_AUDIT_CONTROL_ROOTS,
+        ],
+    )
+    if error is not None or tree is None or tree.returncode != 0:
+        return CheckResult(
+            name, STATUS_UNVERIFIED, error or "local control tree is unreadable"
+        ), None
+    tracked, tree_error = _parse_local_control_tree(tree.stdout)
+    if tree_error is not None or tracked is None:
+        return CheckResult(name, STATUS_FAIL, tree_error or "local control tree is invalid"), None
+    local, inventory_error = _local_control_inventory(root)
+    if inventory_error is not None or local is None:
+        return CheckResult(
+            name, STATUS_FAIL, inventory_error or "local control inventory failed"
+        ), None
+    if local != set(tracked):
+        differences = sorted(local.symmetric_difference(tracked))
+        detail = ", ".join(differences[:8])
+        if len(differences) > 8:
+            detail += f", and {len(differences) - 8} more"
+        return CheckResult(
+            name, STATUS_FAIL, f"local control inventory differs from HEAD: {detail}"
+        ), None
+
+    captured: dict[str, bytes] = {}
+    total_size = 0
+    for relative, expected_object in sorted(tracked.items()):
+        path = root.joinpath(*PurePosixPath(relative).parts)
+        try:
+            size = path.stat().st_size
+            if size < 0 or size > _LOCAL_CONTROL_MAX_FILE_BYTES:
+                return CheckResult(
+                    name, STATUS_FAIL, f"local control file size is invalid: {relative}"
+                ), None
+            total_size += size
+            if total_size > _LOCAL_CONTROL_MAX_TOTAL_BYTES:
+                return CheckResult(
+                    name, STATUS_FAIL, "local control files exceed their size limit"
+                ), None
+            data = path.read_bytes()
+        except OSError:
+            return CheckResult(
+                name, STATUS_UNVERIFIED, f"local control file is unreadable: {relative}"
+            ), None
+        if len(data) != size:
+            return CheckResult(
+                name, STATUS_FAIL, f"local control file changed while read: {relative}"
+            ), None
+        hashed, error = _run_local_git(
+            executable,
+            root,
+            ["hash-object", "--stdin"],
+            input_data=data,
+        )
+        if error is not None or hashed is None or hashed.returncode != 0:
+            return CheckResult(
+                name, STATUS_UNVERIFIED, error or "unable to hash local controls"
+            ), None
+        try:
+            observed_object = hashed.stdout.decode("ascii").strip()
+        except UnicodeDecodeError:
+            observed_object = ""
+        if observed_object != expected_object:
+            return CheckResult(
+                name, STATUS_FAIL, f"local control file differs from HEAD: {relative}"
+            ), None
+        captured[relative] = data
+
+    return (
+        CheckResult(
+            name,
+            STATUS_PASS,
+            f"local HEAD {local_head} equals audited commit {expected_commit}; "
+            f"{len(captured)} control files exactly match their HEAD blobs",
+        ),
+        captured[".github/codeql-accepted-risks.json"],
+    )
 
 
 def _get_collection(
@@ -399,13 +678,9 @@ def _parse_codeql_risk_policy(document: object) -> tuple[CodeQLRiskPolicy | None
     return CodeQLRiskPolicy(repository=repository, accepted_risks=tuple(accepted)), None
 
 
-def _load_codeql_risk_policy(
-    path: Path = _CODEQL_RISK_POLICY_PATH,
-) -> tuple[CodeQLRiskPolicy | None, str | None]:
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None, "accepted CodeQL risk policy is unreadable"
+def _load_codeql_risk_policy_bytes(raw: bytes) -> tuple[CodeQLRiskPolicy | None, str | None]:
+    """Load a policy from already captured bytes so verification cannot be bypassed."""
+
     if not raw or len(raw) > _CODEQL_POLICY_MAX_BYTES:
         return None, "accepted CodeQL risk policy is empty or exceeds its size limit"
     try:
@@ -413,6 +688,16 @@ def _load_codeql_risk_policy(
     except (UnicodeDecodeError, ValueError, RecursionError):
         return None, "accepted CodeQL risk policy is not bounded valid UTF-8 JSON"
     return _parse_codeql_risk_policy(document)
+
+
+def _load_codeql_risk_policy(
+    path: Path = _CODEQL_RISK_POLICY_PATH,
+) -> tuple[CodeQLRiskPolicy | None, str | None]:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None, "accepted CodeQL risk policy is unreadable"
+    return _load_codeql_risk_policy_bytes(raw)
 
 
 def _account_login(value: object) -> tuple[str | None, bool]:
@@ -527,12 +812,17 @@ def _audit_codeql_risk_acceptances(
     expected_commit: str,
     now: datetime,
     policy_path: Path = _CODEQL_RISK_POLICY_PATH,
+    policy_bytes: bytes | None = None,
 ) -> CheckResult:
     if not _valid_github_ref(expected_ref) or _GIT_SHA.fullmatch(expected_commit) is None:
         return CheckResult(
             "accepted CodeQL risks", STATUS_FAIL, "exact CodeQL ref/commit input is invalid"
         )
-    policy, policy_error = _load_codeql_risk_policy(policy_path)
+    policy, policy_error = (
+        _load_codeql_risk_policy(policy_path)
+        if policy_bytes is None
+        else _load_codeql_risk_policy_bytes(policy_bytes)
+    )
     if policy_error is not None or policy is None:
         return CheckResult(
             "accepted CodeQL risks", STATUS_FAIL, policy_error or "accepted-risk policy is invalid"
@@ -1889,6 +2179,13 @@ def audit(
     ):
         results.append(
             CheckResult(
+                "local audit source",
+                STATUS_UNVERIFIED,
+                head_error or "remote main commit identity is invalid",
+            )
+        )
+        results.append(
+            CheckResult(
                 "current required workflows",
                 STATUS_UNVERIFIED,
                 head_error or "invalid main commit response",
@@ -1903,15 +2200,27 @@ def audit(
         )
     else:
         audit_time = datetime.now(UTC)
-        results.append(
-            _audit_codeql_risk_acceptances(
-                api,
-                repo,
-                expected_ref="refs/heads/main",
-                expected_commit=head_sha["sha"],
-                now=audit_time,
+        local_source, policy_bytes = _audit_local_control_checkout(head_sha["sha"])
+        results.append(local_source)
+        if local_source.status == STATUS_PASS and policy_bytes is not None:
+            results.append(
+                _audit_codeql_risk_acceptances(
+                    api,
+                    repo,
+                    expected_ref="refs/heads/main",
+                    expected_commit=head_sha["sha"],
+                    now=audit_time,
+                    policy_bytes=policy_bytes,
+                )
             )
-        )
+        else:
+            results.append(
+                CheckResult(
+                    "accepted CodeQL risks",
+                    STATUS_UNVERIFIED,
+                    "accepted-risk policy was not read from verified local control bytes",
+                )
+            )
         results.append(_audit_workflows(api, head_sha["sha"], now=audit_time))
         results.append(_audit_current_checks(api, head_sha["sha"], now=audit_time))
     if errors:
@@ -1973,15 +2282,28 @@ def main(argv: list[str] | None = None) -> int:
         print("CodeQL risk-only mode cannot be combined with full-audit profiles", file=sys.stderr)
         return 2
     if risk_arguments[0] is not None:
-        results = [
-            _audit_codeql_risk_acceptances(
-                GitHubApi(args.repo),
-                args.repo,
-                expected_ref=risk_arguments[0],
-                expected_commit=cast(str, risk_arguments[1]),
-                now=datetime.now(UTC),
+        expected_commit = cast(str, risk_arguments[1])
+        local_source, policy_bytes = _audit_local_control_checkout(expected_commit)
+        results = [local_source]
+        if local_source.status == STATUS_PASS and policy_bytes is not None:
+            results.append(
+                _audit_codeql_risk_acceptances(
+                    GitHubApi(args.repo),
+                    args.repo,
+                    expected_ref=risk_arguments[0],
+                    expected_commit=expected_commit,
+                    now=datetime.now(UTC),
+                    policy_bytes=policy_bytes,
+                )
             )
-        ]
+        else:
+            results.append(
+                CheckResult(
+                    "accepted CodeQL risks",
+                    STATUS_UNVERIFIED,
+                    "accepted-risk policy was not read from verified local control bytes",
+                )
+            )
     else:
         results = audit(
             args.repo,

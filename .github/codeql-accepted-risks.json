@@ -16,6 +16,7 @@
       "documentation": "docs/config-cryptography.md#compatibility-is-security-sensitive",
       "compensating_controls": [
         "encrypted vendor output requires an explicit legacy-cryptography acknowledgement",
+        "direct Python API callers cannot generate encrypted output without the same explicit acknowledgement",
         "authenticated local storage uses scrypt and AES-GCM instead of the vendor format",
         "independent synthetic compatibility vectors pin the required protocol bytes"
       ],
@@ -40,7 +41,7 @@
       "compensating_controls": [
         "web evidence requires an explicit local-HTTP authentication acknowledgement",
         "the client makes one login attempt with no automatic retry",
-        "security guidance requires a trusted isolated LAN and a unique router password"
+        "security guidance requires a trusted isolated or direct LAN and a high-entropy unique router password"
       ],
       "re_review_triggers": [
         "the router login protocol changes",

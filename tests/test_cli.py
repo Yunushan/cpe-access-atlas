@@ -620,6 +620,7 @@ class CliTests(unittest.TestCase):
                 encode_config(
                     default_root_xml("OldPass123"),
                     encrypted=True,
+                    acknowledge_legacy_crypto=True,
                     device_key="a" * 32,
                     serial="ZTE12345678",
                     mac="00:11:22:33:44:55",
@@ -769,6 +770,7 @@ class CliTests(unittest.TestCase):
                 encode_config(
                     default_root_xml("OldPass123"),
                     encrypted=True,
+                    acknowledge_legacy_crypto=True,
                     device_key="a" * 32,
                     serial="ZTE12345678",
                     mac="00:11:22:33:44:55",

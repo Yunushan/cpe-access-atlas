@@ -74,7 +74,13 @@ class ConfigDecodingFuzzTests(unittest.TestCase):
         self, xml: bytes
     ) -> None:
         coordinates = {"device_key": "a" * 32, "serial": "ZTE12345678", "mac": "00:11:22:33:44:55"}
-        artifact = encode_config(xml, encrypted=True, base64_wrap=False, **coordinates)
+        artifact = encode_config(
+            xml,
+            encrypted=True,
+            acknowledge_legacy_crypto=True,
+            base64_wrap=False,
+            **coordinates,
+        )
         self.assertEqual(decode_config(artifact, **coordinates).xml, xml)
         with self.assertRaises(ConfigError):
             decode_config(artifact[:-1], **coordinates)

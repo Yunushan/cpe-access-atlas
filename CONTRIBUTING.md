@@ -94,12 +94,18 @@ the relevant lock files with a universal resolver, preserving environment
 markers and package hashes. They cover Python 3.11–3.15 on Windows, Linux, and
 macOS; resolving only the maintainer's interpreter misses conditional
 dependencies. See [lock maintenance](docs/release.md#dependency-lock-maintenance).
-Validation workflows run for pull requests and for pushes to `main`; pushes to
-feature branches are intentionally not duplicated because the pull-request run
-is the required merge evidence. Open or update a pull request before relying on
-CI results for a feature branch.
+Validation workflows run for pull requests and for pushes to `main`; full CI,
+dependency audit, and CodeQL also exercise unchanged `main` weekly and support
+the documented manual recovery checks. Pushes to feature branches are
+intentionally not duplicated because the pull-request run is the required merge
+evidence. Open or update a pull request before relying on CI results for a
+feature branch.
 Run the full validation suite and record the reason in the pull request.
-Dependabot is configured to propose updates for these files.
+Dependabot proposes updates to the direct Python constraints in
+`pyproject.toml` and to GitHub Actions. It does not regenerate the custom
+`requirements-*.lock` files; after accepting a constraint change, regenerate
+and review every affected lock as described below. The weekly dependency audit
+still scans every committed lock for known vulnerabilities.
 
 The 3.15 jobs allow prereleases until a final interpreter is available. Run the
 suite, coverage, typing, archive tests, and clean wheel/sdist installs on 3.15;

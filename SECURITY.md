@@ -17,6 +17,10 @@ advertised. Use the
 form, with **no vulnerability details, exploit, attachment, or device data**.
 Wait for a confidential channel before sending the report. Administrators must
 enable and test private reporting before designating a release production-ready.
+During a suspected compromise, follow the
+[operational-resilience runbook](docs/operations.md): freeze publication,
+minimize sensitive evidence, establish the compromise boundary, and do not
+infer an on-call response or recovery guarantee from this reporting route.
 
 ## Supported project versions
 
@@ -37,9 +41,10 @@ to a fixed set of status and advertised page-view endpoints. The login uses the
 router's plaintext HTTP service on port 80: the password itself is not sent,
 but the username, password-derived challenge response, session token, and
 session cookie have no TLS protection. An attacker on the local network path
-could observe or alter them, hijack the authenticated session, or use captured
-login material in password-guessing attacks. Run this operation only on a
-trusted, isolated LAN and use a unique router password.
+could observe or alter them, hijack the authenticated session, or use the
+captured challenge/response for offline password guessing. Run this operation
+only on a trusted, isolated or direct LAN and use a password-manager-generated,
+high-entropy password unique to this router.
 
 Session cookies are kept only in process memory and are never included in the
 evidence output. The client does not call a logout endpoint, so the router-side
@@ -56,7 +61,9 @@ Never commit:
 ## Automated checks
 
 Configured pull-request and push workflows check for dependency
-vulnerabilities, dependency-file changes, and Python CodeQL findings. Release
+vulnerabilities, dependency-file changes, and Python CodeQL findings. Full CI,
+dependency audit, and CodeQL also exercise unchanged `main` weekly; their status
+is an operational signal, not a guaranteed alert or response service. Release
 artifacts are generated with a CycloneDX SBOM, SHA-256 checksums, and GitHub
 build-provenance attestations once the release workflow is enabled for a
 protected tag.
@@ -67,3 +74,6 @@ expiring policy in `.github/codeql-accepted-risks.json` on the audited ref and
 commit, and the selected exact instance must itself remain dismissed. The two
 inventories are gated separately; an unlisted, missing,
 changed, fixed-but-still-listed, or expired acceptance fails release validation.
+Protocol findings remain visible rather than being hidden with an in-source
+suppression. Repository tests inventory effective Python CodeQL suppression
+comments and allow only the separately reviewed private-file output exception.

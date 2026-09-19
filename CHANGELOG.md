@@ -4,6 +4,23 @@ All notable changes are documented here.
 
 ## 0.4.0a5 - 2026-09-19
 
+- Build wheels and source archives twice from immutable reviewed Git blobs;
+  reject any byte mismatch and publish artifacts only after independent and
+  cross-platform comparisons succeed. Canonicalize wheels with verified records
+  and platform-neutral stored ZIP entries, and source archives with sorted USTAR
+  plus deterministic stored-DEFLATE gzip bytes, independent of checkout state,
+  host metadata, line endings, or zlib implementation. Verify source-archive
+  inputs against the same immutable Git blobs rather than mutable checkout bytes,
+  using bounded portable extraction across every supported Python version. Bind
+  every installable wheel member, package byte, dependency, entry point, license,
+  and critical metadata field to expectations captured before backend execution;
+  reject unexpected modules, scripts, or metadata. Reject Windows drive-relative,
+  alternate-stream, device, invalid-character, normalization, and hierarchy path
+  hazards before filesystem writes, stage Git snapshots transactionally, and
+  enforce size limits again after canonicalization.
+- Require direct Python API callers, as well as CLI users, to explicitly
+  acknowledge the firmware-mandated legacy SHA-256/AES-CBC construction before
+  generating encrypted type-4 configuration artifacts.
 - Write new private containers as authenticated format v2 with explicit, bounded
   scrypt parameters and stronger work factors; retain read-only v1 compatibility
   and reject unsupported or resource-exhausting parameters before key derivation.
@@ -59,12 +76,23 @@ All notable changes are documented here.
   already published output. Physical power-loss resilience depends on storage.
 - Require immutable published releases in the repository audit and check the
   publication result without increasing workflow token permissions.
+- Add a fail-closed operational-resilience and incident-response runbook without
+  claiming an SLA, on-call coverage, backup, or completed recovery drill. Run
+  the full CI matrix weekly and make CI freshness part of the production-settings
+  audit; allow manual CI, CodeQL, and secret-scan recovery verification.
+- Keep the protocol-mandated weak-hash finding visible to CodeQL instead of
+  suppressing it in source. Inventory effective Python CodeQL suppression
+  comments and bind the sole reviewed private-file exception to its exact
+  function, AST sink, and structural context. Bind the production-settings
+  checker and its complete local control tree byte-for-byte to the audited
+  remote-main commit before accepting its policy or reporting passing evidence.
 - Standardize source line endings and include the policy in source archive checks.
 
 Exact-device acceptance, service preservation, access and recovery remain
-unverified. The legacy vendor-format KDF/CBC risk and its open CodeQL finding
-are not remediated by these fixes; release publication remains gated on the
-configured security checks. This candidate is not a production-support claim.
+unverified. The legacy vendor-format KDF/CBC risk and its dismissed, explicitly
+accepted CodeQL finding are not remediated by these fixes; release publication
+remains gated on the configured security checks. This candidate is not a
+production-support claim.
 
 - Add a separate authenticated local container for credential-bearing artifacts,
   using fresh scrypt salt and AES-GCM nonce/tag; keep it distinct from the

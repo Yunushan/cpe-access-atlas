@@ -542,6 +542,7 @@ def command_config_generate(args: argparse.Namespace) -> int:
         signature=args.signature,
         base64_wrap=not args.raw,
         encrypted=encrypted_output,
+        acknowledge_legacy_crypto=args.acknowledge_legacy_crypto,
         device_key=device_key,
         serial=serial,
         mac=mac,

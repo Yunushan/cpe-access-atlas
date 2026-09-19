@@ -502,6 +502,7 @@ def encode_config(
     signature: str = H3600P_SIGNATURE,
     base64_wrap: bool = True,
     encrypted: bool = False,
+    acknowledge_legacy_crypto: bool = False,
     device_key: str | None = None,
     serial: str | None = None,
     mac: str | None = None,
@@ -510,7 +511,8 @@ def encode_config(
 
     The default is the unencrypted compressed form documented by the public
     H3600P research.  Encryption is optional and requires device-specific
-    inputs; neither mode proves acceptance by the target firmware.
+    inputs and an explicit acknowledgement of the vendor's legacy cryptography;
+    neither mode proves acceptance by the target firmware.
     """
 
     if not isinstance(xml, bytes) or not xml:
@@ -527,6 +529,11 @@ def encode_config(
     if encrypted:
         if not device_key or not serial or not mac:
             raise ConfigError("encrypted output requires the device passphrase, serial, and MAC")
+        if acknowledge_legacy_crypto is not True:
+            raise ConfigError(
+                "encrypted output requires explicit acknowledgement of the vendor's legacy "
+                "SHA-256 derivation and unauthenticated CBC"
+            )
         key, iv = _derive_h3600p_keys(device_key, serial, mac)
         aes = _require_aes()
         padding = (-len(compressed)) % 16

@@ -3,18 +3,27 @@
 
 Run with the repository's hash-locked CI/release tooling already installed.
 This executes the archive's bundled tests; safe extraction is not a sandbox
-for that code. Only use artifacts built from the reviewed local source.
+for that code. Only use artifacts built from the reviewed Git commit.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import subprocess
 import sys
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import build_reproducible as reproducible
+else:
+    reproducible = importlib.import_module(
+        f"{__package__}.build_reproducible" if __package__ else "build_reproducible"
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 _GENERATED_METADATA = {
@@ -64,24 +73,66 @@ def source_inputs(source: Path) -> tuple[Path, ...]:
             and path.suffix not in {".pyc", ".pyo"}
         )
     if not any((source / "tests").glob("test_*.py")):
-        raise SdistError("reference checkout has no tests; refusing an empty test gate")
+        raise SdistError("reviewed source has no tests; refusing an empty test gate")
     return tuple(paths)
 
 
-def check_sdist(dist_dir: Path, source: Path = ROOT) -> None:
+def _extract_reviewed_archive(archive: tarfile.TarFile, destination: Path) -> None:
+    """Safely materialize prevalidated regular members on every supported Python."""
+
+    try:
+        members = reproducible._validated_members(archive)
+    except reproducible.ReproducibleBuildError as exc:
+        raise SdistError(str(exc)) from exc
+    for member in members:
+        relative = PurePosixPath(member.name)
+        target = destination.joinpath(*relative.parts)
+        if member.isdir():
+            if target.exists() and not target.is_dir():
+                raise SdistError("source archive has a file/directory collision")
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise SdistError("source archive has a file/directory collision")
+        payload = archive.extractfile(member)
+        if payload is None:
+            raise SdistError("source archive regular file has no payload")
+        with payload:
+            data = payload.read()
+        if len(data) != member.size:
+            raise SdistError("source archive member has an invalid size")
+        target.write_bytes(data)
+
+
+def check_sdist(
+    dist_dir: Path,
+    source: Path = ROOT,
+    *,
+    source_ref: str | None = None,
+) -> None:
     """Require matching source/tests before running the archive's coverage gate."""
+
+    if source_ref is not None:
+        commit = reproducible.resolve_source_commit(source, source_ref)
+        epoch = reproducible.source_date_epoch(source, commit)
+        with TemporaryDirectory(prefix="cpe-atlas-reviewed-source-") as directory:
+            snapshot = Path(directory) / "source"
+            reproducible._copy_source_snapshot(source, snapshot, epoch, commit)
+            check_sdist(dist_dir, snapshot)
+        return
 
     archives = tuple(dist_dir.glob("*.tar.gz"))
     if len(archives) != 1:
         raise SdistError("distribution directory must contain exactly one source archive")
+    compressed_size = archives[0].stat().st_size
+    if not 0 < compressed_size <= reproducible._MAX_SDIST_BYTES:
+        raise SdistError("source archive has an invalid compressed size")
     expected = {path.relative_to(source) for path in source_inputs(source)}
     with TemporaryDirectory(prefix="cpe-atlas-sdist-") as directory:
         destination = Path(directory)
         with tarfile.open(archives[0], "r:gz") as archive:
-            members = archive.getmembers()
-            if any(not (member.isfile() or member.isdir()) for member in members):
-                raise SdistError("source archive must contain only regular files and directories")
-            archive.extractall(destination, members=members, filter="data")
+            _extract_reviewed_archive(archive, destination)
         roots = tuple(destination.iterdir())
         if len(roots) != 1 or not roots[0].is_dir():
             raise SdistError("source archive must contain exactly one root directory")
@@ -96,7 +147,7 @@ def check_sdist(dist_dir: Path, source: Path = ROOT) -> None:
             raise SdistError("source archive contains unexpected files outside its reviewed inputs")
         bundled_inputs = {path.relative_to(extracted) for path in source_inputs(extracted)}
         if bundled_inputs != expected:
-            raise SdistError("source archive input inventory differs from the reviewed checkout")
+            raise SdistError("source archive input inventory differs from the reviewed source")
         for relative in sorted(expected):
             bundled = extracted / relative
             if not bundled.is_file() or bundled.read_bytes() != (source / relative).read_bytes():
@@ -122,16 +173,27 @@ def check_sdist(dist_dir: Path, source: Path = ROOT) -> None:
                 check=True,
                 timeout=300,
             )
-    print("Source archive matches the checkout; bundled tests and coverage passed.")
+    print("Source archive matches the reviewed source; bundled tests and coverage passed.")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
+    parser.add_argument(
+        "--source-ref",
+        default=os.environ.get("GITHUB_SHA", "HEAD"),
+        help="full reviewed Git commit id (defaults to GITHUB_SHA or HEAD)",
+    )
     args = parser.parse_args(argv)
     try:
-        check_sdist(args.dist_dir)
-    except (OSError, tarfile.TarError, SdistError, subprocess.SubprocessError) as exc:
+        check_sdist(args.dist_dir, source_ref=args.source_ref)
+    except (
+        OSError,
+        reproducible.ReproducibleBuildError,
+        tarfile.TarError,
+        SdistError,
+        subprocess.SubprocessError,
+    ) as exc:
         print(f"Source archive verification failed: {exc}", file=sys.stderr)
         return 1
     return 0

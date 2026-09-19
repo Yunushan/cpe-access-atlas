@@ -431,7 +431,10 @@ Repository administrators should apply the [GitHub production settings
 checklist](docs/github-production-settings.md) before declaring a release
 production-ready. The checklist includes the read-only
 `scripts/check_github_production_settings.py` audit for retaining evidence of
-the administrator-visible controls.
+the administrator-visible controls. The
+[operational-resilience runbook](docs/operations.md) defines the fail-closed
+incident, revocation, and recovery process and identifies the recovery exercise
+that remains required before a production-support claim.
 
 ## Research sources
 

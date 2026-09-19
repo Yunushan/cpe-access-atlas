@@ -17,7 +17,9 @@ documentation defects. Never place credentials, configuration exports, session
 cookies, subscriber identifiers, private firmware, or unpatched vulnerability
 details in an issue. Follow [the security policy](SECURITY.md) for confidential
 reporting and [installation and rollback](docs/installation.md) when changing
-versions.
+versions. The [operational-resilience runbook](docs/operations.md) defines the
+fail-closed incident, release-revocation, and recovery process without promising
+an on-call response or restoration time.
 
 A release becomes a production-support candidate only after its release gates,
 administrator-visible repository audit, published-artifact verification, and

@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
+import ast
 import copy
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tokenize
 import tomllib
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -32,6 +35,95 @@ WORKFLOW_FILES = (
     ROOT / ".github" / "workflows" / "dco.yml",
     ROOT / ".github" / "workflows" / "secret-scan.yml",
 )
+
+_SCOPED_CODEQL_SUPPRESSION = re.compile(r"(?i)\b(?:codeql|lgtm)\s*\[[^\]]*\]")
+_BARE_LGTM_SUPPRESSION = re.compile(r"(?i)(?:^|;)\s*lgtm(?!\B|\s*\[)")
+_BLANKET_NOQA_SUPPRESSION = re.compile(r"(?i)\s*noqa\s*(?:[^:].*)?")
+
+
+def _suppression_context(relative_path: str, source: bytes) -> list[tuple[str, str, str, str, str]]:
+    """Return semantic anchors for effective Python CodeQL suppression comments."""
+
+    text = source.decode("utf-8")
+    tree = ast.parse(text, filename=relative_path)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    statements_by_line: dict[int, list[ast.stmt]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            statements_by_line.setdefault(node.lineno, []).append(node)
+
+    suppressions: list[tuple[str, str, str, str, str]] = []
+    for token in tokenize.tokenize(io.BytesIO(source).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        contents = token.string.removeprefix("#")
+        if not (
+            _SCOPED_CODEQL_SUPPRESSION.search(contents) is not None
+            or _BARE_LGTM_SUPPRESSION.search(contents) is not None
+            or _BLANKET_NOQA_SUPPRESSION.fullmatch(contents) is not None
+        ):
+            continue
+
+        adjacent = statements_by_line.get(token.end[0] + 1, [])
+        if len(adjacent) != 1:
+            suppressions.append(
+                (
+                    relative_path,
+                    token.string,
+                    "<no-unique-adjacent-statement>",
+                    "<unknown-parent>",
+                    "<unknown-statement>",
+                )
+            )
+            continue
+        statement = adjacent[0]
+        function = "<module>"
+        ancestor: ast.AST | None = statement
+        while ancestor in parents:
+            ancestor = parents[ancestor]
+            if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                function = ancestor.name
+                break
+
+        parent = parents.get(statement)
+        relation = "<unknown-parent>"
+        if parent is not None:
+            for field, value in ast.iter_fields(parent):
+                if value is statement:
+                    relation = f"{type(parent).__name__}.{field}"
+                    break
+                if isinstance(value, list) and statement in value:
+                    relation = f"{type(parent).__name__}.{field}[{value.index(statement)}]"
+                    break
+        suppressions.append(
+            (
+                relative_path,
+                token.string,
+                function,
+                relation,
+                f"{type(statement).__name__}:{ast.unparse(statement)}",
+            )
+        )
+    return suppressions
+
+
+def _repository_codeql_suppressions() -> list[tuple[str, str, str, str, str]]:
+    python_files = [
+        *ROOT.glob("*.py"),
+        *(
+            path
+            for directory in ("src", "scripts", "tests")
+            for path in (ROOT / directory).rglob("*.py")
+        ),
+    ]
+    return [
+        suppression
+        for path in sorted(python_files)
+        for suppression in _suppression_context(
+            path.relative_to(ROOT).as_posix(),
+            path.read_bytes(),
+        )
+    ]
 
 
 class _FakeGitHubApi:
@@ -119,11 +211,16 @@ class RepositoryControlTests(unittest.TestCase):
                     else:
                         self.assertRegex(line, pattern)
 
-    def test_dependabot_covers_runtime_and_workflow_dependencies(self) -> None:
+    def test_dependabot_scope_and_lock_regeneration_are_documented(self) -> None:
         config = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
         self.assertIn("package-ecosystem: pip", config)
         self.assertIn("package-ecosystem: github-actions", config)
         self.assertIn("interval: weekly", config)
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        release = (ROOT / "docs" / "release.md").read_text(encoding="utf-8")
+        for document in (contributing, release):
+            self.assertIn("does not regenerate", document)
+            self.assertIn("requirements-*.lock", document)
 
     def test_dependency_audit_is_periodic_manual_and_covers_every_lock(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
@@ -189,6 +286,18 @@ class RepositoryControlTests(unittest.TestCase):
         supported = environments(github_audit._RELEASE_OSES, github_audit._RELEASE_PYTHONS)
         audited = environments(("ubuntu-latest",), versions)
         self.assertEqual(active_in(supported) - active_in(audited), set())
+
+    def test_ci_is_periodic_manual_and_freshness_audited(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("  workflow_dispatch:\n", workflow)
+        self.assertRegex(workflow, r'(?m)^  schedule:\n    - cron: "[^"]+"$')
+        self.assertIn("CI", github_audit._WEEKLY_WORKFLOWS)
+
+    def test_security_response_workflows_are_manually_dispatchable(self) -> None:
+        for filename in ("codeql.yml", "secret-scan.yml"):
+            with self.subTest(filename=filename):
+                workflow = (ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+                self.assertIn("  workflow_dispatch:\n", workflow)
 
     def test_release_preflight_is_manual_read_only_and_nonpublishing(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release-preflight.yml").read_text(
@@ -669,12 +778,115 @@ class RepositoryControlTests(unittest.TestCase):
         for name in ("ci", "release"):
             workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
             gate = workflow.index("python scripts/check_sdist.py --dist-dir dist")
-            self.assertLess(workflow.index("python -m build --wheel --sdist --no-isolation"), gate)
+            self.assertLess(
+                workflow.index("python scripts/build_reproducible.py --dist-dir dist"), gate
+            )
             self.assertLess(gate, workflow.index("- name: Install wheel in a clean"))
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertLess(
             release.index("python scripts/check_sdist.py"), release.index("gh release create")
         )
+
+    def test_cross_platform_artifact_sha_equality_gates_ci_and_release(self) -> None:
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        artifact_pattern = "python315-distributions-*"
+        platforms = ("ubuntu-latest", "windows-latest", "macos-latest")
+
+        upload = ci.split(
+            "      - name: Upload Python 3.15 distributions for cross-platform verification\n",
+            1,
+        )[1].split("\n\n  cross-platform-artifact-reproducibility:", 1)[0]
+        self.assertIn("        if: matrix.python == '3.15'\n", upload)
+        self.assertIn("actions/upload-artifact@", upload)
+        self.assertIn("name: python315-distributions-${{ matrix.os }}", upload)
+        self.assertIn("dist/*.whl", upload)
+        self.assertIn("dist/*.tar.gz", upload)
+        self.assertIn("if-no-files-found: error", upload)
+
+        comparison_job = ci.split("  cross-platform-artifact-reproducibility:\n", 1)[1].split(
+            "\n  package-smoke:", 1
+        )[0]
+        self.assertIn(
+            "cross-platform-artifact-reproducibility",
+            github_audit._REQUIRED_BRANCH_CHECKS,
+        )
+        self.assertRegex(comparison_job, r"(?m)^    needs: test$")
+        self.assertIn("actions/download-artifact@", comparison_job)
+        self.assertIn(f"pattern: {artifact_pattern}", comparison_job)
+        self.assertIn("Verify cross-platform artifact SHA-256 equality", comparison_job)
+
+        release_build = release.index("      - name: Build distributions\n")
+        release_comparison = release.index(
+            "      - name: Verify release artifact SHA-256 equality across platforms\n"
+        )
+        self.assertLess(release_build, release_comparison)
+        self.assertLess(release_comparison, release.index("      - name: Upload distributions\n"))
+        self.assertIn(f"pattern: {artifact_pattern}", release[release_build:release_comparison])
+        for workflow_block in (comparison_job, release[release_comparison:]):
+            for platform in platforms:
+                self.assertIn(f'"python315-distributions-{platform}"', workflow_block)
+            self.assertIn('hashlib.file_digest(stream, "sha256").hexdigest()', workflow_block)
+            self.assertIn("if inventory != baseline", workflow_block)
+
+    def test_cross_platform_artifact_sha_verifiers_fail_closed(self) -> None:
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        ci_step = ci.split("      - name: Verify cross-platform artifact SHA-256 equality\n", 1)[
+            1
+        ].split("\n\n  package-smoke:", 1)[0]
+        release_step = release.split(
+            "      - name: Verify release artifact SHA-256 equality across platforms\n", 1
+        )[1].split("      - name: Check distribution metadata\n", 1)[0]
+        ci_code = compile(dedent(ci_step.split("        run: |\n", 1)[1]), "ci-sha-gate", "exec")
+        release_code = compile(
+            dedent(release_step.split("        run: |\n", 1)[1]), "release-sha-gate", "exec"
+        )
+        directory_names = (
+            "python315-distributions-ubuntu-latest",
+            "python315-distributions-windows-latest",
+            "python315-distributions-macos-latest",
+        )
+
+        def populate(root: Path, *, include_release: bool = False) -> None:
+            for name in directory_names:
+                build = root / "cross-platform-dist" / name
+                build.mkdir(parents=True)
+                (build / "sample-py3-none-any.whl").write_bytes(b"wheel")
+                (build / "sample.tar.gz").write_bytes(b"sdist")
+            if include_release:
+                dist = root / "dist"
+                dist.mkdir()
+                (dist / "sample-py3-none-any.whl").write_bytes(b"wheel")
+                (dist / "sample.tar.gz").write_bytes(b"sdist")
+
+        for code, include_release in ((ci_code, False), (release_code, True)):
+            with self.subTest(release=include_release), TemporaryDirectory() as directory:
+                root = Path(directory)
+                populate(root, include_release=include_release)
+                with patch("pathlib.Path.cwd", return_value=root):
+                    exec(code, {})  # noqa: S102 -- reviewed local workflow verifier.
+
+                differing = root / "cross-platform-dist" / directory_names[-1] / "sample.tar.gz"
+                differing.write_bytes(b"different")
+                with (
+                    patch("pathlib.Path.cwd", return_value=root),
+                    self.assertRaisesRegex(RuntimeError, "SHA-256"),
+                ):
+                    exec(code, {})  # noqa: S102 -- reviewed local workflow verifier.
+
+            with (
+                self.subTest(release=include_release, missing=True),
+                TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                populate(root, include_release=include_release)
+                shutil.rmtree(root / "cross-platform-dist" / directory_names[-1])
+                with (
+                    patch("pathlib.Path.cwd", return_value=root),
+                    self.assertRaisesRegex(RuntimeError, "Expected cross-platform builds"),
+                ):
+                    exec(code, {})  # noqa: S102 -- reviewed local workflow verifier.
 
     def test_actual_release_classification_command_handles_preview_versions(self) -> None:
         # Execute the test-reviewed workflow's Python classification command,
@@ -737,24 +949,54 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("--strict", security)
         self.assertNotIn("--local", security)
 
-    def test_vendor_crypto_is_not_misclassified_or_silently_suppressed(self) -> None:
+    def test_vendor_crypto_is_not_misclassified_as_nonsecurity(self) -> None:
         config = (ROOT / "src" / "cpe_access_atlas" / "config.py").read_text(encoding="utf-8")
-        self.assertNotIn("codeql[py/weak-sensitive-data-hashing]", config)
         self.assertNotIn("usedforsecurity=False", config)
         self.assertIn("docs/config-cryptography.md", config)
         self.assertTrue((ROOT / "docs/config-cryptography.md").is_file())
+
+    def test_source_codeql_suppressions_are_exact_and_reviewed(self) -> None:
+        expected = (
+            "src/cpe_access_atlas/private_files.py",
+            "# codeql[py/clear-text-storage-sensitive-data]",
+            "write_private_bytes",
+            "With.body[1]",
+            "Expr:stream.write(data)",
+        )
+        self.assertEqual(_repository_codeql_suppressions(), [expected])
+
+        source = (ROOT / "src" / "cpe_access_atlas" / "private_files.py").read_bytes()
+        anchored = (
+            b"            # codeql[py/clear-text-storage-sensitive-data]\n"
+            b"            stream.write(data)\n"
+        )
+        moved = (
+            b"            stream.write(data)\n"
+            b"            # codeql[py/clear-text-storage-sensitive-data]\n"
+        )
+        self.assertEqual(source.count(anchored), 1)
+        mutated = source.replace(anchored, moved)
+        relocated = _suppression_context(expected[0], mutated)
+        self.assertEqual(relocated[0][:2], expected[:2])
+        self.assertNotEqual(relocated, [expected])
 
     def test_distribution_builds_reuse_hash_verified_backend_without_index_access(self) -> None:
         for name, lock in (("ci", "ci"), ("release", "release")):
             workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
             with self.subTest(workflow=name):
-                builds = re.findall(r"^\s+run: (python -m build .+)$", workflow, re.MULTILINE)
+                builds = re.findall(
+                    r"^\s+run: (python scripts/build_reproducible.py .+)$",
+                    workflow,
+                    re.MULTILINE,
+                )
                 expected_count = 2 if name == "ci" else 1
                 self.assertEqual(
-                    builds, ["python -m build --wheel --sdist --no-isolation"] * expected_count
+                    builds,
+                    ["python scripts/build_reproducible.py --dist-dir dist"] * expected_count,
                 )
                 hash_verified_builds = re.findall(
-                    r'PIP_NO_INDEX: "1"\s+run: python -m build --wheel --sdist --no-isolation',
+                    r'PIP_NO_INDEX: "1"\s+run: python scripts/build_reproducible.py '
+                    r"--dist-dir dist",
                     workflow,
                 )
                 self.assertEqual(len(hash_verified_builds), expected_count)
@@ -803,7 +1045,10 @@ class RepositoryControlTests(unittest.TestCase):
         step = workflow.split(
             "      - name: Install Python 3.15 artifacts in clean environments\n"
         )[1]
-        step = step.split("\n  package-smoke:")[0]
+        step = step.split(
+            "      - name: Upload Python 3.15 distributions for cross-platform verification\n",
+            1,
+        )[0]
         self.assertIn("        if: matrix.python == '3.15'\n", step)
         self.assertIn("        shell: python\n", step)
         code = compile(dedent(step.split("        run: |\n")[1]), "ci-artifact-smoke", "exec")
@@ -890,7 +1135,7 @@ class RepositoryControlTests(unittest.TestCase):
 
     def test_weekly_workflow_evidence_must_be_recent_and_not_future_dated(self) -> None:
         now = datetime(2026, 9, 18, 12, tzinfo=UTC)
-        for workflow_name in ("Security audit", "CodeQL"):
+        for workflow_name in ("CI", "Security audit", "CodeQL"):
             for created_at in ("2026-09-01T12:00:00Z", "2026-09-18T12:06:00Z"):
                 with self.subTest(workflow_name=workflow_name, created_at=created_at):
                     responses = _successful_workflow_responses()
@@ -1208,6 +1453,24 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("SHA-pinning enforcement", settings)
         self.assertIn("zero open CodeQL alerts", settings)
         self.assertIn("secret-scan `gitleaks`", settings)
+
+    def test_operational_runbook_is_fail_closed_without_invented_service_levels(self) -> None:
+        operations = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+        for marker in (
+            "no on-call rotation",
+            "no guaranteed",
+            "publication stays frozen",
+            "Do not delete or move an immutable release",
+            "rotate every affected credential",
+            "Sensitive source material",
+            "Recovery exercise gate",
+            "not a claim that an exercise has occurred",
+            "production-settings audit",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, operations)
+        manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+        self.assertIn("recursive-include docs *.md", manifest)
 
     def test_source_distribution_manifest_includes_governance_config(self) -> None:
         manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
