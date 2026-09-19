@@ -2,7 +2,7 @@
 
 All notable changes are documented here.
 
-## 0.4.0a5 - Unreleased
+## 0.4.0a5 - 2026-09-19
 
 - Write new private containers as authenticated format v2 with explicit, bounded
   scrypt parameters and stronger work factors; retain read-only v1 compatibility
