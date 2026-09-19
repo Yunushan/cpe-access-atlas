@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import os
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -12,7 +13,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import check_sdist as sdist
 
@@ -106,6 +107,84 @@ class SdistTests(unittest.TestCase):
         self.assertTrue(all(not root.exists() for root in roots))
         self.assertIn("bundled tests and coverage passed", output.getvalue())
 
+    def test_git_snapshot_is_used_instead_of_mutable_checkout_bytes(self) -> None:
+        self.archive()
+        subprocess.run(
+            ["git", "init", "--quiet"],  # noqa: S607 -- isolated test repository
+            cwd=self.source,
+            check=True,
+            timeout=30,
+        )
+        subprocess.run(
+            ["git", "add", "."],  # noqa: S607 -- isolated test repository
+            cwd=self.source,
+            check=True,
+            timeout=30,
+        )
+        subprocess.run(
+            [  # noqa: S607 -- isolated synthetic test repository
+                "git",
+                "-c",
+                "user.name=Sdist Test",
+                "-c",
+                "user.email=sdist-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "reviewed source",
+            ],
+            cwd=self.source,
+            check=True,
+            timeout=30,
+        )
+        (self.source / "docs/release.md").write_bytes(
+            self.files["docs/release.md"].replace(b"\n", b"\r\n")
+        )
+        (self.source / "tests/test_untracked.py").write_bytes(b"unreviewed\n")
+        real_run = subprocess.run
+        archive_commands: list[list[str]] = []
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes] | None:
+            if command[0] == "git":
+                return real_run(command, **kwargs)
+            archive_commands.append(command)
+            return None
+
+        with (
+            patch.object(sdist.subprocess, "run", side_effect=run),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            sdist.check_sdist(self.dist, self.source, source_ref="HEAD")
+        self.assertIn("matches the reviewed source", output.getvalue())
+        self.assertEqual(len(archive_commands), 2)
+
+        archive_commands.clear()
+        tampered = b"changed after review\n"
+        self.archive({**self.files, "docs/release.md": tampered})
+        (self.source / "docs/release.md").write_bytes(tampered)
+        with (
+            patch.object(sdist.subprocess, "run", side_effect=run),
+            self.assertRaisesRegex(sdist.SdistError, "missing or changed"),
+        ):
+            sdist.check_sdist(self.dist, self.source, source_ref="HEAD")
+        self.assertEqual(archive_commands, [])
+
+    def test_direct_cli_import_mode_supports_help(self) -> None:
+        script = Path(sdist.__file__).resolve()
+        with patch.object(sys, "path", [str(script.parent), *sys.path]):
+            namespace = runpy.run_path(str(script), run_name="check_sdist_direct")
+        self.assertIn("main", namespace)
+        result = subprocess.run(  # noqa: S603 -- fixed current interpreter and local script
+            [sys.executable, str(script), "--help"],
+            cwd=script.parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--source-ref", result.stdout)
+
     def test_generated_bytecode_is_not_an_archive_requirement(self) -> None:
         for relative in (
             "tests/__pycache__/test_example.cpython.pyc",
@@ -128,11 +207,54 @@ class SdistTests(unittest.TestCase):
     def test_zero_multiple_or_invalid_archives_fail_before_execution(self) -> None:
         self.assert_refused_before_execution()
         archive = self.archive()
+        with patch.object(sdist.reproducible, "_MAX_SDIST_BYTES", archive.stat().st_size - 1):
+            self.assert_refused_before_execution()
         (self.dist / "second.tar.gz").write_bytes(archive.read_bytes())
         self.assert_refused_before_execution()
         (self.dist / "second.tar.gz").unlink()
         archive.write_bytes(b"not a tar archive")
         self.assert_refused_before_execution()
+
+    def test_portable_extractor_rejects_collisions_and_invalid_payloads(self) -> None:
+        cases = (
+            ("directory-collision", "package", True, b"existing", None, 0, "collision"),
+            ("file-collision", "package/value", False, b"existing", None, 0, "collision"),
+            ("missing-payload", "package/value", False, None, None, 0, "no payload"),
+            ("short-payload", "package/value", False, None, b"x", 2, "invalid size"),
+        )
+        for label, name, directory, existing, payload, size, error in cases:
+            with self.subTest(label=label):
+                destination = self.base / f"extract-{label}"
+                destination.mkdir()
+                target = destination.joinpath(*Path(name).parts)
+                if existing is not None:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(existing)
+                member = tarfile.TarInfo(name)
+                member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+                member.size = size
+                archive = Mock()
+                archive.extractfile.return_value = None if payload is None else io.BytesIO(payload)
+                with (
+                    patch.object(
+                        sdist.reproducible,
+                        "_validated_members",
+                        return_value=(member,),
+                    ),
+                    self.assertRaisesRegex(sdist.SdistError, error),
+                ):
+                    sdist._extract_reviewed_archive(archive, destination)
+
+        destination = self.base / "extract-existing-directory"
+        (destination / "package").mkdir(parents=True)
+        member = tarfile.TarInfo("package")
+        member.type = tarfile.DIRTYPE
+        with patch.object(
+            sdist.reproducible,
+            "_validated_members",
+            return_value=(member,),
+        ):
+            sdist._extract_reviewed_archive(Mock(), destination)
 
     def test_missing_extra_or_modified_source_and_test_inputs_are_rejected(self) -> None:
         for name in self.files:
@@ -223,14 +345,26 @@ class SdistTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
 
     def test_cli_passes_default_and_explicit_directory_and_reports_failures(self) -> None:
-        with patch.object(sdist, "check_sdist") as check:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GITHUB_SHA", None)
+            with patch.object(sdist, "check_sdist") as check:
+                self.assertEqual(sdist.main([]), 0)
+                check.assert_called_once_with(Path("dist"), source_ref="HEAD")
+        with (
+            patch.dict(os.environ, {"GITHUB_SHA": "b" * 40}),
+            patch.object(sdist, "check_sdist") as check,
+        ):
             self.assertEqual(sdist.main([]), 0)
-            check.assert_called_once_with(Path("dist"))
+            check.assert_called_once_with(Path("dist"), source_ref="b" * 40)
         with patch.object(sdist, "check_sdist") as check:
-            self.assertEqual(sdist.main(["--dist-dir", "artifacts"]), 0)
-            check.assert_called_once_with(Path("artifacts"))
+            self.assertEqual(
+                sdist.main(["--dist-dir", "artifacts", "--source-ref", "a" * 40]),
+                0,
+            )
+            check.assert_called_once_with(Path("artifacts"), source_ref="a" * 40)
         for failure in (
             OSError("filesystem"),
+            sdist.reproducible.ReproducibleBuildError("invalid source ref"),
             tarfile.TarError("invalid archive"),
             sdist.SdistError("mismatch"),
             subprocess.TimeoutExpired(["coverage"], 300),

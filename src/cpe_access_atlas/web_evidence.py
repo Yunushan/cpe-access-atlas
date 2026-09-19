@@ -358,10 +358,11 @@ def _zte_login_compatibility_digest(password: str, challenge: str) -> str:
     the device cannot authenticate.
     """
 
-    # CodeQL would otherwise treat this protocol-mandated operation as generic
-    # password hashing. Keep the exception scoped to the compatibility helper;
-    # docs/research/zte-h3600p-ttn10-260210.md records the protocol constraint.
-    # codeql[py/weak-sensitive-data-hashing]
+    # This exact vendor challenge response remains a security-sensitive accepted
+    # risk: a captured exchange can enable offline guesses of weak passwords.
+    # Keep the CodeQL finding visible. Review and compensating controls are tracked
+    # in .github/codeql-accepted-risks.json, with protocol evidence in
+    # docs/research/zte-h3600p-ttn10-260210.md.
     return hashlib.sha256((password + challenge).encode("utf-8")).hexdigest()
 
 

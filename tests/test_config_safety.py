@@ -322,6 +322,7 @@ class CodecSelectionTests(unittest.TestCase):
                     b"<DB/>",
                     signature="OTHER DEVICE",
                     encrypted=True,
+                    acknowledge_legacy_crypto=True,
                     device_key="a" * 32,
                     serial="ZTE12345678",
                     mac="00:11:22:33:44:55",

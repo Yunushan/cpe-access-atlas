@@ -173,8 +173,11 @@ password-hardening design or establish FIPS validation for the custom buggy
 digest implementation. Python explains the flag's meaning in its
 [hashlib documentation](https://docs.python.org/3/library/hashlib.html).
 The CLI requires a separate `--acknowledge-legacy-crypto` opt-in before it
-generates or preserves an encrypted type-4 artifact. This is an explicit risk
-boundary, not a remediation or a claim that the vendor scheme is safe.
+generates or preserves an encrypted type-4 artifact. The Python API also
+requires `acknowledge_legacy_crypto=True` for encrypted output, so direct
+library callers cannot bypass that boundary. These acknowledgements are an
+explicit risk boundary, not a remediation or a claim that the vendor scheme is
+safe.
 
 ## Guarantees and non-guarantees
 

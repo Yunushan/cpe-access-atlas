@@ -70,6 +70,7 @@ class ConfigTests(unittest.TestCase):
                 artifact = encode_config(
                     b"<DB/>",
                     encrypted=True,
+                    acknowledge_legacy_crypto=True,
                     base64_wrap=False,
                     device_key=KEY,
                     serial="ZTE" + "1" * length,
@@ -99,6 +100,7 @@ class ConfigTests(unittest.TestCase):
         artifact = encode_config(
             xml,
             encrypted=True,
+            acknowledge_legacy_crypto=True,
             base64_wrap=False,
             device_key=KEY,
             serial=SERIAL,
@@ -221,6 +223,7 @@ class ConfigTests(unittest.TestCase):
             encode_config(
                 xml,
                 encrypted=True,
+                acknowledge_legacy_crypto=True,
                 base64_wrap=False,
                 device_key=KEY,
                 serial=SERIAL,
@@ -466,12 +469,35 @@ class ConfigTests(unittest.TestCase):
             encode_config("not-bytes")  # type: ignore[arg-type]
         with self.assertRaisesRegex(ConfigError, "encrypted output requires"):
             encode_config(xml, encrypted=True)
+        with self.assertRaisesRegex(ConfigError, "explicit acknowledgement"):
+            encode_config(xml, encrypted=True, device_key=KEY, serial=SERIAL, mac=MAC)
         with self.assertRaisesRegex(ConfigError, "exactly 32"):
-            encode_config(xml, encrypted=True, device_key="short", serial=SERIAL, mac=MAC)
+            encode_config(
+                xml,
+                encrypted=True,
+                acknowledge_legacy_crypto=True,
+                device_key="short",
+                serial=SERIAL,
+                mac=MAC,
+            )
         with self.assertRaises(ConfigError):
-            encode_config(xml, encrypted=True, device_key=KEY, serial="bad", mac=MAC)
+            encode_config(
+                xml,
+                encrypted=True,
+                acknowledge_legacy_crypto=True,
+                device_key=KEY,
+                serial="bad",
+                mac=MAC,
+            )
         with self.assertRaises(ConfigError):
-            encode_config(xml, encrypted=True, device_key=KEY, serial=SERIAL, mac="bad")
+            encode_config(
+                xml,
+                encrypted=True,
+                acknowledge_legacy_crypto=True,
+                device_key=KEY,
+                serial=SERIAL,
+                mac="bad",
+            )
         with self.assertRaises(ConfigError):
             encode_config(xml, signature="")
         with self.assertRaises(ConfigError):
@@ -481,6 +507,7 @@ class ConfigTests(unittest.TestCase):
                 encode_config(
                     xml,
                     encrypted=True,
+                    acknowledge_legacy_crypto=True,
                     device_key=KEY,
                     serial=SERIAL,
                     mac=MAC,

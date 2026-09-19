@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"{_OUTPUT_PATH} is up to date.")
         return 0
-    _OUTPUT_PATH.write_text(rendered, encoding="utf-8")
+    _OUTPUT_PATH.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"Wrote {_OUTPUT_PATH}.")
     return 0
 
