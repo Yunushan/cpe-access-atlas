@@ -497,6 +497,69 @@ class CatalogTests(unittest.TestCase):
             )
         )
 
+        future_record = replace(
+            recipe,
+            qualification_records=(
+                {
+                    **recipe.qualification_records[0],
+                    "tested_on": "9999-12-31",
+                },
+                *recipe.qualification_records[1:],
+            ),
+        )
+        self.assertTrue(
+            any(
+                "after the evidence review" in error
+                for error in catalog._qualification_errors(future_record)
+            )
+        )
+
+        missing_field = replace(
+            recipe,
+            qualification_records=(
+                {
+                    key: value
+                    for key, value in recipe.qualification_records[0].items()
+                    if key != "observed"
+                },
+                *recipe.qualification_records[1:],
+            ),
+        )
+        self.assertTrue(
+            any(
+                "qualification record 0 is missing" in error
+                for error in catalog._qualification_errors(missing_field)
+            )
+        )
+
+        unknown_observation = replace(
+            recipe,
+            qualification_records=(
+                {
+                    **recipe.qualification_records[0],
+                    "observation": "unreviewed",
+                },
+                *recipe.qualification_records[1:],
+            ),
+        )
+        self.assertTrue(
+            any(
+                "unknown observation" in error
+                for error in catalog._qualification_errors(unknown_observation)
+            )
+        )
+
+        non_object_record = replace(
+            recipe,
+            qualification_records=(object(),),  # type: ignore[arg-type]
+        )
+        self.assertTrue(
+            any(
+                "is not an object" in error
+                for error in catalog._qualification_errors(non_object_record)
+            )
+        )
+
     def test_qualified_targets_cannot_relabel_unresolved_coordinates_as_exact(self) -> None:
         recipe = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
         proof = recipe.evidence[0]["url"]
