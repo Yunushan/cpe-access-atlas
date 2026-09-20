@@ -21,6 +21,25 @@ from cpe_access_atlas.catalog import (
 )
 
 
+def qualification_records(
+    proof: str, tested_on: str, observations: tuple[str, ...]
+) -> list[dict[str, str]]:
+    return [
+        {
+            "observation": observation,
+            "evidence_url": proof,
+            "tested_on": tested_on,
+            "expected": f"Expected {observation} outcome on the exact target.",
+            "observed": f"Observed {observation} outcome on the exact target.",
+            "interruption_or_failure": (
+                f"Recorded interruption and failure results for {observation}."
+            ),
+            "recovery_outcome": f"Recorded recovery outcome for {observation}.",
+        }
+        for observation in observations
+    ]
+
+
 class CatalogTests(unittest.TestCase):
     def test_seven_requested_providers_are_present(self) -> None:
         providers = load_providers()
@@ -358,6 +377,11 @@ class CatalogTests(unittest.TestCase):
             ),
             "tested_on": payload["last_reviewed"],
         }
+        payload["qualification_records"] = qualification_records(
+            proof,
+            payload["last_reviewed"],
+            ("hardware", "access", "recovery", "services", "wan_isolation", "config_import"),
+        )
         catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
         recipe = catalog.Recipe.from_dict(payload)
         self.assertEqual(catalog._qualification_errors(recipe), [])
@@ -388,6 +412,10 @@ class CatalogTests(unittest.TestCase):
             recipe,
             status="stable",
             qualification={**recipe.qualification, "independent_reproduction": proof},
+            qualification_records=recipe.qualification_records
+            + tuple(
+                qualification_records(proof, recipe.last_reviewed, ("independent_reproduction",))
+            ),
         )
         self.assertEqual(catalog._qualification_errors(stable), [])
         # A verified non-codec method does not make a config-import claim.
@@ -404,6 +432,69 @@ class CatalogTests(unittest.TestCase):
                 )
             ),
             [],
+        )
+
+    def test_structured_qualification_records_fail_closed(self) -> None:
+        payload = catalog._load_json("recipes/tr_turk_telekom_zte_h3600p_ttn10_260210.json")
+        payload.update(status="verified", blockers=[])
+        payload["device"]["hardware_revision_status"] = "exact"
+        proof = "https://example.test/structured-exact-device-report"
+        payload["evidence"] = [{"title": "Structured qualification fixture", "url": proof}]
+        observations = ("hardware", "access", "recovery", "services", "wan_isolation")
+        payload["qualification"] = {
+            **dict.fromkeys((*observations, "config_import"), proof),
+            "tested_on": payload["last_reviewed"],
+        }
+        payload["qualification_records"] = qualification_records(
+            proof, payload["last_reviewed"], (*observations, "config_import")
+        )
+        catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
+        recipe = catalog.Recipe.from_dict(payload)
+        self.assertEqual(catalog._qualification_errors(recipe), [])
+
+        missing_records = dict(payload)
+        missing_records.pop("qualification_records")
+        with self.assertRaises(CatalogError):
+            catalog._validate_payload(missing_records, "recipe.schema.json", "synthetic")
+
+        too_many_records = dict(payload)
+        too_many_records["qualification_records"] = [
+            *payload["qualification_records"],
+            *qualification_records(
+                proof, payload["last_reviewed"], ("independent_reproduction", "hardware")
+            ),
+        ]
+        with self.assertRaises(CatalogError):
+            catalog._validate_payload(too_many_records, "recipe.schema.json", "synthetic")
+
+        duplicate = [*payload["qualification_records"], dict(payload["qualification_records"][0])]
+        duplicate[-1]["observed"] = "A second conflicting observation."
+        duplicate_recipe = replace(
+            recipe,
+            qualification_records=tuple({**record} for record in duplicate),
+        )
+        self.assertTrue(
+            any(
+                "is duplicated" in error
+                for error in catalog._qualification_errors(duplicate_recipe)
+            )
+        )
+
+        invalid_record = replace(
+            recipe,
+            qualification_records=(
+                {
+                    **recipe.qualification_records[0],
+                    "evidence_url": "https://example.test/not-listed",
+                },
+                *recipe.qualification_records[1:],
+            ),
+        )
+        self.assertTrue(
+            any(
+                "must reference a catalog evidence URL" in error
+                for error in catalog._qualification_errors(invalid_record)
+            )
         )
 
     def test_qualified_targets_cannot_relabel_unresolved_coordinates_as_exact(self) -> None:
@@ -473,6 +564,19 @@ class CatalogTests(unittest.TestCase):
             ),
             "tested_on": payload["last_reviewed"],
         }
+        payload["qualification_records"] = qualification_records(
+            proof,
+            payload["last_reviewed"],
+            (
+                "hardware",
+                "access",
+                "recovery",
+                "services",
+                "wan_isolation",
+                "config_import",
+                "independent_reproduction",
+            ),
+        )
         catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
         for kind in ("config_import", "independent_reproduction"):
             value = payload["qualification"].pop(kind)

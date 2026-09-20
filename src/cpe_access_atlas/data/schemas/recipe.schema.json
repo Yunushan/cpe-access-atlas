@@ -208,6 +208,15 @@
           "format": "date"
         }
       }
+    },
+    "qualification_records": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/qualificationRecord"
+      }
     }
   },
   "$defs": {
@@ -215,6 +224,59 @@
       "type": "string",
       "format": "uri",
       "pattern": "^https://"
+    },
+    "qualificationRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation",
+        "evidence_url",
+        "tested_on",
+        "expected",
+        "observed",
+        "interruption_or_failure",
+        "recovery_outcome"
+      ],
+      "properties": {
+        "observation": {
+          "enum": [
+            "hardware",
+            "access",
+            "recovery",
+            "services",
+            "wan_isolation",
+            "config_import",
+            "independent_reproduction"
+          ]
+        },
+        "evidence_url": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "tested_on": {
+          "type": "string",
+          "format": "date"
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "observed": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "interruption_or_failure": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "recovery_outcome": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      }
     }
   },
   "allOf": [
@@ -231,7 +293,8 @@
       },
       "then": {
         "required": [
-          "qualification"
+          "qualification",
+          "qualification_records"
         ],
         "properties": {
           "qualification": {
@@ -243,6 +306,9 @@
               "wan_isolation",
               "tested_on"
             ]
+          },
+          "qualification_records": {
+            "minItems": 1
           },
           "device": {
             "properties": {

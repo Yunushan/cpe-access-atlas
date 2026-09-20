@@ -19,6 +19,19 @@ class CatalogError(ValueError):
     """Raised when catalog data is invalid or ambiguous."""
 
 
+_QUALIFICATION_OBSERVATIONS = frozenset(
+    {
+        "hardware",
+        "access",
+        "recovery",
+        "services",
+        "wan_isolation",
+        "config_import",
+        "independent_reproduction",
+    }
+)
+
+
 def normalize(value: str) -> str:
     if not isinstance(value, str):
         raise CatalogError("catalog lookup values must be strings")
@@ -74,6 +87,7 @@ class Recipe:
     next_evidence: tuple[str, ...]
     last_reviewed: str
     qualification: dict[str, str] = field(default_factory=dict)
+    qualification_records: tuple[dict[str, str], ...] = field(default_factory=tuple)
 
     @classmethod
     def from_dict(cls, item: dict[str, Any]) -> Recipe:
@@ -107,6 +121,10 @@ class Recipe:
             qualification={
                 str(key): str(value) for key, value in item.get("qualification", {}).items()
             },
+            qualification_records=tuple(
+                {str(key): str(value) for key, value in record.items()}
+                for record in item.get("qualification_records", [])
+            ),
         )
 
     def matches(
@@ -199,6 +217,60 @@ def _qualification_errors(recipe: Recipe) -> list[str]:
         elif value not in evidence_urls:
             errors.append(
                 f"{recipe.id}: qualification {kind} must reference a catalog evidence URL"
+            )
+
+    records = tuple(getattr(recipe, "qualification_records", ()))
+    record_observations: dict[str, dict[str, str]] = {}
+    record_fields = (
+        "observation",
+        "evidence_url",
+        "tested_on",
+        "expected",
+        "observed",
+        "interruption_or_failure",
+        "recovery_outcome",
+    )
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            errors.append(f"{recipe.id}: qualification record {index} is not an object")
+            continue
+        missing_fields = [
+            field_name
+            for field_name in record_fields
+            if not isinstance(record.get(field_name), str) or not record[field_name].strip()
+        ]
+        if missing_fields:
+            errors.append(
+                f"{recipe.id}: qualification record {index} is missing: {', '.join(missing_fields)}"
+            )
+            continue
+        observation = record["observation"]
+        if observation not in _QUALIFICATION_OBSERVATIONS:
+            errors.append(
+                f"{recipe.id}: qualification record {index} has unknown observation {observation!r}"
+            )
+        elif observation in record_observations:
+            errors.append(f"{recipe.id}: qualification observation {observation!r} is duplicated")
+        else:
+            record_observations[observation] = record
+        if record["evidence_url"] not in evidence_urls:
+            errors.append(
+                f"{recipe.id}: qualification record {observation!r} must reference "
+                "a catalog evidence URL"
+            )
+        if record["tested_on"] > recipe.last_reviewed:
+            errors.append(
+                f"{recipe.id}: qualification record {observation!r} test date is "
+                "after the evidence review"
+            )
+
+    structured_required = required - {"tested_on"}
+    if structured_required:
+        missing_records = structured_required - record_observations.keys()
+        if missing_records:
+            errors.append(
+                f"{recipe.id}: structured qualification records missing: "
+                f"{', '.join(sorted(missing_records))}"
             )
     return errors
 
