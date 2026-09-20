@@ -493,3 +493,66 @@ jobs:
               raise RuntimeError(
                   "Published release immutability was not verified; do not replace its assets"
               )
+      - name: Verify published asset bytes and attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          workspace="$RUNNER_TEMP/published-release"
+          mkdir -p "$workspace/dist"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$workspace/dist"
+
+          expected=(
+            "dist/cpe_access_atlas-${version}-py3-none-any.whl"
+            "dist/cpe_access_atlas-${version}.tar.gz"
+          )
+          for system in ubuntu-latest windows-latest macos-latest; do
+            for python in 3.11 3.12 3.13 3.14 3.15; do
+              expected+=(
+                "dist/cpe-access-atlas-${GITHUB_REF_NAME}-${system}-python${python}-sbom.cdx.json"
+              )
+            done
+          done
+
+          mapfile -t expected_paths < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          mapfile -t actual_paths < <(
+            find "$workspace/dist" -maxdepth 1 -type f ! -name SHA256SUMS \
+              -printf 'dist/%f\n' | LC_ALL=C sort
+          )
+          mapfile -t listed_paths < <(
+            awk '{print $2}' "$workspace/dist/SHA256SUMS" | LC_ALL=C sort
+          )
+          entry_count="$(find "$workspace/dist" -mindepth 1 -maxdepth 1 -print | wc -l)"
+          if [ "$entry_count" -ne 18 ] \
+            || [ "${#expected_paths[@]}" -ne 17 ] \
+            || [ "${#actual_paths[@]}" -ne 17 ] \
+            || [ "${#listed_paths[@]}" -ne 17 ]; then
+            echo "Published release has an unexpected entry count."
+            exit 1
+          fi
+          if ! diff -u \
+            <(printf '%s\n' "${expected_paths[@]}") \
+            <(printf '%s\n' "${actual_paths[@]}"); then
+            echo "Published release has missing or unexpected assets."
+            exit 1
+          fi
+          if ! diff -u \
+            <(printf '%s\n' "${expected_paths[@]}") \
+            <(printf '%s\n' "${listed_paths[@]}"); then
+            echo "Published checksum manifest does not list the exact release assets."
+            exit 1
+          fi
+
+          (cd "$workspace" && sha256sum --check --strict dist/SHA256SUMS)
+          attested_paths=("${expected_paths[@]}" "dist/SHA256SUMS")
+          for relative in "${attested_paths[@]}"; do
+            gh attestation verify "$workspace/$relative" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "Yunushan/cpe-access-atlas/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$GITHUB_REF_NAME" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners
+          done

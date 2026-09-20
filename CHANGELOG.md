@@ -71,6 +71,9 @@ All notable changes are documented here.
   identifiers as runtime lookup. Require named, linked, dated qualification
   evidence before verified/stable status; config-import and independent
   reproduction evidence are required for their respective support claims.
+- Require structured qualification records for every verified/stable observation,
+  including expected and observed outcomes, interruption/failure results, and
+  recovery outcomes linked to dated catalog evidence.
 - Synchronize POSIX private-output directories before writing, after publication,
   and after temporary-name cleanup; propagate durability failures and retain any
   already published output. Physical power-loss resilience depends on storage.

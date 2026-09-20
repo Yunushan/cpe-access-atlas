@@ -45,6 +45,15 @@ it explicitly records each one. Reports must identify the exact target, not
 just the device family. A general vendor product page is insufficient for
 recovery, root access, configuration acceptance or service preservation.
 
+Before a recipe can be marked `verified` or `stable`, it must also contain one
+`qualification_records` entry for every required observation. Each entry names
+the observation and evidence URL, records the test date, and states the
+expected outcome, observed outcome, interruption or failure result, and
+recovery outcome. The loader checks that records are unique, link to the
+recipe's evidence, and are not dated after the review. `stable` additionally
+requires an independent-reproduction record. These checks make the evidence
+shape explicit; they do not authenticate the report or replace human review.
+
 The loader checks required fields, references and dates, while maintainers
 review what the evidence proves. A record must remain researching/blocked when
 an observation is missing, contradictory, or inferred from another model/build.

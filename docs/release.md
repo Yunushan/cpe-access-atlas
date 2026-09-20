@@ -265,6 +265,14 @@ provenance; "independent verification" here means evidence separate from the
 build's own success report, not a mandatory second person. External review is
 welcome when available but is not required to publish under this policy.
 
+The protected release workflow also performs a post-publication copy of every
+release asset into a fresh runner directory. It compares the downloaded
+inventory with the exact wheel, source-archive, and OS/Python SBOM list, checks
+`SHA256SUMS`, and verifies an attestation for the checksum manifest and every
+listed asset. The verification constrains the signer workflow, tag ref, reviewed
+commit, and runner type. A failed download, byte check, or attestation check
+fails the publication job; it never replaces or deletes an immutable release.
+
 Record the approved release commit from the reviewed source, not just a later
 lookup of a mutable tag. Download the published assets into a new isolated
 directory. Do not install or execute them until verification succeeds. The

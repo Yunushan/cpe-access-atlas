@@ -439,7 +439,9 @@ class RepositoryControlTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         gate = "      - name: Verify published release is immutable\n"
         self.assertLess(workflow.index("gh release create"), workflow.index(gate))
-        step = workflow.split(gate)[1]
+        step = workflow.split(gate, 1)[1].split(
+            "      - name: Verify published asset bytes and attestations\n", 1
+        )[0]
         self.assertIn("GH_TOKEN: ${{ github.token }}", step)
         code = compile(dedent(step.split("        run: |\n")[1]), "release-immutability", "exec")
         for payload in ({"immutable": True}, {"immutable": False}, {}, {"immutable": 1}, [], None):
@@ -625,6 +627,7 @@ class RepositoryControlTests(unittest.TestCase):
             "Reverify annotated tag and main targets after attestation",
             "Publish GitHub release",
             "Verify published release is immutable",
+            "Verify published asset bytes and attestations",
         )
         positions = [publication.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
@@ -637,6 +640,26 @@ class RepositoryControlTests(unittest.TestCase):
             'target.get("sha") != os.environ["GITHUB_SHA"]',
         ):
             self.assertIn(marker, publication)
+        postpublication = publication.split(
+            "      - name: Verify published asset bytes and attestations\n", 1
+        )[1]
+        for marker in (
+            'gh release download "$GITHUB_REF_NAME"',
+            '--dir "$workspace/dist"',
+            "awk '{print $2}' \"$workspace/dist/SHA256SUMS\"",
+            'entry_count="$(find "$workspace/dist" -mindepth 1 -maxdepth 1 -print | wc -l)"',
+            "Published release has an unexpected entry count.",
+            "Published release has missing or unexpected assets.",
+            "Published checksum manifest does not list the exact release assets.",
+            '(cd "$workspace" && sha256sum --check --strict dist/SHA256SUMS)',
+            'attested_paths=("${expected_paths[@]}" "dist/SHA256SUMS")',
+            'gh attestation verify "$workspace/$relative"',
+            '--signer-workflow "Yunushan/cpe-access-atlas/.github/workflows/release.yml"',
+            '--source-ref "refs/tags/$GITHUB_REF_NAME"',
+            '--source-digest "$GITHUB_SHA"',
+            "--deny-self-hosted-runners",
+        ):
+            self.assertIn(marker, postpublication)
         self.assertLess(
             validation.index("Upload distributions"),
             len(validation),
