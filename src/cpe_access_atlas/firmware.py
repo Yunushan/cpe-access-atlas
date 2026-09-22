@@ -89,9 +89,7 @@ def inspect_firmware(
     _validate_arguments(path, expected_version, expected_sha256)
     source = Path(path)
     if not source.is_file():
-        raise FirmwareInspectionError(
-            f"firmware artifact does not exist or is not a regular file: {source}"
-        )
+        raise FirmwareInspectionError("firmware artifact does not exist or is not a regular file")
 
     digest = sha256()
     size = 0
@@ -121,8 +119,10 @@ def inspect_firmware(
                     if signature in scan_data:
                         markers.add(name)
                 overlap = scan_data[-_SCAN_OVERLAP:]
-    except OSError as exc:
-        raise FirmwareInspectionError(f"unable to read firmware artifact: {exc}") from exc
+    except OSError:
+        # OS diagnostics can include the private artifact path. Keep both the
+        # message and exception chain out of callers' logs.
+        raise FirmwareInspectionError("unable to read firmware artifact") from None
 
     detected_versions = tuple(sorted(versions))
     exact_build_match = None if expected_version is None else expected_version in detected_versions

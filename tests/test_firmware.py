@@ -189,8 +189,9 @@ class FirmwareInspectionTests(unittest.TestCase):
     def test_rejects_missing_or_non_file_path(self) -> None:
         with TemporaryDirectory() as directory:
             missing = Path(directory) / "missing.bin"
-            with self.assertRaises(FirmwareInspectionError):
+            with self.assertRaises(FirmwareInspectionError) as error:
                 inspect_firmware(missing)
+            self.assertNotIn(str(missing), str(error.exception))
             with self.assertRaises(FirmwareInspectionError):
                 inspect_firmware(Path(directory))
 
@@ -198,9 +199,11 @@ class FirmwareInspectionTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "unreadable.bin"
             path.write_bytes(b"data")
-            with patch.object(Path, "open", side_effect=OSError("denied")):
-                with self.assertRaisesRegex(FirmwareInspectionError, "unable to read"):
+            with patch.object(Path, "open", side_effect=OSError(f"denied: {path}")):
+                with self.assertRaisesRegex(FirmwareInspectionError, "unable to read") as error:
                     inspect_firmware(path)
+            self.assertNotIn(str(path), str(error.exception))
+            self.assertIsNone(error.exception.__cause__)
 
 
 if __name__ == "__main__":

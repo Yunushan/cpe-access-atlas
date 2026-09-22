@@ -2,8 +2,10 @@
 
 All notable changes are documented here.
 
-## 0.4.0a5 - 2026-09-19
+## 0.4.0a5 - 2026-09-22
 
+- Keep private firmware input paths out of `firmware-inspect` and
+  `root-readiness` text/JSON output and filesystem-error diagnostics.
 - Build wheels and source archives twice from immutable reviewed Git blobs;
   reject any byte mismatch and publish artifacts only after independent and
   cross-platform comparisons succeed. Canonicalize wheels with verified records

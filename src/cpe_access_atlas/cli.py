@@ -307,7 +307,6 @@ def command_root_readiness(args: argparse.Namespace) -> int:
     }
     if inspection is not None:
         payload["firmware_artifact"] = {
-            "path": inspection.path,
             "size": inspection.size,
             "sha256": inspection.sha256,
             "version_strings": list(inspection.version_strings),
@@ -324,7 +323,7 @@ def command_root_readiness(args: argparse.Namespace) -> int:
         if inspection is None:
             print("Firmware artifact: not supplied; no artifact was read")
         else:
-            print(f"Firmware artifact: {inspection.path}")
+            print("Firmware artifact: supplied private file")
             print(f"Exact build match: {artifact_exact}")
             print(f"SHA-256 match: {artifact_hash}")
             print(
@@ -830,7 +829,6 @@ def command_firmware_inspect(args: argparse.Namespace) -> int:
         args.expected_sha256,
     )
     payload = {
-        "path": inspection.path,
         "size": inspection.size,
         "sha256": inspection.sha256,
         "version_strings": list(inspection.version_strings),
@@ -843,7 +841,7 @@ def command_firmware_inspect(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print(f"Artifact:       {inspection.path}")
+        print("Artifact:       supplied private file")
         print(f"Size:           {inspection.size} bytes")
         print(f"SHA-256:        {inspection.sha256}")
         print("Version strings: " + (", ".join(inspection.version_strings) or "none detected"))
