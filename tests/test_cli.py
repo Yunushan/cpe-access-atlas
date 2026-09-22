@@ -1322,6 +1322,28 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self.run_cli(["firmware-inspect", "--input", "does-not-exist.bin"])
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("firmware artifact does not exist", stderr)
+        self.assertNotIn("does-not-exist.bin", stderr)
+
+    def test_private_firmware_path_is_not_emitted(self) -> None:
+        with TemporaryDirectory() as directory:
+            artifact = Path(directory) / "private-subscriber-firmware.bin"
+            artifact.write_bytes(b"opaque firmware bytes")
+            for command in (
+                ["firmware-inspect", "--input", str(artifact)],
+                ["firmware-inspect", "--input", str(artifact), "--json"],
+                ["root-readiness", *TARGET, "--firmware-input", str(artifact)],
+                ["root-readiness", *TARGET, "--firmware-input", str(artifact), "--json"],
+            ):
+                with self.subTest(command=command):
+                    _, stdout, stderr = self.run_cli(command)
+                    self.assertNotIn(str(artifact), stdout + stderr)
+                    self.assertNotIn(artifact.name, stdout + stderr)
+                    if "--json" in command:
+                        payload = json.loads(stdout)
+                        if command[0] == "firmware-inspect":
+                            self.assertNotIn("path", payload)
+                        else:
+                            self.assertNotIn("path", payload["firmware_artifact"])
 
     def test_status_without_blockers_omits_blocker_section(self) -> None:
         recipe = find_recipe(
