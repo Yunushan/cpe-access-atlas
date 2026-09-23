@@ -92,7 +92,7 @@ def _paths_alias(left: Path, right: Path) -> bool:
             str(right.resolve(strict=False))
         )
     except OSError as exc:
-        raise ConfigError("unable to compare the private baseline and output paths") from exc
+        raise ConfigError("unable to compare private input and output paths") from exc
 
 
 def _parse_timeout_argument(value: str) -> float:
@@ -450,14 +450,17 @@ def command_config_generate(args: argparse.Namespace) -> int:
             "while accepting that the target may reject it and recovery may be unavailable"
         )
 
-    serial, mac = _config_identity(args)
-
     output = Path(args.output)
     baseline = args.input_config or args.input_xml
     if baseline is not None and _paths_alias(Path(baseline), output):
         raise ConfigError(
             "output path must differ from the private baseline; keep the original backup"
         )
+    if args.identity_file is not None and _paths_alias(Path(args.identity_file), output):
+        raise ConfigError(
+            "output path must differ from the private identity file; keep the original identifiers"
+        )
+    serial, mac = _config_identity(args)
     if output.exists() and not args.force:
         print(
             "Refused: output artifact already exists; use --force to replace it.",
@@ -796,15 +799,24 @@ def command_redact(args: argparse.Namespace) -> int:
         )
         return 4
     output = Path(args.output)
-    if output.exists() and not args.force:
+    if args.input and _paths_alias(Path(args.input), output):
+        raise RedactionError("output path must differ from the private input report")
+    try:
+        output_exists = output.exists()
+    except OSError:
+        raise RedactionError("unable to inspect private output path") from None
+    if output_exists and not args.force:
         print(
-            f"Refused: {output} already exists; use --force to replace it.",
+            "Refused: output already exists; use --force to replace it.",
             file=sys.stderr,
         )
         return 4
     if args.input:
-        with Path(args.input).open(encoding="utf-8") as stream:
-            value = stream.read(MAX_REPORT_CHARS + 1)
+        try:
+            with Path(args.input).open(encoding="utf-8") as stream:
+                value = stream.read(MAX_REPORT_CHARS + 1)
+        except OSError:
+            raise RedactionError("unable to read private input report") from None
     else:
         value = sys.stdin.read(MAX_REPORT_CHARS + 1)
     if len(value) > MAX_REPORT_CHARS:

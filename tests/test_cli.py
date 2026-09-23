@@ -612,6 +612,40 @@ class CliTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), original)
             prompt.assert_not_called()
 
+    def test_config_generate_preserves_identity_file_even_with_force(self) -> None:
+        for alias in ("same path", "hard link"):
+            with self.subTest(alias=alias), TemporaryDirectory() as directory:
+                identity = Path(directory) / "identity.json"
+                original = json.dumps({"serial": "ZTE12345678", "mac": "00:11:22:33:44:55"}).encode(
+                    "utf-8"
+                )
+                identity.write_bytes(original)
+                output = identity if alias == "same path" else Path(directory) / "output.bin"
+                if alias == "hard link":
+                    os.link(identity, output)
+                with patch(
+                    "cpe_access_atlas.cli.getpass.getpass", return_value="NewPass123"
+                ) as prompt:
+                    code, stdout, stderr = self.run_cli(
+                        [
+                            "config-generate",
+                            *TARGET,
+                            "--identity-file",
+                            str(identity),
+                            "--output",
+                            str(output),
+                            "--force",
+                            "--allow-unencrypted",
+                            "--acknowledge-unverified-compatibility",
+                            "--i-own-or-administer-this-device",
+                        ]
+                    )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertIn("output path must differ from the private identity file", stderr)
+                self.assertEqual(identity.read_bytes(), original)
+                self.assertEqual(output.read_bytes(), original)
+                prompt.assert_not_called()
+
     def test_config_generate_reads_encrypted_private_baseline(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "encrypted-config.bin"
@@ -1114,6 +1148,52 @@ class CliTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli([*args, "--force"])
             self.assertEqual((code, stderr), (0, ""))
             self.assertIn("Wrote redacted text", stdout)
+
+    def test_redact_preserves_private_input_even_with_force(self) -> None:
+        for alias in ("same path", "hard link"):
+            with self.subTest(alias=alias), TemporaryDirectory() as directory:
+                source = Path(directory) / "raw.txt"
+                original = b"password=SYNTHETIC_SECRET\n"
+                source.write_bytes(original)
+                output = source if alias == "same path" else Path(directory) / "redacted.txt"
+                if alias == "hard link":
+                    os.link(source, output)
+                code, stdout, stderr = self.run_cli(
+                    ["redact", "--input", str(source), "--output", str(output), "--force"]
+                )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertIn("output path must differ from the private input report", stderr)
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(output.read_bytes(), original)
+
+    def test_redact_keeps_private_paths_out_of_file_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "private-source-marker.txt"
+            output = Path(directory) / "redacted.txt"
+            code, stdout, stderr = self.run_cli(
+                ["redact", "--input", str(source), "--output", str(output)]
+            )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("unable to read private input report", stderr)
+            self.assertNotIn("private-source-marker", stderr)
+            self.assertFalse(output.exists())
+
+            source.write_text("password=SYNTHETIC_SECRET", encoding="utf-8")
+            private_output = Path(directory) / "private-output-marker.txt"
+            private_output.write_text("existing", encoding="utf-8")
+            code, stdout, stderr = self.run_cli(
+                ["redact", "--input", str(source), "--output", str(private_output)]
+            )
+            self.assertEqual((code, stdout), (4, ""))
+            self.assertIn("output already exists", stderr)
+            self.assertNotIn("private-output-marker", stderr)
+            self.assertEqual(private_output.read_text(encoding="utf-8"), "existing")
+
+            with patch.object(Path, "exists", side_effect=OSError("private-output-marker")):
+                code, stdout, stderr = self.run_cli(["redact", "--output", str(output)])
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("unable to inspect private output path", stderr)
+            self.assertNotIn("private-output-marker", stderr)
 
     def test_redact_reads_stdin_only_when_writing_a_private_file(self) -> None:
         with TemporaryDirectory() as directory:

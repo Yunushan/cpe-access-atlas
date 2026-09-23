@@ -11,6 +11,9 @@ All notable changes are documented here.
   malformed input.
 - Record the owner-reported software-version field without upgrading the
   exact device recipe: access and recovery on this build remain unverified.
+- Preserve private report and device-identity inputs when `--force` is used:
+  `redact` and `config-generate` reject output paths that alias their inputs.
+  Keep private report paths out of redaction file-error messages.
 
 ## 0.4.0a5 - 2026-09-22
 

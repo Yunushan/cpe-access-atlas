@@ -228,7 +228,8 @@ cpe-atlas redact --input raw-observations.txt --output sanitized-observations.tx
 Redaction is conservative assistance; manually review the output and any
 screenshots, captures, or exported text before sharing. The command reminds you
 that unrecognized sensitive fields may remain. Keep configuration backups private;
-redaction does not make a `config.bin` safe to upload.
+redaction does not make a `config.bin` safe to upload. Its output path must differ
+from the input report, even with `--force`, so the original is preserved.
 
 Inspect a private firmware artifact without executing or changing it:
 
@@ -284,8 +285,8 @@ NTFS, APFS, or ext4). Windows also requires persistent ACL support. Unsupported
 filesystems fail closed. These protections do not isolate files from the same
 account, elevated administrators, or an untrusted storage provider; keep every
 artifact in a private, trusted local directory. The output path must differ
-from the input baseline, even with `--force`, so the original backup cannot be
-replaced.
+from the input baseline and private identity file, even with `--force`, so those
+originals cannot be replaced.
 
 For a `blocked`, `researching`, or otherwise not-exact target, the command also
 requires `--acknowledge-unverified-compatibility`. This is a deliberate risk
