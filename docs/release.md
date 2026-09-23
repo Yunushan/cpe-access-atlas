@@ -74,9 +74,11 @@ historical publisher that used that environment.
 publisher that did not use the `release` environment. Commit
 `e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
 while carrying the earlier broad publishing workflow. Never create or publish
-either tag. Keep the creation quarantine open only for `v0.4.0a5` and bind the
-environment to that same exact candidate. A broad creation bypass or `v*`
-environment rule would reopen a historical-workflow path.
+either tag. For `v0.4.0a6`, rotate the creation quarantine to exclude only
+that exact tag and bind the release environment to the same tag before the
+prepublication audit. Keep the published `v0.4.0a5` tag protected by the
+no-bypass update/deletion rule. A broad creation bypass or `v*` environment
+rule would reopen a historical-workflow path.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen

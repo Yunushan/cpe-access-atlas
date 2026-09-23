@@ -76,11 +76,15 @@ requirements until an authorized administrator updates the repository settings.
   immutability for an existing release. Preserve older artifacts and publish
   a new version through the protected process. See
   [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+- For the next candidate, `v0.4.0a6`, rotate the live tag rules and release
+  environment in the order below before creating its tag. The rules shown
+  here are the required candidate state, not a claim that the live settings
+  have already been changed.
 - Protect release-tag creation with three deliberately separate rulesets:
   1. a rotating quarantine with `include: refs/tags/v*`, only
-     `exclude: refs/tags/v0.4.0a5`, the creation restriction, and **no bypass
+     `exclude: refs/tags/v0.4.0a6`, the creation restriction, and **no bypass
      actors**;
-  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a5`, no
+  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a6`, no
      exclusions, the creation restriction, and the personal repository owner
      as the only always-bypass actor; and
   3. a full `refs/tags/v*` update/deletion restriction with no exclusions and
@@ -108,7 +112,7 @@ requirements until an authorized administrator updates the repository settings.
 - Configure a `release` environment without mandatory reviewers. The owner
   authorizes publication by creating the protected release tag after checking
   the candidate. Disable administrator bypass and select exactly the current
-  candidate tag (`v0.4.0a5`), not `v*`, unrestricted refs, or branches. Update
+  candidate tag (`v0.4.0a6`), not `v*`, unrestricted refs, or branches. Update
   that one policy only when the package version advances to a reviewed candidate.
   This exact-tag boundary prevents a tag created later at an older commit from
   running that commit's historical publishing workflow with release credentials.
