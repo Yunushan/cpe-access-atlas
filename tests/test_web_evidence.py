@@ -11,12 +11,14 @@ from unittest.mock import patch
 from urllib.parse import parse_qs
 
 from cpe_access_atlas.web_evidence import (
+    _PARAMETER_NAME,
     MAX_COOKIE_VALUE_CHARS,
     MAX_JSON_NESTING,
     MAX_RESPONSE_BYTES,
     MAX_STRUCTURAL_IDENTIFIERS,
     WebEvidenceError,
     _endpoint_evidence,
+    _hardware_revision_marker_present,
     _json_object,
     _login_succeeded,
     _login_token,
@@ -179,7 +181,8 @@ class WebEvidenceTests(unittest.TestCase):
             {
                 "firmware": True,
                 "model": True,
-                "hardware_revision": True,
+                # Neither free text nor a SoftwareVersion value verifies hardware.
+                "hardware_revision": False,
             },
         )
         self.assertTrue(all(result["observed_root_research_string_markers"].values()))
@@ -604,7 +607,7 @@ class WebEvidenceTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(_response_kind(item), expected)
 
-    def test_software_version_prefix_is_not_a_hardware_revision_marker(self) -> None:
+    def test_hardware_marker_requires_labeled_exact_xml_value(self) -> None:
         expected = {
             "expected_firmware": "H3600P V9.0 TTN.10_260210",
             "expected_model": "H3600P V9",
@@ -616,7 +619,16 @@ class WebEvidenceTests(unittest.TestCase):
                 b"<ParaName>BuildVersion</ParaName><ParaValue>TTN.10_260210</ParaValue>",
                 False,
             ),
+            (
+                b"<ParaName>SoftwareVersion</ParaName>"
+                b"<ParaValue>H3600P V9.0 TTN.10_260210</ParaValue>",
+                False,
+            ),
+            (b"<ParaName>HardwareVersion</ParaName><ParaValue>V9.0.7</ParaValue>", False),
+            (b"<ParaName>OtherVersion</ParaName><ParaValue>V9.0</ParaValue>", False),
+            (b"<html>H3600P V9 V9.0</html>", False),
             (b"<ParaName>HardwareVersion</ParaName><ParaValue>V9.0</ParaValue>", True),
+            (b"<ParaName>HardwareRevision</ParaName><ParaValue>V9.0</ParaValue>", True),
         )
         for body, hardware_observed in observations:
             with self.subTest(body=body):
@@ -628,7 +640,34 @@ class WebEvidenceTests(unittest.TestCase):
                     evidence["expected_identity_markers"]["hardware_revision"],
                     hardware_observed,
                 )
-                self.assertFalse(evidence["expected_identity_markers"]["firmware"])
+
+    def test_hardware_marker_rejects_near_limit_malformed_xml(self) -> None:
+        fragment = b"<ParaName<"
+        suffix = b">HardwareVersion</ParaName><ParaValue>V9.0</ParaValue>"
+        body = fragment * ((MAX_RESPONSE_BYTES - len(suffix)) // len(fragment)) + suffix
+        self.assertLessEqual(len(body), MAX_RESPONSE_BYTES)
+        self.assertFalse(_hardware_revision_marker_present(body, "V9.0"))
+
+        prefix = b"<ParaName>"
+        label_and_value = b"HardwareVersion</ParaName><ParaValue>V9.0</ParaValue>"
+        body = (
+            prefix
+            + b" " * (MAX_RESPONSE_BYTES - len(prefix) - len(label_and_value))
+            + label_and_value
+        )
+        self.assertLessEqual(len(body), MAX_RESPONSE_BYTES)
+        self.assertFalse(_hardware_revision_marker_present(body, "V9.0"))
+
+    def test_parameter_name_rejects_near_limit_malformed_opening_tags(self) -> None:
+        fragment = b"<ParaName<"
+        suffix = b">SoftwareVersion</ParaName>"
+        body = fragment * ((MAX_RESPONSE_BYTES - len(suffix)) // len(fragment)) + suffix
+        self.assertLessEqual(len(body), MAX_RESPONSE_BYTES)
+        self.assertEqual(_PARAMETER_NAME.findall(body), [])
+        self.assertEqual(
+            _PARAMETER_NAME.findall(b'<ns:ParaName id="status">SoftwareVersion</ns:ParaName>'),
+            [b"SoftwareVersion"],
+        )
 
     def test_endpoint_evidence_reports_absent_markers_without_values(self) -> None:
         evidence = _endpoint_evidence(

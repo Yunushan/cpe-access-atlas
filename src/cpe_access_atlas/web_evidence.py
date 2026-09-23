@@ -24,9 +24,18 @@ _ROUTE_TYPE = re.compile(r"_type=([A-Za-z][A-Za-z0-9_.-]{0,95})")
 _ROUTE_TAG = re.compile(r"_tag=([A-Za-z][A-Za-z0-9_.-]{0,95})")
 _XML_TAG = re.compile(rb"<(?!/|!|\?)(?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)\b")
 _PARAMETER_NAME = re.compile(
-    rb"<(?:[A-Za-z_][\w.-]*:)?ParaName\b[^>]*>\s*"
+    rb"<(?:[A-Za-z_][\w.-]*:)?ParaName\b[^<>]{0,256}>\s*"
     rb"([A-Za-z_][A-Za-z0-9_.:-]{0,127})\s*"
     rb"</(?:[A-Za-z_][\w.-]*:)?ParaName\s*>",
+    re.IGNORECASE,
+)
+_HARDWARE_VERSION_PAIR = re.compile(
+    rb"<(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}:)?ParaName\b[^<>]{0,256}>[ \t\r\n]{0,64}"
+    rb"(?:HardwareVersion|HardwareRevision)[ \t\r\n]{0,64}"
+    rb"</(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}:)?ParaName[ \t\r\n]{0,64}>[ \t\r\n]{0,64}"
+    rb"<(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}:)?ParaValue\b[^<>]{0,256}>[ \t\r\n]{0,64}"
+    rb"([A-Za-z0-9_.-]{1,64})[ \t\r\n]{0,64}"
+    rb"</(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}:)?ParaValue[ \t\r\n]{0,64}>",
     re.IGNORECASE,
 )
 _PAGE_ACCESS_ENTRY = re.compile(
@@ -451,10 +460,15 @@ def _looks_like_login_page(body: bytes) -> bool:
 
 
 def _hardware_revision_marker_present(body: bytes, expected_hardware: str) -> bool:
-    """Match a complete revision token, not a prefix of a software version."""
+    """Require an exact value in an explicitly labeled hardware XML field.
 
-    token = re.escape(expected_hardware.encode("utf-8"))
-    return re.search(rb"(?<![A-Za-z0-9_.+-])" + token + rb"(?![A-Za-z0-9_.+-])", body) is not None
+    The router's status data uses adjacent ParaName/ParaValue elements. Free
+    text, a SoftwareVersion value, or a partial version is not hardware evidence.
+    This remains a text observation, not physical-revision verification.
+    """
+
+    expected = expected_hardware.encode("utf-8")
+    return any(match.group(1) == expected for match in _HARDWARE_VERSION_PAIR.finditer(body))
 
 
 def _endpoint_evidence(
