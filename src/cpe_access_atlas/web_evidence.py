@@ -450,6 +450,13 @@ def _looks_like_login_page(body: bytes) -> bool:
     return b"frm_username" in lowered and b"login_entry" in lowered
 
 
+def _hardware_revision_marker_present(body: bytes, expected_hardware: str) -> bool:
+    """Match a complete revision token, not a prefix of a software version."""
+
+    token = re.escape(expected_hardware.encode("utf-8"))
+    return re.search(rb"(?<![A-Za-z0-9_.+-])" + token + rb"(?![A-Za-z0-9_.+-])", body) is not None
+
+
 def _endpoint_evidence(
     response: _Response,
     *,
@@ -556,7 +563,9 @@ def _endpoint_evidence(
         "expected_identity_markers": {
             "firmware": expected_firmware.encode("utf-8") in response.body,
             "model": expected_model.encode("utf-8") in response.body,
-            "hardware_revision": expected_hardware.encode("utf-8") in response.body,
+            "hardware_revision": _hardware_revision_marker_present(
+                response.body, expected_hardware
+            ),
         },
     }
 

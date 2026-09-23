@@ -604,6 +604,32 @@ class WebEvidenceTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(_response_kind(item), expected)
 
+    def test_software_version_prefix_is_not_a_hardware_revision_marker(self) -> None:
+        expected = {
+            "expected_firmware": "H3600P V9.0 TTN.10_260210",
+            "expected_model": "H3600P V9",
+            "expected_hardware": "V9.0",
+        }
+        observations = (
+            (
+                b"<ParaName>SoftwareVersion</ParaName><ParaValue>V9.0.7</ParaValue>"
+                b"<ParaName>BuildVersion</ParaName><ParaValue>TTN.10_260210</ParaValue>",
+                False,
+            ),
+            (b"<ParaName>HardwareVersion</ParaName><ParaValue>V9.0</ParaValue>", True),
+        )
+        for body, hardware_observed in observations:
+            with self.subTest(body=body):
+                evidence = _endpoint_evidence(
+                    response(body),
+                    **expected,
+                )
+                self.assertEqual(
+                    evidence["expected_identity_markers"]["hardware_revision"],
+                    hardware_observed,
+                )
+                self.assertFalse(evidence["expected_identity_markers"]["firmware"])
+
     def test_endpoint_evidence_reports_absent_markers_without_values(self) -> None:
         evidence = _endpoint_evidence(
             response(b"plain response", status=404, content_type=""),
