@@ -801,7 +801,11 @@ def command_redact(args: argparse.Namespace) -> int:
     output = Path(args.output)
     if args.input and _paths_alias(Path(args.input), output):
         raise RedactionError("output path must differ from the private input report")
-    if output.exists() and not args.force:
+    try:
+        output_exists = output.exists()
+    except OSError:
+        raise RedactionError("unable to inspect private output path") from None
+    if output_exists and not args.force:
         print(
             "Refused: output already exists; use --force to replace it.",
             file=sys.stderr,

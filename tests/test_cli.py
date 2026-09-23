@@ -1189,6 +1189,12 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("private-output-marker", stderr)
             self.assertEqual(private_output.read_text(encoding="utf-8"), "existing")
 
+            with patch.object(Path, "exists", side_effect=OSError("private-output-marker")):
+                code, stdout, stderr = self.run_cli(["redact", "--output", str(output)])
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("unable to inspect private output path", stderr)
+            self.assertNotIn("private-output-marker", stderr)
+
     def test_redact_reads_stdin_only_when_writing_a_private_file(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory) / "redacted.txt"
