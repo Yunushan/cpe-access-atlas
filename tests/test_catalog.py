@@ -115,6 +115,16 @@ class CatalogTests(unittest.TestCase):
                 "H3600P V9.0 TTN.5_240228",
             )
 
+    def test_separate_software_version_does_not_replace_exact_target_fields(self) -> None:
+        for hardware_revision, firmware in (
+            ("V9.0.7", "H3600P V9.0 TTN.10_260210"),
+            ("V9.0", "V9.0.7"),
+            ("V9.0", "H3600P V9.0 TTN.8_250626"),
+        ):
+            with self.subTest(hardware_revision=hardware_revision, firmware=firmware):
+                with self.assertRaises(CatalogError):
+                    find_recipe("Türk Telekom", "H3600P", hardware_revision, firmware)
+
     def test_hardware_revision_is_required_for_an_exact_match(self) -> None:
         with self.assertRaises(CatalogError):
             find_recipe(
