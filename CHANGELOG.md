@@ -2,6 +2,16 @@
 
 All notable changes are documented here.
 
+## 0.4.0a6 - 2026-09-23
+
+- Require an explicitly labeled `HardwareVersion` or `HardwareRevision` field
+  to recognize `V9.0` in owner-authorized H3600P web evidence. Do not infer
+  the hardware revision from the separate UI software version `V9.0.7` or
+  firmware build `TTN.10_260210`; bound status-page field parsing on
+  malformed input.
+- Record the owner-reported software-version field without upgrading the
+  exact device recipe: access and recovery on this build remain unverified.
+
 ## 0.4.0a5 - 2026-09-22
 
 - Keep private firmware input paths out of `firmware-inspect` and

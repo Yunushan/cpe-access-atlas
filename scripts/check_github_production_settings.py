@@ -58,7 +58,7 @@ _RELEASE_VERSION = (
     rf"(?:\.dev{_RELEASE_NUMBER})?"
 )
 _RELEASE_TAG = re.compile(rf"v({_RELEASE_VERSION})")
-_CANDIDATE_RELEASE_TAG = "v0.4.0a5"
+_CANDIDATE_RELEASE_TAG = "v0.4.0a6"
 _GIT_SHA = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}")
 _ASSET_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
