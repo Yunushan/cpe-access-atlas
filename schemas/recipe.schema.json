@@ -275,8 +275,81 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4000
+        },
+        "ipv4_remote_access_baseline": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "ipv4_remote_access_post": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "https_remote_access_baseline": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "https_remote_access_post": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "icmp_remote_access_baseline": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "icmp_remote_access_post": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "global_firewall_baseline": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "global_firewall_post": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "internet_wan_firewall_baseline": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "internet_wan_firewall_post": {
+          "$ref": "#/$defs/wanSetting"
+        },
+        "external_test_evidence_url": {
+          "$ref": "#/$defs/evidenceUrl"
+        },
+        "external_test_vantage": {
+          "enum": [
+            "outside_lan_and_vpn",
+            "same_lan_or_vpn",
+            "unknown"
+          ]
+        },
+        "external_target_path_verified": {
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ]
+        },
+        "external_test_scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "external_baseline_result": {
+          "$ref": "#/$defs/wanReachability"
+        },
+        "external_post_result": {
+          "$ref": "#/$defs/wanReachability"
         }
       }
+    },
+    "wanSetting": {
+      "enum": [
+        "on",
+        "off",
+        "not_present",
+        "unknown"
+      ]
+    },
+    "wanReachability": {
+      "enum": [
+        "unreachable",
+        "reachable",
+        "indeterminate"
+      ]
     }
   },
   "allOf": [
