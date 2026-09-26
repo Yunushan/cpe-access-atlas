@@ -67,7 +67,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
 | Linux root shell | Not supported |
-| Last evidence review | 2026-09-13 |
+| Last evidence review | 2026-09-26 |
 
 Public community evidence says the older provisioning interception workflow
 does not work on this build. No official firmware image, recovery-tested
