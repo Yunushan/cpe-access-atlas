@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import json
+import socket
+import threading
+import time
 import unittest
 from email.message import Message
+from http.client import HTTPConnection as RealHTTPConnection
 from http.client import HTTPException
 from http.cookies import CookieError
 from typing import Any, ClassVar
@@ -18,12 +22,14 @@ from cpe_access_atlas.web_evidence import (
     MAX_RESPONSE_BYTES,
     MAX_STRUCTURAL_IDENTIFIERS,
     WebEvidenceError,
+    _DeadlineSocket,
     _endpoint_evidence,
     _hardware_revision_marker_present,
     _json_object,
     _login_succeeded,
     _login_token,
     _read_bounded,
+    _remaining_request_time,
     _remember_cookies,
     _request,
     _required_string,
@@ -60,6 +66,14 @@ class FakeResponse:
     def read(self, amount: int | None = None) -> bytes:
         return self.body if amount is None else self.body[:amount]
 
+    def close(self) -> None:
+        pass
+
+
+class FakeSocket:
+    def close(self) -> None:
+        pass
+
 
 class FakeConnection:
     responses: ClassVar[list[FakeResponse | BaseException]] = []
@@ -72,7 +86,11 @@ class FakeConnection:
         self.port = port
         self.timeout = timeout
         self.closed = False
+        self.sock = FakeSocket()
         self.__class__.instances.append(self)
+
+    def connect(self) -> None:
+        pass
 
     def request(
         self,
@@ -468,6 +486,123 @@ class WebEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP"):
                 _request("192.168.1.1", "GET", "/", 1, {})
         self.assertTrue(FakeConnection.instances[0].closed)
+
+    def test_expired_deadline_and_missing_http_socket_are_sanitized(self) -> None:
+        with self.assertRaises(TimeoutError):
+            _remaining_request_time(time.monotonic() - 1)
+        with self.assertRaises(ValueError):
+            _DeadlineSocket(FakeSocket(), time.monotonic() + 1).makefile("wb")
+
+        class NoSocketConnection(FakeConnection):
+            def connect(self) -> None:
+                self.sock = None
+
+        with patch("cpe_access_atlas.web_evidence.HTTPConnection", NoSocketConnection):
+            with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP request"):
+                _request("127.0.0.1", "GET", "/", 1, {})
+        self.assertTrue(FakeConnection.instances[0].closed)
+
+    def test_slow_dripping_headers_and_body_cannot_extend_request_deadline(self) -> None:
+        cases = {
+            "headers": (
+                b"HTTP/1.1 ",
+                b"200 OK\r\n",
+                b"Content-Length: 2\r\n",
+                b"Connection: close\r\n",
+                b"\r\nok",
+            ),
+            "body": (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+                b"a",
+                b"b",
+                b"c",
+                b"d",
+                b"e",
+            ),
+        }
+        for phase, chunks in cases.items():
+            with self.subTest(phase=phase), socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(1)
+                listener.settimeout(2)
+                port = listener.getsockname()[1]
+
+                def serve(chunks_to_send: tuple[bytes, ...] = chunks) -> None:
+                    try:
+                        peer, _address = listener.accept()
+                    except TimeoutError:
+                        return
+                    with peer:
+                        peer.settimeout(2)
+                        request = bytearray()
+                        while b"\r\n\r\n" not in request:
+                            incoming = peer.recv(4096)
+                            if not incoming:
+                                return
+                            request.extend(incoming)
+                        for index, chunk in enumerate(chunks_to_send):
+                            if index:
+                                time.sleep(0.1)
+                            try:
+                                peer.sendall(chunk)
+                            except OSError:
+                                break
+
+                server = threading.Thread(target=serve, daemon=True)
+                server.start()
+                with patch(
+                    "cpe_access_atlas.web_evidence.HTTPConnection",
+                    side_effect=lambda host, _port, timeout, server_port=port: RealHTTPConnection(
+                        host, server_port, timeout=timeout
+                    ),
+                ):
+                    started = time.monotonic()
+                    with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP request"):
+                        _request("127.0.0.1", "GET", "/", 0.25, {})
+                    self.assertLess(time.monotonic() - started, 1)
+                server.join(timeout=2)
+                self.assertFalse(server.is_alive())
+
+    def test_fast_local_http_response_preserves_body_and_cookie(self) -> None:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(2)
+            port = listener.getsockname()[1]
+
+            def serve() -> None:
+                try:
+                    peer, _address = listener.accept()
+                except TimeoutError:
+                    return
+                with peer:
+                    peer.settimeout(2)
+                    request = bytearray()
+                    while b"\r\n\r\n" not in request:
+                        incoming = peer.recv(4096)
+                        if not incoming:
+                            return
+                        request.extend(incoming)
+                    peer.sendall(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
+                        b"Content-Type: text/plain\r\nSet-Cookie: SID=accepted; Path=/\r\n"
+                        b"Connection: close\r\n\r\nok"
+                    )
+
+            server = threading.Thread(target=serve, daemon=True)
+            server.start()
+            cookies: dict[str, str] = {}
+            with patch(
+                "cpe_access_atlas.web_evidence.HTTPConnection",
+                side_effect=lambda host, _port, timeout: RealHTTPConnection(
+                    host, port, timeout=timeout
+                ),
+            ):
+                result = _request("127.0.0.1", "GET", "/", 1, cookies)
+            server.join(timeout=2)
+            self.assertFalse(server.is_alive())
+            self.assertEqual(result, response(b"ok"))
+            self.assertEqual(cookies, {"SID": "accepted"})
 
     def test_response_size_and_length_guards(self) -> None:
         with self.assertRaisesRegex(WebEvidenceError, "invalid Content-Length"):
