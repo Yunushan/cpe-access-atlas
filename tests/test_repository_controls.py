@@ -193,7 +193,7 @@ class RepositoryControlTests(unittest.TestCase):
         pattern = re.compile(r"^uses:\s+\S+@[0-9a-f]{40}(?:\s+#.*)?$")
         local_calls = {
             f"uses: ./.github/workflows/{name}.yml"
-            for name in ("ci", "security", "secret-scan", "codeql")
+            for name in ("ci", "security", "secret-scan", "dco", "codeql")
         }
         for workflow in WORKFLOW_FILES:
             with self.subTest(workflow=workflow.name):
@@ -319,12 +319,12 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn('--codeql-risk-ref "$GITHUB_REF"', workflow)
         self.assertIn('--codeql-risk-commit "$GITHUB_SHA"', workflow)
         self.assertIn('python-version: "3.14"', workflow)
-        for name in ("ci", "security", "secret-scan", "codeql"):
+        for name in ("ci", "security", "secret-scan", "dco", "codeql"):
             self.assertIn(f"uses: ./.github/workflows/{name}.yml", workflow)
         reusable_jobs = workflow.split("  source-validation:\n", 1)[1].split(
             "\n  candidate-validation:", 1
         )[0]
-        self.assertEqual(reusable_jobs.count("    needs: scope-and-input-validation\n"), 4)
+        self.assertEqual(reusable_jobs.count("    needs: scope-and-input-validation\n"), 5)
         scope = workflow.split("  scope-and-input-validation:\n", 1)[1].split(
             "\n  source-validation:", 1
         )[0]
@@ -551,6 +551,7 @@ class RepositoryControlTests(unittest.TestCase):
             "source-validation": "ci",
             "dependency-validation": "security",
             "secret-validation": "secret-scan",
+            "dco-validation": "dco",
             "codeql-validation": "codeql",
         }
         for job, workflow in calls.items():
@@ -1146,6 +1147,20 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertEqual(result.status, github_audit.STATUS_FAIL)
         self.assertIn("dependency-review", result.detail)
 
+        responses = _successful_workflow_responses()
+        dco_jobs = responses["actions/runs/5/attempts/1/jobs?per_page=100"]
+        dco_jobs["jobs"][0]["conclusion"] = "failure"
+        result = github_audit._audit_current_checks(_MappedGitHubApi(responses), "a" * 40)
+        self.assertEqual(result.status, github_audit.STATUS_FAIL)
+        self.assertIn("check-signoff", result.detail)
+
+        responses = _successful_workflow_responses()
+        runs = responses[f"actions/runs?head_sha={'a' * 40}&per_page=100"]["workflow_runs"]
+        next(run for run in runs if run["name"] == "DCO")["event"] = "workflow_dispatch"
+        result = github_audit._audit_workflows(_MappedGitHubApi(responses), "a" * 40)
+        self.assertEqual(result.status, github_audit.STATUS_FAIL)
+        self.assertIn("DCO", result.detail)
+
     def test_periodic_or_manual_security_run_may_skip_pr_only_dependency_review(self) -> None:
         for event in ("schedule", "workflow_dispatch"):
             with self.subTest(event=event):
@@ -1509,13 +1524,19 @@ class RepositoryControlTests(unittest.TestCase):
     def test_dco_workflow_checks_every_pull_request_commit(self) -> None:
         dco = (ROOT / ".github" / "workflows" / "dco.yml").read_text(encoding="utf-8")
         self.assertIn("pull_request", dco)
+        self.assertIn("  push:\n    branches: [main]\n", dco)
+        self.assertIn("  workflow_call:\n", dco)
         self.assertIn("Signed-off-by", dco)
         self.assertIn("git rev-list", dco)
+        self.assertIn("git merge-base --is-ancestor", dco)
+        self.assertIn("DCO_BASELINE: eb11b6910c1126fd7639a152f233a8fb3880a4d8", dco)
+        self.assertIn('commits="$(git rev-list "$range")"', dco)
         self.assertIn("git interpret-trailers --parse", dco)
         self.assertIn("git show -s --format=%ae", dco)
         self.assertIn('AUTHOR_EMAIL="$author_email" awk', dco)
         self.assertIn("-f .github/dco-signoff.awk", dco)
         self.assertIn("check-signoff", github_audit._REQUIRED_BRANCH_CHECKS)
+        self.assertIn("check-signoff", github_audit._REQUIRED_CURRENT_CHECKS)
 
         valid = "Subject\n\nSigned-off-by: Example Person <person@example.test>\n"
         body_only = (

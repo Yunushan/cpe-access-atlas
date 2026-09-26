@@ -101,6 +101,35 @@ class FirmwareInspectionTests(unittest.TestCase):
                     self.assertEqual(result.sha256, hashlib.sha256(content).hexdigest())
                     self.assertEqual(result.markers, ("Linux",) if b"Linux" in suffix else ())
 
+    def test_long_version_crossing_read_boundary_keeps_its_prefix(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "boundary.bin"
+            for version, bytes_before_boundary in (
+                (b"H3600P V9.0 TTN." + b"1" * 800 + b"_260210", 400),
+                (
+                    b"H3600P"
+                    + b" " * 32
+                    + b"V9.0"
+                    + b" " * 32
+                    + b"TTN."
+                    + b"1" * 4096
+                    + b"_260210",
+                    4180,
+                ),
+            ):
+                prefix = b"\x00" * (1024 * 1024 - bytes_before_boundary)
+                for leading, expected_match in ((b"\x00", True), (b"X", False)):
+                    with self.subTest(version_length=len(version), leading=leading):
+                        content = prefix[:-1] + leading + version + b"\x00"
+                        path.write_bytes(content)
+                        result = inspect_firmware(path, version.decode("ascii"))
+                        self.assertEqual(result.exact_build_match, expected_match)
+                        self.assertEqual(
+                            result.version_strings,
+                            (version.decode("ascii"),) if expected_match else (),
+                        )
+                        self.assertEqual(result.sha256, hashlib.sha256(content).hexdigest())
+
     def test_multiple_versions_remain_complete_sorted_and_unique(self) -> None:
         other_version = b"H3600P V9.0 TTN.9_250626"
         content = b"\x00".join((other_version, TARGET_VERSION, TARGET_VERSION))
@@ -114,6 +143,23 @@ class FirmwareInspectionTests(unittest.TestCase):
         )
         self.assertEqual(result.size, len(content))
         self.assertEqual(result.sha256, hashlib.sha256(content).hexdigest())
+
+    def test_distinct_version_limit_fails_closed_without_exposing_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "private-firmware.bin"
+            versions = [f"H3600P V9.0 TTN.{number}_260210".encode("ascii") for number in range(257)]
+            path.write_bytes(b"\x00".join(versions[:256] + versions[:64]))
+            accepted = inspect_firmware(path, versions[255].decode("ascii"))
+            self.assertEqual(len(accepted.version_strings), 256)
+            self.assertTrue(accepted.exact_build_match)
+
+            path.write_bytes(b"\x00".join(versions))
+            with self.assertRaisesRegex(
+                FirmwareInspectionError, "too many distinct versions"
+            ) as error:
+                inspect_firmware(path)
+            self.assertNotIn(str(path), str(error.exception))
+            self.assertIsNone(error.exception.__cause__)
 
     def test_empty_artifact_has_no_version_or_marker(self) -> None:
         with TemporaryDirectory() as directory:

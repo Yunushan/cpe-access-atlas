@@ -31,6 +31,11 @@ jobs:
     permissions:
       contents: read
 
+  dco-validation:
+    uses: ./.github/workflows/dco.yml
+    permissions:
+      contents: read
+
   codeql-validation:
     uses: ./.github/workflows/codeql.yml
     permissions:
@@ -107,7 +112,7 @@ jobs:
           if-no-files-found: error
 
   validate-release:
-    needs: [source-validation, dependency-validation, secret-validation, codeql-validation, runtime-sbom]
+    needs: [source-validation, dependency-validation, secret-validation, dco-validation, codeql-validation, runtime-sbom]
     timeout-minutes: 30
     runs-on: ubuntu-latest
     outputs:

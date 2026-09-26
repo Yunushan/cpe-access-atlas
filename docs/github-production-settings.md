@@ -37,6 +37,15 @@ Protect `main` with:
   and review of `.github/workflows/` plus `.github/dco-signoff.awk` changes remain
   part of the trust boundary.
 
+The DCO workflow checks every PR commit before merge and every new commit on
+`main` after the known 2026-09-24 historical squash commit
+`eb11b6910c1126fd7639a152f233a8fb3880a4d8`. That commit credited
+Dependabot while retaining the human contributor's trailer; it is an explicit
+historical exception, not a precedent for new merges. The production-settings
+audit requires a successful `DCO` push run and its `check-signoff` job on the
+current main commit. Release preflight and publication rerun the DCO check from
+their exact candidate commit.
+
 The CI matrix checks are:
 
 ```text
@@ -274,7 +283,8 @@ The final audit should show branch protection or an enforced ruleset, at least
 one published release, a protected release-tag policy, enabled Dependabot
 security updates, restricted Actions permissions with SHA-pinning enforcement,
 zero open CodeQL alerts, and successful CI, security, CodeQL, package-smoke,
-both dependency-audit matrix jobs, and secret-scan check runs for the merged commit.
+both dependency-audit matrix jobs, the DCO check, and secret-scan check runs for
+the merged commit.
 The separate `accepted CodeQL risks` result must also pass. Review or replace
 each acceptance before its policy expiry, and rerun the audit whenever the
 protocol, compatibility evidence, compensating controls, or alert fingerprint
@@ -282,8 +292,9 @@ changes.
 The latest CI, Security audit, and CodeQL executions must be no more than eight
 days old (with five minutes of clock-skew tolerance), so a disabled weekly
 schedule cannot leave unchanged `main` looking green indefinitely. DCO
-`check-signoff` and dependency review are pull-request-only, so they have no
-main-push execution; branch policy must still require both for pull requests.
+`check-signoff` runs for both pull requests and main pushes. Dependency review
+is pull-request-only, so it has no main-push execution; branch policy must still
+require both checks for pull requests.
 The latest release
 must also be immutable and use an annotated tag whose commit is reachable from
 `main`.

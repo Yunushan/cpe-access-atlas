@@ -88,6 +88,15 @@ automatically with:
 git commit --signoff -m "Your commit message"
 ```
 
+The DCO workflow also checks protected `main` after each merge. GitHub can
+credit the pull-request creator as the author of a squash commit, which can
+differ from the author of signed commits in the PR. [GitHub's merge guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request)
+describes the author-email selector. Before squashing, inspect the
+resulting author and sign-off trailer. For a bot-created PR that you edit and
+sign yourself, open a maintainer-authored PR for the change you actually made
+so the final squash author matches your sign-off. A failed mainline DCO check
+blocks release validation; do not rewrite protected history to hide it.
+
 The CI, security, release, runtime-SBOM, and artifact-build environments use the
 committed lock files. When updating tooling or runtime dependencies, regenerate
 the relevant lock files with a universal resolver, preserving environment
