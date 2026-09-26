@@ -43,12 +43,13 @@ STATUS_DEFERRED = "DEFERRED"
 STATUS_PASS = STATUS_OK
 STATUS_FAIL = STATUS_BAD
 STATUS_UNVERIFIED = STATUS_UNKNOWN
-_EXPECTED_WORKFLOWS = {"CI", "Security audit", "CodeQL", "Secret scan"}
+_EXPECTED_WORKFLOWS = {"CI", "Security audit", "CodeQL", "Secret scan", "DCO"}
 _WORKFLOW_PATHS = {
     "CI": ".github/workflows/ci.yml",
     "Security audit": ".github/workflows/security.yml",
     "CodeQL": ".github/workflows/codeql.yml",
     "Secret scan": ".github/workflows/secret-scan.yml",
+    "DCO": ".github/workflows/dco.yml",
 }
 _RELEASE_NUMBER = r"(?:0|[1-9][0-9]*)"
 _RELEASE_VERSION = (
@@ -157,6 +158,7 @@ _REQUIRED_CURRENT_CHECKS = frozenset(
         *_CI_CHECK_NAMES,
         _CROSS_PLATFORM_CHECK_NAME,
         "package-smoke",
+        "check-signoff",
         *_SECURITY_AUDIT_CHECK_NAMES,
         "analyze",
         "gitleaks",
@@ -167,6 +169,7 @@ _WORKFLOW_CHECKS = {
     "Security audit": (*_SECURITY_AUDIT_CHECK_NAMES, "dependency-review"),
     "CodeQL": ("analyze",),
     "Secret scan": ("gitleaks",),
+    "DCO": ("check-signoff",),
 }
 
 
@@ -1988,7 +1991,8 @@ def _latest_workflow_runs(api: GitHubApi, head_sha: str) -> tuple[dict[str, Any]
             run.get("head_sha") != head_sha
             or run.get("head_branch") != "main"
             or run.get("path") != _WORKFLOW_PATHS[name]
-            or event not in {"push", "schedule", "workflow_dispatch"}
+            or (name == "DCO" and event != "push")
+            or (name != "DCO" and event not in {"push", "schedule", "workflow_dispatch"})
         ):
             continue
         if any(

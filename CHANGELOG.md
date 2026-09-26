@@ -2,7 +2,15 @@
 
 All notable changes are documented here.
 
-## 0.4.0a6 - 2026-09-23
+## 0.4.0a6 - 2026-09-26
+
+- Detect bounded H3600P firmware version strings across a 1 MiB read boundary
+  without mistaking adjacent identifier characters for token boundaries. Limit
+  distinct reported versions so an opaque artifact cannot grow scanner memory
+  without bound.
+- Check DCO sign-offs on new protected-main commits as well as pull requests,
+  and require the same check during release preflight and publication. Record
+  the known historical bot-attributed squash commit as an explicit baseline.
 
 - Require an explicitly labeled `HardwareVersion` or `HardwareRevision` field
   to recognize `V9.0` in owner-authorized H3600P web evidence. Do not infer

@@ -2,6 +2,9 @@ name: DCO
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -23,10 +26,27 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # This historical squash commit credited Dependabot while retaining
+          # the human PR commit's trailer. Mainline checks start after it.
+          DCO_BASELINE: eb11b6910c1126fd7639a152f233a8fb3880a4d8
         run: |
           set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            range="$BASE_SHA..$HEAD_SHA"
+          else
+            if ! git merge-base --is-ancestor "$DCO_BASELINE" "$GITHUB_SHA"; then
+              echo "::error::Protected main no longer contains the DCO audit baseline."
+              exit 1
+            fi
+            range="$DCO_BASELINE..$GITHUB_SHA"
+          fi
+          commits="$(git rev-list "$range")"
+          if [ -z "$commits" ]; then
+            echo "::error::DCO audit found no commits to inspect."
+            exit 1
+          fi
           missing=0
-          for commit in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
+          while IFS= read -r commit; do
             author_email="$(git show -s --format=%ae "$commit")"
             trailers="$(git show -s --format=%B "$commit" | git interpret-trailers --parse)"
             if ! printf '%s\n' "$trailers" \
@@ -34,9 +54,9 @@ jobs:
               echo "::error::Commit $commit lacks a valid DCO sign-off matching its author email."
               missing=1
             fi
-          done
+          done <<< "$commits"
           if [ "$missing" -ne 0 ]; then
-            echo "One or more commits in this pull request lack a Developer Certificate" \
+            echo "One or more audited commits lack a Developer Certificate" \
                  "of Origin sign-off. See CONTRIBUTING.md for the required trailer format" \
                  "and use 'git commit --signoff' (or -s) to add it."
             exit 1

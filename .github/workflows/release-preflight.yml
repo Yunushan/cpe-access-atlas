@@ -59,6 +59,12 @@ jobs:
     permissions:
       contents: read
 
+  dco-validation:
+    needs: scope-and-input-validation
+    uses: ./.github/workflows/dco.yml
+    permissions:
+      contents: read
+
   codeql-validation:
     needs: scope-and-input-validation
     uses: ./.github/workflows/codeql.yml
@@ -68,7 +74,7 @@ jobs:
       security-events: write
 
   candidate-validation:
-    needs: [source-validation, dependency-validation, secret-validation, codeql-validation]
+    needs: [source-validation, dependency-validation, secret-validation, dco-validation, codeql-validation]
     timeout-minutes: 15
     runs-on: ubuntu-latest
     permissions:

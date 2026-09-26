@@ -29,9 +29,17 @@ class FirmwareInspection:
 
 
 _CHUNK_SIZE = 1024 * 1024
-_SCAN_OVERLAP = 256
+# A version may straddle a read boundary. Bound its variable-width fields so
+# the overlap can always retain the entire candidate and its leading boundary.
+# Real build identifiers are far shorter than these defensive limits.
+_MAX_VERSION_WHITESPACE = 32
+_MAX_VERSION_BUILD_DIGITS = 4096
+_MAX_VERSION_BYTES = 6 + 2 * _MAX_VERSION_WHITESPACE + 4 + 4 + _MAX_VERSION_BUILD_DIGITS + 1 + 6
+_SCAN_OVERLAP = _MAX_VERSION_BYTES + 1
+_MAX_DISTINCT_VERSIONS = 256
 _VERSION_PATTERN = re.compile(
-    rb"(?i)(?<![a-z0-9_.+-])H3600P\s+V9\.0\s+TTN\.\d+_\d{6}(?![a-z0-9_.+-])"
+    rb"(?i)(?<![a-z0-9_.+-])H3600P\s{1,32}V9\.0\s{1,32}TTN\.\d{1,4096}_\d{6}"
+    rb"(?![a-z0-9_.+-])"
 )
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 _MARKERS = (
@@ -47,15 +55,16 @@ _MARKERS = (
 )
 
 
-def _scan_versions(data: bytes, *, begins_file: bool, ends_file: bool) -> set[str]:
-    """Require real token boundaries, not the artificial edges of a read window."""
+def _scan_versions(data: bytes, versions: set[str], *, begins_file: bool, ends_file: bool) -> None:
+    """Collect bounded, distinct versions with real file token boundaries."""
 
-    versions: set[str] = set()
     for match in _VERSION_PATTERN.finditer(data):
         if (match.start() == 0 and not begins_file) or (match.end() == len(data) and not ends_file):
             continue
-        versions.add(match.group().decode("ascii"))
-    return versions
+        version = match.group().decode("ascii")
+        if version not in versions and len(versions) >= _MAX_DISTINCT_VERSIONS:
+            raise FirmwareInspectionError("firmware artifact contains too many distinct versions")
+        versions.add(version)
 
 
 def _validate_arguments(
@@ -105,15 +114,13 @@ def inspect_firmware(
                 scan_data = overlap + chunk
                 digest.update(chunk)
                 size += len(chunk)
-                # Check the following byte (or EOF) while a complete candidate
-                # and its leading delimiter are still in this read window.
-                # Do not force long candidates through the fixed overlap.
-                versions.update(
-                    _scan_versions(
-                        scan_data + next_byte,
-                        begins_file=size == len(scan_data),
-                        ends_file=not next_byte,
-                    )
+                # Check the following byte (or EOF) while a complete bounded
+                # candidate and its leading delimiter remain in this window.
+                _scan_versions(
+                    scan_data + next_byte,
+                    versions,
+                    begins_file=size == len(scan_data),
+                    ends_file=not next_byte,
                 )
                 for name, signature in _MARKERS:
                     if signature in scan_data:
