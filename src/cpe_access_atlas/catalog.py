@@ -30,6 +30,26 @@ _QUALIFICATION_OBSERVATIONS = frozenset(
         "independent_reproduction",
     }
 )
+_WAN_SETTING_FIELDS = (
+    "ipv4_remote_access_baseline",
+    "ipv4_remote_access_post",
+    "https_remote_access_baseline",
+    "https_remote_access_post",
+    "icmp_remote_access_baseline",
+    "icmp_remote_access_post",
+    "global_firewall_baseline",
+    "global_firewall_post",
+    "internet_wan_firewall_baseline",
+    "internet_wan_firewall_post",
+)
+_WAN_EXTERNAL_FIELDS = (
+    "external_test_evidence_url",
+    "external_test_vantage",
+    "external_target_path_verified",
+    "external_test_scope",
+    "external_baseline_result",
+    "external_post_result",
+)
 
 
 def normalize(value: str) -> str:
@@ -272,6 +292,67 @@ def _qualification_errors(recipe: Recipe) -> list[str]:
                 f"{recipe.id}: structured qualification records missing: "
                 f"{', '.join(sorted(missing_records))}"
             )
+    if recipe.status in {"verified", "stable"}:
+        wan_record = record_observations.get("wan_isolation")
+        if wan_record is not None:
+            wan_fields = (*_WAN_SETTING_FIELDS, *_WAN_EXTERNAL_FIELDS)
+            missing_wan_fields = [
+                name
+                for name in wan_fields
+                if not isinstance(wan_record.get(name), str) or not wan_record[name].strip()
+            ]
+            if missing_wan_fields:
+                errors.append(
+                    f"{recipe.id}: WAN isolation record is missing: {', '.join(missing_wan_fields)}"
+                )
+            else:
+                for name in _WAN_SETTING_FIELDS:
+                    if wan_record[name] not in {"on", "off", "not_present"}:
+                        errors.append(
+                            f"{recipe.id}: WAN isolation {name} must have a known setting"
+                        )
+                if any(
+                    wan_record[name] == "on"
+                    for name in (
+                        "ipv4_remote_access_baseline",
+                        "ipv4_remote_access_post",
+                        "https_remote_access_baseline",
+                        "https_remote_access_post",
+                    )
+                ):
+                    errors.append(
+                        f"{recipe.id}: WAN remote management must remain disabled "
+                        "at baseline and after"
+                    )
+                external_url = wan_record["external_test_evidence_url"]
+                if external_url not in evidence_urls:
+                    errors.append(
+                        f"{recipe.id}: external WAN test must reference a catalog evidence URL"
+                    )
+                if external_url == wan_record["evidence_url"]:
+                    errors.append(
+                        f"{recipe.id}: external WAN test needs evidence "
+                        "separate from local settings"
+                    )
+                if recipe.qualification.get("wan_isolation") != wan_record["evidence_url"]:
+                    errors.append(
+                        f"{recipe.id}: WAN isolation qualification must reference "
+                        "the local-settings evidence URL"
+                    )
+                if wan_record["external_test_vantage"] != "outside_lan_and_vpn":
+                    errors.append(
+                        f"{recipe.id}: external WAN test must run outside the LAN and VPN"
+                    )
+                if wan_record["external_target_path_verified"] != "yes":
+                    errors.append(f"{recipe.id}: external WAN test target path must be verified")
+                if any(
+                    wan_record[name] != "unreachable"
+                    for name in ("external_baseline_result", "external_post_result")
+                ):
+                    errors.append(
+                        f"{recipe.id}: external WAN management must be unreachable "
+                        "both before and after"
+                    )
     return errors
 
 

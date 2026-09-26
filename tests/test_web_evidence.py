@@ -14,6 +14,7 @@ from cpe_access_atlas.web_evidence import (
     _PARAMETER_NAME,
     MAX_COOKIE_VALUE_CHARS,
     MAX_JSON_NESTING,
+    MAX_PAGE_ACCESS_ENTRIES,
     MAX_RESPONSE_BYTES,
     MAX_STRUCTURAL_IDENTIFIERS,
     WebEvidenceError,
@@ -740,6 +741,39 @@ class WebEvidenceTests(unittest.TestCase):
             MAX_STRUCTURAL_IDENTIFIERS + 1,
         )
         self.assertTrue(evidence["structural_identifier_limit_reached"])
+
+    def test_endpoint_evidence_bounds_canonical_page_access_entries(self) -> None:
+        entries = [
+            (
+                f'_PageAccessAuthor["tr069"] = '
+                f'{{"VisibilityLevel":{index // 100},"Limitation":{index % 100}}};'
+            ).encode("ascii")
+            for index in range(MAX_PAGE_ACCESS_ENTRIES + 1)
+        ]
+        duplicate = entries[0].replace(b'"tr069"', b'"TR069"')
+        private_id = (
+            b'_PageAccessAuthor["SYNTHETIC-PRIVATE-ID"] = {"VisibilityLevel":3,"Limitation":1};'
+        )
+        body = b"".join(entries[:-1]) + duplicate + private_id
+        evidence = _endpoint_evidence(
+            response(body),
+            expected_firmware="firmware",
+            expected_model="model",
+            expected_hardware="hardware",
+        )
+        self.assertEqual(len(evidence["page_access_entries"]), MAX_PAGE_ACCESS_ENTRIES)
+        self.assertEqual(evidence["redacted_unique_structural_identifier_counts"]["page_ids"], 1)
+        self.assertNotIn("SYNTHETIC-PRIVATE-ID", json.dumps(evidence))
+
+        with self.assertRaisesRegex(WebEvidenceError, "512-entry limit") as error:
+            _endpoint_evidence(
+                response(body + entries[-1]),
+                expected_firmware="firmware",
+                expected_model="model",
+                expected_hardware="hardware",
+            )
+        self.assertNotIn("SYNTHETIC-PRIVATE-ID", str(error.exception))
+        self.assertIsNone(error.exception.__cause__)
 
     def test_endpoint_evidence_redacts_unreviewed_identifiers_deterministically(self) -> None:
         private_identifiers = (

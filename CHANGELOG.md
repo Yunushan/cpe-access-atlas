@@ -8,17 +8,24 @@ All notable changes are documented here.
   without mistaking adjacent identifier characters for token boundaries. Limit
   distinct reported versions so an opaque artifact cannot grow scanner memory
   without bound.
+- Bound UART firmware tokens and distinct metadata values, and cap canonical
+  web page-access entries. Excess input fails with sanitized errors; exact-device
+  access and recovery remain unverified.
 - Check DCO sign-offs on new protected-main commits as well as pull requests,
   and require the same check during release preflight and publication. Record
   the known historical bot-attributed squash commit as an explicit baseline.
 
 - Require an explicitly labeled `HardwareVersion` or `HardwareRevision` field
   to recognize `V9.0` in owner-authorized H3600P web evidence. Do not infer
-  the hardware revision from the separate UI software version `V9.0.7` or
-  firmware build `TTN.10_260210`; bound status-page field parsing on
-  malformed input.
-- Record the owner-reported software-version field without upgrading the
-  exact device recipe: access and recovery on this build remain unverified.
+  the catalog's provisional hardware revision from a different value or the
+  firmware build; bound status-page field parsing on malformed input.
+- Record the signed-in H3600P UI's `Donanım Versiyonu` (hardware version)
+  `V9.0.7` and `Yazılım versiyonu` (software version) `TTN.10_260210`.
+  Keep the physical revision unresolved and exact device support blocked.
+- Require structured WAN isolation evidence before verified or stable device
+  support: record local remote-access and firewall settings, plus an independent
+  external baseline and post-state check. Local UI settings alone do not prove
+  WAN isolation.
 - Preserve private report and device-identity inputs when `--force` is used:
   `redact` and `config-generate` reject output paths that alias their inputs.
   Keep private report paths out of redaction file-error messages.

@@ -12,7 +12,7 @@ def build_research_template(recipe: Recipe) -> str:
 
 > Do not paste passwords, configuration exports, packet captures, cookies,
 > certificates, serial numbers, MAC addresses, subscriber identifiers, or
-> public IP addresses into this report.
+> public or private IP addresses into this report.
 
 ## Authorization
 
@@ -37,7 +37,7 @@ def build_research_template(recipe: Recipe) -> str:
 ## Non-secret observations
 
 - Standard local UI reachable: <!-- yes/no -->
-- Local UI address: <!-- private IP only -->
+- Local UI access path: <!-- same LAN / other; no address -->
 - Export/backup button visible: <!-- yes/no -->
 - Recovery/reset procedure tested: <!-- yes/no -->
 - VoIP/IPTV in use: <!-- yes/no; no credentials -->
@@ -53,7 +53,7 @@ def build_research_template(recipe: Recipe) -> str:
 - Exact verification steps:
 - Rollback performed:
 - Connectivity restored:
-- WAN-side management still disabled:
+- WAN-side management status: <!-- observed result, not inferred from local UI -->
 
 ## Qualification evidence
 
@@ -65,7 +65,23 @@ Never perform an unverified import or reset merely to fill in this report.
 - Claimed access independently verified:
 - Recovery tested before and after:
 - Services compared with the original baseline (including not-applicable items):
-- WAN isolation verified:
+- Local IPv4 Remote Access baseline: <!-- on/off/not present/unknown -->
+- Local IPv4 Remote Access post-change: <!-- on/off/not present/unknown -->
+- Local HTTPS Remote Access baseline: <!-- on/off/not present/unknown -->
+- Local HTTPS Remote Access post-change: <!-- on/off/not present/unknown -->
+- Local ICMP Remote Access baseline: <!-- on/off/not present/unknown -->
+- Local ICMP Remote Access post-change: <!-- on/off/not present/unknown -->
+- Local Global firewall baseline: <!-- on/off/not present/unknown -->
+- Local Global firewall post-change: <!-- on/off/not present/unknown -->
+- Local INTERNET WAN firewall baseline: <!-- on/off/not present/unknown -->
+- Local INTERNET WAN firewall post-change: <!-- on/off/not present/unknown -->
+- External management test vantage: <!-- outside LAN and VPN; no address -->
+- External test target path verified: <!-- yes/no/unknown; note upstream filtering -->
+- External baseline management reachability: <!-- unreachable/reachable/indeterminate -->
+- External post-change management reachability: <!-- unreachable/reachable/indeterminate -->
+- External test scope: <!-- management protocols and paths checked; no addresses -->
+- Separate external test evidence URL: <!-- sanitized HTTPS report -->
+- WAN isolation reviewed: <!-- local settings alone never prove isolation -->
 - Config import accepted and unrelated settings preserved (if claimed):
 - Independent reproduction (required for stable status):
 - Reviewed, sanitized evidence URLs:
@@ -75,6 +91,6 @@ Never perform an unverified import or reset merely to fill in this report.
 - [ ] No configuration backup is attached.
 - [ ] No secret or credential is present.
 - [ ] No serial number, MAC address, certificate, or subscriber ID is present.
-- [ ] No public IP address is present.
+- [ ] No public or private IP address is present.
 - [ ] Screenshots have been manually reviewed and redacted.
 """
