@@ -8,6 +8,9 @@ All notable changes are documented here.
   without mistaking adjacent identifier characters for token boundaries. Limit
   distinct reported versions so an opaque artifact cannot grow scanner memory
   without bound.
+- Bound UART firmware tokens and distinct metadata values, and cap canonical
+  web page-access entries. Excess input fails with sanitized errors; exact-device
+  access and recovery remain unverified.
 - Check DCO sign-offs on new protected-main commits as well as pull requests,
   and require the same check during release preflight and publication. Record
   the known historical bot-attributed squash commit as an explicit baseline.

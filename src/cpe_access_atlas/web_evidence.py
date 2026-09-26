@@ -17,6 +17,7 @@ from .policy import parse_single_private_address, parse_timeout
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_COOKIE_VALUE_CHARS = 4_096
 MAX_STRUCTURAL_IDENTIFIERS = 512
+MAX_PAGE_ACCESS_ENTRIES = 512
 MAX_JSON_NESTING = 64
 
 _LOGIN_RESPONSE_ROOT = "ajax_response_xml_root"
@@ -526,6 +527,8 @@ def _endpoint_evidence(
         page_id = _SAFE_EMITTED_IDENTIFIER_VALUES["page_ids"].get(entry["page_id"].casefold())
         if page_id is not None:
             page_access_values.add((page_id, entry["visibility_level"], entry["limitation"]))
+            if len(page_access_values) > MAX_PAGE_ACCESS_ENTRIES:
+                raise WebEvidenceError("router page-access evidence exceeds the 512-entry limit")
     page_access_entries: list[_PageAccessEvidence] = [
         {
             "page_id": page_id,
