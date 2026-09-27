@@ -475,6 +475,12 @@ jobs:
           release_args=(--repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag)
           if [ "$PRERELEASE" = "true" ]; then
             release_args+=(--prerelease)
+            support_url="https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/SUPPORT.md"
+            release_notes="$(printf '%s\n\n%s\n%s\n' \
+              '**Experimental prerelease.** Behavior and file formats may change. This release is not suitable for unattended or business-critical deployment.' \
+              '**H3600P status:** The Türk Telekom ZTE H3600P `TTN.10_260210` recipe remains blocked. Privileged access, configuration acceptance, recovery, and WAN isolation are unverified. Do not attempt privileged access or configuration changes on an active router based on this release.' \
+              "See [support status](${support_url}).")"
+            release_args+=(--notes "$release_notes")
           fi
           # gh creates a draft, uploads all assets, then publishes it. Repository
           # release immutability must be enabled before this protected tag runs.
