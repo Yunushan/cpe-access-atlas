@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import socket
+import time
+from contextlib import suppress
 from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPException, HTTPResponse
 from http.cookies import CookieError, SimpleCookie
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 from urllib.parse import urlencode
 
 from .policy import parse_single_private_address, parse_timeout
@@ -17,6 +21,7 @@ from .policy import parse_single_private_address, parse_timeout
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_COOKIE_VALUE_CHARS = 4_096
 MAX_STRUCTURAL_IDENTIFIERS = 512
+MAX_PAGE_ACCESS_ENTRIES = 512
 MAX_JSON_NESTING = 64
 
 _LOGIN_RESPONSE_ROOT = "ajax_response_xml_root"
@@ -206,6 +211,56 @@ class _EndpointEvidence(TypedDict):
     expected_identity_markers: dict[str, bool]
 
 
+def _remaining_request_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("local HTTP request deadline expired")
+    return remaining
+
+
+class _DeadlineRawReader(io.RawIOBase):
+    """Apply one absolute deadline to every socket read, including HTTP headers."""
+
+    def __init__(self, sock: socket.socket, deadline: float) -> None:
+        self._socket = sock
+        # A socket file retains its own reference when HTTPConnection closes a
+        # Connection: close socket before HTTPResponse has read the body.
+        self._file = sock.makefile("rb", buffering=0)
+        self._deadline = deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: object) -> int:
+        self._socket.settimeout(_remaining_request_time(self._deadline))
+        result = self._file.readinto(cast(memoryview, buffer))
+        return 0 if result is None else result
+
+    def close(self) -> None:
+        self._file.close()
+        super().close()
+
+
+class _DeadlineSocket:
+    """Supply deadline-aware send and file operations to HTTPConnection."""
+
+    def __init__(self, sock: socket.socket, deadline: float) -> None:
+        self._socket = sock
+        self._deadline = deadline
+
+    def sendall(self, data: bytes) -> None:
+        self._socket.settimeout(_remaining_request_time(self._deadline))
+        self._socket.sendall(data)
+
+    def makefile(self, mode: str) -> io.BufferedReader:
+        if mode != "rb":
+            raise ValueError("unsupported local HTTP response mode")
+        return io.BufferedReader(_DeadlineRawReader(self._socket, self._deadline))
+
+    def close(self) -> None:
+        self._socket.close()
+
+
 def _read_bounded(response: HTTPResponse) -> bytes:
     raw_length = response.getheader("Content-Length")
     if raw_length is not None:
@@ -257,8 +312,17 @@ def _request(
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         headers["Content-Length"] = str(len(data))
 
+    deadline = time.monotonic() + timeout
     connection = HTTPConnection(host, 80, timeout=timeout)
+    response: HTTPResponse | None = None
+    raw_socket: socket.socket | None = None
     try:
+        connection.timeout = _remaining_request_time(deadline)
+        connection.connect()
+        raw_socket = connection.sock
+        if raw_socket is None:
+            raise HTTPException("local HTTP connection has no socket")
+        connection.sock = cast(socket.socket, _DeadlineSocket(raw_socket, deadline))
         connection.request(method, path, body=data, headers=headers)
         response = connection.getresponse()
         body = _read_bounded(response)
@@ -268,7 +332,16 @@ def _request(
     except (HTTPException, OSError, TimeoutError) as exc:
         raise WebEvidenceError("unable to complete the bounded local HTTP request") from exc
     finally:
-        connection.close()
+        if response is not None:
+            with suppress(OSError):
+                response.close()
+        with suppress(OSError):
+            connection.close()
+        # HTTPConnection can drop its socket reference as soon as it sees
+        # Connection: close. Keep the original handle until response cleanup.
+        if raw_socket is not None:
+            with suppress(OSError):
+                raw_socket.close()
 
 
 def _require_ok(response: _Response, label: str) -> None:
@@ -526,6 +599,8 @@ def _endpoint_evidence(
         page_id = _SAFE_EMITTED_IDENTIFIER_VALUES["page_ids"].get(entry["page_id"].casefold())
         if page_id is not None:
             page_access_values.add((page_id, entry["visibility_level"], entry["limitation"]))
+            if len(page_access_values) > MAX_PAGE_ACCESS_ENTRIES:
+                raise WebEvidenceError("router page-access evidence exceeds the 512-entry limit")
     page_access_entries: list[_PageAccessEvidence] = [
         {
             "page_id": page_id,

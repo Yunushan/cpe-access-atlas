@@ -24,8 +24,9 @@ from cpe_access_atlas.catalog import (
 def qualification_records(
     proof: str, tested_on: str, observations: tuple[str, ...]
 ) -> list[dict[str, str]]:
-    return [
-        {
+    records = []
+    for observation in observations:
+        record = {
             "observation": observation,
             "evidence_url": proof,
             "tested_on": tested_on,
@@ -36,8 +37,29 @@ def qualification_records(
             ),
             "recovery_outcome": f"Recorded recovery outcome for {observation}.",
         }
-        for observation in observations
-    ]
+        if observation == "wan_isolation":
+            record.update(
+                {
+                    "ipv4_remote_access_baseline": "off",
+                    "ipv4_remote_access_post": "off",
+                    "https_remote_access_baseline": "off",
+                    "https_remote_access_post": "off",
+                    "icmp_remote_access_baseline": "off",
+                    "icmp_remote_access_post": "off",
+                    "global_firewall_baseline": "on",
+                    "global_firewall_post": "on",
+                    "internet_wan_firewall_baseline": "on",
+                    "internet_wan_firewall_post": "on",
+                    "external_test_evidence_url": f"{proof}/external-wan-test",
+                    "external_test_vantage": "outside_lan_and_vpn",
+                    "external_target_path_verified": "yes",
+                    "external_test_scope": "Known management paths on the exact target.",
+                    "external_baseline_result": "unreachable",
+                    "external_post_result": "unreachable",
+                }
+            )
+        records.append(record)
+    return records
 
 
 class CatalogTests(unittest.TestCase):
@@ -379,7 +401,10 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(CatalogError):
             catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
         proof = "https://example.test/synthetic-exact-device-report"
-        payload["evidence"] = [{"title": "Synthetic qualification fixture", "url": proof}]
+        payload["evidence"] = [
+            {"title": "Synthetic qualification fixture", "url": proof},
+            {"title": "Synthetic external WAN test", "url": f"{proof}/external-wan-test"},
+        ]
         payload["qualification"] = {
             **dict.fromkeys(
                 ("hardware", "access", "recovery", "services", "wan_isolation", "config_import"),
@@ -449,7 +474,10 @@ class CatalogTests(unittest.TestCase):
         payload.update(status="verified", blockers=[])
         payload["device"]["hardware_revision_status"] = "exact"
         proof = "https://example.test/structured-exact-device-report"
-        payload["evidence"] = [{"title": "Structured qualification fixture", "url": proof}]
+        payload["evidence"] = [
+            {"title": "Structured qualification fixture", "url": proof},
+            {"title": "Synthetic external WAN test", "url": f"{proof}/external-wan-test"},
+        ]
         observations = ("hardware", "access", "recovery", "services", "wan_isolation")
         payload["qualification"] = {
             **dict.fromkeys((*observations, "config_import"), proof),
@@ -461,6 +489,16 @@ class CatalogTests(unittest.TestCase):
         catalog._validate_payload(payload, "recipe.schema.json", "synthetic")
         recipe = catalog.Recipe.from_dict(payload)
         self.assertEqual(catalog._qualification_errors(recipe), [])
+
+        invalid_setting = json.loads(json.dumps(payload))
+        wan_payload = next(
+            record
+            for record in invalid_setting["qualification_records"]
+            if record["observation"] == "wan_isolation"
+        )
+        wan_payload["global_firewall_post"] = "disabled"
+        with self.assertRaises(CatalogError):
+            catalog._validate_payload(invalid_setting, "recipe.schema.json", "synthetic")
 
         missing_records = dict(payload)
         missing_records.pop("qualification_records")
@@ -569,6 +607,114 @@ class CatalogTests(unittest.TestCase):
                 for error in catalog._qualification_errors(non_object_record)
             )
         )
+
+    def test_wan_isolation_needs_separate_external_reachability_evidence(self) -> None:
+        base = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")
+        proof = "https://example.test/local-settings"
+        observations = ("hardware", "access", "recovery", "services", "wan_isolation")
+        recipe = replace(
+            base,
+            status="verified",
+            hardware_revision_status="exact",
+            capabilities=(),
+            blockers=(),
+            evidence=(
+                {"title": "Local settings", "url": proof},
+                {"title": "External WAN test", "url": f"{proof}/external-wan-test"},
+            ),
+            qualification={
+                **dict.fromkeys(observations, proof),
+                "tested_on": base.last_reviewed,
+            },
+            qualification_records=tuple(
+                qualification_records(proof, base.last_reviewed, observations)
+            ),
+        )
+        self.assertEqual(catalog._qualification_errors(recipe), [])
+        wan_record = next(
+            record
+            for record in recipe.qualification_records
+            if record["observation"] == "wan_isolation"
+        )
+
+        def with_wan_record(updated: dict[str, str]) -> catalog.Recipe:
+            return replace(
+                recipe,
+                qualification_records=tuple(
+                    updated if record["observation"] == "wan_isolation" else record
+                    for record in recipe.qualification_records
+                ),
+            )
+
+        for field_name in (
+            "ipv4_remote_access_baseline",
+            "ipv4_remote_access_post",
+            "https_remote_access_baseline",
+            "https_remote_access_post",
+            "icmp_remote_access_baseline",
+            "icmp_remote_access_post",
+            "global_firewall_baseline",
+            "global_firewall_post",
+            "internet_wan_firewall_baseline",
+            "internet_wan_firewall_post",
+            "external_test_evidence_url",
+            "external_test_vantage",
+            "external_target_path_verified",
+            "external_test_scope",
+            "external_baseline_result",
+            "external_post_result",
+        ):
+            with self.subTest(missing=field_name):
+                local_only = dict(wan_record)
+                local_only.pop(field_name)
+                self.assertTrue(
+                    any(
+                        "WAN isolation record is missing" in error
+                        for error in catalog._qualification_errors(with_wan_record(local_only))
+                    )
+                )
+
+        for field_name, value, expected_error in (
+            ("external_test_evidence_url", proof, "evidence separate"),
+            (
+                "external_test_evidence_url",
+                "https://example.test/unlisted-external",
+                "catalog evidence URL",
+            ),
+            ("external_test_vantage", "same_lan_or_vpn", "outside the LAN"),
+            ("external_target_path_verified", "unknown", "target path must be verified"),
+            ("external_baseline_result", "reachable", "unreachable both before and after"),
+            ("external_post_result", "indeterminate", "unreachable both before and after"),
+            ("ipv4_remote_access_baseline", "on", "must remain disabled"),
+            ("ipv4_remote_access_post", "on", "must remain disabled"),
+            ("https_remote_access_baseline", "on", "must remain disabled"),
+            ("https_remote_access_post", "on", "must remain disabled"),
+            ("global_firewall_baseline", "unknown", "must have a known setting"),
+            ("global_firewall_post", "unknown", "must have a known setting"),
+        ):
+            with self.subTest(field=field_name, value=value):
+                errors = catalog._qualification_errors(
+                    with_wan_record({**wan_record, field_name: value})
+                )
+                self.assertTrue(
+                    any(expected_error in error for error in errors),
+                    errors,
+                )
+
+        unlinked_qualification = replace(
+            recipe,
+            qualification={
+                **recipe.qualification,
+                "wan_isolation": f"{proof}/external-wan-test",
+            },
+        )
+        self.assertTrue(
+            any(
+                "must reference the local-settings evidence URL" in error
+                for error in catalog._qualification_errors(unlinked_qualification)
+            )
+        )
+        self.assertEqual(catalog._qualification_errors(replace(recipe, status="blocked")), [])
 
     def test_qualified_targets_cannot_relabel_unresolved_coordinates_as_exact(self) -> None:
         recipe = find_recipe("turk-telekom", "H3600P", "V9.0", "H3600P V9.0 TTN.10_260210")

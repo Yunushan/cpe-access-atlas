@@ -46,9 +46,15 @@ class UartEvidence:
 
 
 MAX_UART_LOG_BYTES = 8 * 1024 * 1024
+MAX_UART_METADATA_VALUES = 256
+_MAX_EXPECTED_FIRMWARE_CHARS = 256
 
 _FIRMWARE_PATTERN = re.compile(
-    rb"(?i)(?<![a-z0-9_.+-])(H3600P[ \t]+V9\.0[ \t]+TTN\.\d+_\d{6})"
+    rb"(?i)(?<![a-z0-9_.+-])(H3600P[ \t]+V9\.0[ \t]+TTN\.\d{1,16}_\d{6})"
+    rb"(?![a-z0-9_.+-])"
+)
+_OVERLONG_FIRMWARE_PATTERN = re.compile(
+    rb"(?i)(?<![a-z0-9_.+-])H3600P[ \t]+V9\.0[ \t]+TTN\.\d{17,}_\d{6}"
     rb"(?![a-z0-9_.+-])"
 )
 _UBOOT_RELEASE_PATTERN = re.compile(
@@ -78,12 +84,42 @@ _LOGIN_PROMPT_PATTERN = re.compile(rb"(?im)^[^\r\n]{0,32}\blogin:[ \t]*\r?$")
 _UID_ZERO_PATTERN = re.compile(rb"(?i)(?<![a-z0-9_])uid=0\(root\)(?![a-z0-9_])")
 
 
-def _extract_ascii(pattern: re.Pattern[bytes], data: bytes, group: int = 1) -> tuple[str, ...]:
+def _extract_ascii(
+    pattern: re.Pattern[bytes],
+    data: bytes,
+    label: str,
+    group: int = 1,
+    *,
+    normalize_whitespace: bool = False,
+) -> tuple[str, ...]:
     values: set[str] = set()
     for match in pattern.finditer(data):
         value = match.group(group)
         if value is not None:
-            values.add(value.decode("ascii"))
+            decoded = value.decode("ascii")
+            if normalize_whitespace:
+                decoded = " ".join(decoded.split())
+            if decoded not in values and len(values) >= MAX_UART_METADATA_VALUES:
+                raise UartEvidenceError(f"UART log contains too many distinct {label}")
+            values.add(decoded)
+    return tuple(sorted(values))
+
+
+def _combine_ascii(first: tuple[str, ...], second: tuple[str, ...], label: str) -> tuple[str, ...]:
+    values = set(first)
+    values.update(second)
+    if len(values) > MAX_UART_METADATA_VALUES:
+        raise UartEvidenceError(f"UART log contains too many distinct {label}")
+    return tuple(sorted(values))
+
+
+def _extract_dram_sizes(data: bytes) -> tuple[int, ...]:
+    values: set[int] = set()
+    for match in _DRAM_PATTERN.finditer(data):
+        size = int(match.group(1))
+        if size not in values and len(values) >= MAX_UART_METADATA_VALUES:
+            raise UartEvidenceError("UART log contains too many distinct DRAM sizes")
+        values.add(size)
     return tuple(sorted(values))
 
 
@@ -111,8 +147,14 @@ def _firmware_status(versions: tuple[str, ...], expected: str) -> str:
 def _validate_arguments(path: str | Path, expected_firmware: str) -> None:
     if not isinstance(path, (str, Path)):
         raise UartEvidenceError("input path must be a string or pathlib.Path")
-    if not isinstance(expected_firmware, str) or not expected_firmware.strip():
-        raise UartEvidenceError("expected firmware must be a non-empty string")
+    if (
+        not isinstance(expected_firmware, str)
+        or not expected_firmware.strip()
+        or len(expected_firmware) > _MAX_EXPECTED_FIRMWARE_CHARS
+        or not expected_firmware.isascii()
+        or not expected_firmware.isprintable()
+    ):
+        raise UartEvidenceError("expected firmware must be bounded printable ASCII")
 
 
 def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
@@ -136,19 +178,27 @@ def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
         raise UartEvidenceError("unable to read UART log") from None
     if len(data) > MAX_UART_LOG_BYTES:
         raise UartEvidenceError("UART log exceeds the 8 MiB safety limit")
+    if _OVERLONG_FIRMWARE_PATTERN.search(data):
+        raise UartEvidenceError("UART log contains an overlong firmware version marker")
 
-    firmware_versions = tuple(
-        sorted({" ".join(version.split()) for version in _extract_ascii(_FIRMWARE_PATTERN, data)})
+    firmware_versions = _extract_ascii(
+        _FIRMWARE_PATTERN, data, "firmware versions", normalize_whitespace=True
     )
-    bootloader_versions = set(_extract_ascii(_UBOOT_RELEASE_PATTERN, data))
-    bootloader_versions.update(_extract_ascii(_UBOOT_CMDLINE_PATTERN, data))
-    bootloader_builds = set(_extract_ascii(_UBOOT_RELEASE_PATTERN, data, 2))
-    bootloader_builds.update(_extract_ascii(_UBOOT_CMDLINE_PATTERN, data, 2))
-    linux_versions = _extract_ascii(_LINUX_PATTERN, data)
-    hardware_versions = _extract_ascii(_HARDWARE_PATTERN, data)
-    board_models = _extract_ascii(_BOARD_PATTERN, data)
-    product_ids = _extract_ascii(_PRODUCT_PATTERN, data)
-    dram_mib = tuple(sorted({int(value) for value in _extract_ascii(_DRAM_PATTERN, data)}))
+    bootloader_versions = _combine_ascii(
+        _extract_ascii(_UBOOT_RELEASE_PATTERN, data, "bootloader versions"),
+        _extract_ascii(_UBOOT_CMDLINE_PATTERN, data, "bootloader versions"),
+        "bootloader versions",
+    )
+    bootloader_builds = _combine_ascii(
+        _extract_ascii(_UBOOT_RELEASE_PATTERN, data, "bootloader builds", 2),
+        _extract_ascii(_UBOOT_CMDLINE_PATTERN, data, "bootloader builds", 2),
+        "bootloader builds",
+    )
+    linux_versions = _extract_ascii(_LINUX_PATTERN, data, "Linux versions")
+    hardware_versions = _extract_ascii(_HARDWARE_PATTERN, data, "hardware versions")
+    board_models = _extract_ascii(_BOARD_PATTERN, data, "board models")
+    product_ids = _extract_ascii(_PRODUCT_PATTERN, data, "product IDs")
+    dram_mib = _extract_dram_sizes(data)
     soc_models = ("ZX279128S",) if re.search(rb"(?i)\bZX279128S\b", data) else ()
 
     return UartEvidence(
@@ -157,8 +207,8 @@ def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
         expected_firmware=expected_firmware,
         firmware_versions=firmware_versions,
         firmware_identity_status=_firmware_status(firmware_versions, expected_firmware),
-        bootloader_versions=tuple(sorted(bootloader_versions)),
-        bootloader_builds=tuple(sorted(bootloader_builds)),
+        bootloader_versions=bootloader_versions,
+        bootloader_builds=bootloader_builds,
         linux_versions=linux_versions,
         hardware_versions=hardware_versions,
         soc_models=soc_models,

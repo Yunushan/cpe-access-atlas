@@ -21,6 +21,16 @@ class ReportTests(unittest.TestCase):
         self.assertIn("Hardware revision verification: unresolved", content)
         self.assertIn("Do not paste passwords", content)
         self.assertIn("No configuration backup is attached", content)
+        self.assertIn("Local IPv4 Remote Access baseline", content)
+        self.assertIn("Local IPv4 Remote Access post-change", content)
+        self.assertIn("Local INTERNET WAN firewall baseline", content)
+        self.assertIn("Local INTERNET WAN firewall post-change", content)
+        self.assertIn("External baseline management reachability", content)
+        self.assertIn("External post-change management reachability", content)
+        self.assertIn("Separate external test evidence URL", content)
+        self.assertIn("local settings alone never prove isolation", content)
+        self.assertIn("No public or private IP address is present", content)
+        self.assertNotIn("Local UI address:", content)
 
 
 if __name__ == "__main__":
