@@ -2,6 +2,12 @@
 
 All notable changes are documented here.
 
+## Unreleased
+
+- Add `--json` to `cpe-atlas evidence` so every read-only catalog query command
+  (`providers`, `recipes`, `devices`, `status`, `evidence`) supports the same
+  machine-readable output form. Text output and the exit code are unchanged.
+
 ## 0.4.0a6 - 2026-09-27
 
 - Detect bounded H3600P firmware version strings across a 1 MiB read boundary
