@@ -232,6 +232,10 @@ only 3.11–3.14 still require 15 assets, not retroactive 3.15 inventories.
 Alpha/Beta package metadata and prerelease/development version identifiers must
 be published as a GitHub prerelease. Publication uses `--verify-tag` so a tag
 removed after validation cannot be silently recreated by the release command.
+The prerelease body must begin with the experimental-use and exact-device
+support warning; `gh release create` prepends the reviewed `--notes` text to
+its generated change list. Review that warning against `SUPPORT.md` for each
+version before tagging so it does not claim unsupported device behavior.
 Existing published assets are never overwritten by a rerun: release a new version
 when artifacts change. Every existing release through `v0.4.0a3` predates these
 safeguards and currently reports `immutable: false`.

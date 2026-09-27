@@ -2,7 +2,7 @@
 
 All notable changes are documented here.
 
-## 0.4.0a6 - 2026-09-26
+## 0.4.0a6 - 2026-09-27
 
 - Detect bounded H3600P firmware version strings across a 1 MiB read boundary
   without mistaking adjacent identifier characters for token boundaries. Limit
