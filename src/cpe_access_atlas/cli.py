@@ -218,6 +218,9 @@ def command_status(args: argparse.Namespace) -> int:
 
 def command_evidence(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
+    if args.json:
+        print(json.dumps(list(recipe.evidence), ensure_ascii=False, indent=2))
+        return 0
     for item in recipe.evidence:
         print(f"- {item['title']}: {item['url']}")
     return 0
@@ -918,6 +921,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     evidence = subparsers.add_parser("evidence", help="show public evidence links")
     _add_target_arguments(evidence)
+    evidence.add_argument("--json", action="store_true")
     evidence.set_defaults(func=command_evidence)
 
     plan = subparsers.add_parser("plan", help="render a non-mutating decision plan")

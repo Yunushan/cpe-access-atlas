@@ -144,6 +144,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, stderr), (0, ""))
         self.assertIn("Official ZTE H3600P product page", stdout)
 
+        code, stdout, stderr = self.run_cli(["evidence", *TARGET, "--json"])
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertTrue(payload)
+        self.assertTrue(
+            any(item["title"] == "Official ZTE H3600P product page" for item in payload)
+        )
+        self.assertTrue(all(set(item) == {"title", "url"} for item in payload))
+
     def test_plan_stops_on_exact_build(self) -> None:
         code, stdout, _ = self.run_cli(["plan", *TARGET])
         self.assertEqual(code, 0)
