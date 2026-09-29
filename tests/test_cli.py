@@ -159,6 +159,39 @@ class CliTests(unittest.TestCase):
         self.assertIn("Decision: STOP", stdout)
         self.assertIn("will not substitute", stdout)
 
+    def test_plan_json_covers_stop_and_review_decisions(self) -> None:
+        code, stdout, stderr = self.run_cli(["plan", *TARGET, "--json"])
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["decision"], "STOP")
+        self.assertEqual(payload["recipe_id"], "tr.turk-telekom.zte.h3600p.h3600p-v9-ttn10-260210")
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIn("no verified mutation workflow", payload["reason"])
+        self.assertTrue(payload["next_evidence"])
+
+        recipe = find_recipe(
+            "turk-telekom",
+            "H3600P",
+            "V9.0",
+            "H3600P V9.0 TTN.10_260210",
+        )
+        with patch(
+            "cpe_access_atlas.cli._recipe_from_args",
+            return_value=replace(
+                recipe,
+                status="experimental",
+                blockers=(),
+                hardware_revision_status="exact",
+            ),
+        ):
+            code, stdout, stderr = self.run_cli(["plan", *TARGET, "--json"])
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["decision"], "REVIEW REQUIRED")
+        self.assertEqual(payload["note"], "No mutating adapter is included in this release.")
+        self.assertNotIn("reason", payload)
+        self.assertNotIn("next_evidence", payload)
+
     def test_plan_requires_review_for_non_blocked_recipe(self) -> None:
         recipe = find_recipe(
             "turk-telekom",

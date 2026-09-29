@@ -4,9 +4,13 @@ All notable changes are documented here.
 
 ## Unreleased
 
-- Add `--json` to `cpe-atlas evidence` so every read-only catalog query command
-  (`providers`, `recipes`, `devices`, `status`, `evidence`) supports the same
-  machine-readable output form. Text output and the exit code are unchanged.
+- Add `--json` to `cpe-atlas evidence` and `cpe-atlas plan` so every read-only
+  catalog query command (`providers`, `recipes`, `devices`, `status`,
+  `evidence`, `plan`) supports the same machine-readable output form. Text
+  output and the exit code are unchanged; `plan --json` reports the same
+  STOP or REVIEW REQUIRED decision facts as its text output.
+- Add the Python 3.15 release-candidate status note to the French, German, and
+  Russian README quick starts, matching the English and Turkish versions.
 
 ## 0.4.0a6 - 2026-09-27
 

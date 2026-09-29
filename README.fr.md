@@ -60,6 +60,15 @@ Consultez la [compatibilité](SUPPORT.md) et la
 CPython standard 3.11–3.15. L'installation inclut aussi le validateur
 JSON Schema :
 
+L'intégration continue cible CPython standard 3.11–3.15 sous Windows, Linux et
+macOS. Python 3.15 est actuellement un candidat à la publication : les
+vérifications locales de compatibilité utilisent 3.15.0rc2, pas une version
+finale. La CI sélectionne une préversion 3.15 uniquement jusqu'à ce que la
+version finale soit disponible ; relancez la matrice complète sur la version
+finale avant de déclarer une validation sur version finale. Python sans GIL et
+PyPy ne font pas partie de cette matrice. La compatibilité de l'interpréteur
+n'établit pas la compatibilité modem/configuration/firmware.
+
 ```shell
 python -m venv .venv
 python -m pip --python .venv install --require-hashes -r requirements-ci.lock

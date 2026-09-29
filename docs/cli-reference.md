@@ -194,7 +194,7 @@ options:
 ```text
 usage: cpe-atlas plan [-h] --isp ISP --model MODEL
                       --hardware-revision HARDWARE_REVISION
-                      --firmware FIRMWARE
+                      --firmware FIRMWARE [--json]
 
 options:
   -h, --help            show this help message and exit
@@ -203,6 +203,7 @@ options:
   --hardware-revision HARDWARE_REVISION
                         exact hardware revision recorded in the catalog
   --firmware FIRMWARE   exact firmware string
+  --json
 ```
 
 ## `cpe-atlas private-protect`
