@@ -228,9 +228,31 @@ def command_evidence(args: argparse.Namespace) -> int:
 
 def command_plan(args: argparse.Namespace) -> int:
     recipe = _recipe_from_args(args)
+    stop = recipe.status in {"blocked", "researching"} or recipe.hardware_revision_status != "exact"
+    payload: dict[str, object]
+    if stop:
+        payload = {
+            "recipe_id": recipe.id,
+            "status": recipe.status,
+            "hardware_revision_status": recipe.hardware_revision_status,
+            "decision": "STOP",
+            "reason": "no verified mutation workflow exists for this exact target.",
+            "next_evidence": list(recipe.next_evidence),
+        }
+    else:
+        payload = {
+            "recipe_id": recipe.id,
+            "status": recipe.status,
+            "hardware_revision_status": recipe.hardware_revision_status,
+            "decision": "REVIEW REQUIRED",
+            "note": "No mutating adapter is included in this release.",
+        }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
     print(f"Target record: {recipe.id}")
     print(f"Current status: {recipe.status}")
-    if recipe.status in {"blocked", "researching"} or recipe.hardware_revision_status != "exact":
+    if stop:
         print("Decision: STOP")
         print("Reason: no verified mutation workflow exists for this exact target.")
         print("The project will not substitute another hardware revision or firmware.")
@@ -926,6 +948,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan = subparsers.add_parser("plan", help="render a non-mutating decision plan")
     _add_target_arguments(plan)
+    plan.add_argument("--json", action="store_true")
     plan.set_defaults(func=command_plan)
 
     root_readiness = subparsers.add_parser(
