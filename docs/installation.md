@@ -23,6 +23,46 @@ Run `.venv/bin/cpe-atlas validate` on Linux/macOS or
 `--no-build-isolation` flags prevent a second unreviewed dependency or build
 backend resolution.
 
+### Setup and check helpers
+
+From a reviewed source checkout, the optional helpers run the same locked
+installation and local development checks without activating an environment.
+Use PowerShell 7 on Windows:
+
+```powershell
+pwsh -NoProfile -File ./scripts/dev.ps1 setup -Python python
+pwsh -NoProfile -File ./scripts/dev.ps1 check
+```
+
+Use Bash on Linux/macOS:
+
+```bash
+bash scripts/dev.sh setup --python python3
+bash scripts/dev.sh check
+```
+
+Select a supported interpreter executable, such as `python3.14` or a full path
+containing spaces. The default environment is `.venv` inside the checkout;
+`-Venv .tmp/dev-env` (PowerShell) or `--venv .tmp/dev-env` (Bash) selects another
+relative directory inside it. Both helpers resolve paths from their own
+location, so they can also be invoked by absolute path from another directory.
+An existing environment is reused; an ordinary directory is refused rather
+than overwritten. Setup downloads the hash-locked development dependencies,
+installs the editable checkout, checks dependency consistency, and validates
+the catalog.
+
+Check runs dependency consistency, Ruff lint and formatting checks, strict
+typing, source compilation, the unit tests and coverage gate, and catalog
+validation. Generated CLI reference freshness is checked only on Python 3.14,
+the canonical formatter used by CI. These are local development checks; the
+archive, clean-install, security, and release gates still run separately.
+The helpers stop at the first failing command and return its exit status.
+
+If an organization or local PowerShell policy prevents running an unsigned
+script, use the direct Python commands here and in
+[Contributing](../CONTRIBUTING.md#development), or the organization's approved
+script-signing process. The helpers do not change execution policy.
+
 ## Published wheel
 
 There is no production-stable PyPI distribution. Install a GitHub release only
