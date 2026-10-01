@@ -71,10 +71,16 @@ ok = (sys.implementation.name == 'cpython' and (3, 11) <= sys.version_info[:2] <
 if not ok: print('Use standard CPython 3.11 through 3.15.', file=sys.stderr)
 sys.exit(0 if ok else 1)"
 
+isolated_python() (
+    # pip's editable-build backend launches child Python without -I.
+    unset PYTHONPATH PYTHONHOME
+    exec "$@"
+)
+
 if [[ "$action" == 'setup' && ! -e "$venv_path" ]]; then
     printf 'Creating dedicated environment: %s\n' "$venv_path"
-    "$bootstrap_python" -c "$runtime_probe"
-    "$bootstrap_python" -m venv "$venv_path"
+    isolated_python "$bootstrap_python" -I -c "$runtime_probe"
+    isolated_python "$bootstrap_python" -I -m venv "$venv_path"
 fi
 if [[ -f "$venv_path/Scripts/python.exe" ]]; then
     env_python="$venv_path/Scripts/python.exe"
@@ -83,34 +89,45 @@ elif [[ -x "$venv_path/bin/python" ]]; then
 else
     fail 'Environment interpreter is missing. Choose a new --venv path and run setup.'
 fi
-"$env_python" -c "$runtime_probe"
+run_python() {
+    isolated_python "$env_python" -I "$@"
+}
+run_python -c "$runtime_probe"
+# --isolated alone still loads global and virtualenv pip configuration. Use
+# this interpreter's null device for each pip invocation, without changing the
+# caller's environment; Git Bash's Windows Python needs "nul", not /dev/null.
+pip_config_file=$(run_python -c 'import os; print(os.devnull)')
+pip_config_file=${pip_config_file%$'\r'}
+run_pip() {
+    PIP_CONFIG_FILE="$pip_config_file" run_python -m pip --isolated --require-virtualenv "$@"
+}
 
 if [[ "$action" == 'setup' ]]; then
     printf 'Installing hash-locked development dependencies.\n'
-    "$env_python" -m pip install --require-hashes -r "$repo_root/requirements-ci.lock"
-    "$env_python" -m pip install -e "$repo_root" --no-deps --no-build-isolation
-    "$env_python" -m pip check
-    "$env_python" -m cpe_access_atlas validate
+    run_pip install --require-hashes -r "$repo_root/requirements-ci.lock"
+    run_pip install -e "$repo_root" --no-deps --no-build-isolation
+    run_pip check
+    run_python -m cpe_access_atlas validate
     printf 'Setup passed. Run this helper with check for the development gates.\n'
 else
     printf 'Checking dependencies, lint, formatting and types.\n'
-    "$env_python" -m pip check
-    "$env_python" -m ruff check src tests scripts
-    "$env_python" -m ruff format --check src tests scripts
-    "$env_python" -m mypy src scripts
-    "$env_python" -m compileall -q src
-    canonical=$("$env_python" -c "# canonical-reference
+    run_pip check
+    run_python -m ruff check src tests scripts
+    run_python -m ruff format --check src tests scripts
+    run_python -m mypy src scripts
+    run_python -m compileall -q src
+    canonical=$(run_python -c "# canonical-reference
 import sys
 print('1' if sys.version_info[:2] == (3, 14) else '0')")
     canonical=${canonical%$'\r'}
     if [[ "$canonical" == '1' ]]; then
-        "$env_python" scripts/generate_cli_reference.py --check
+        run_python scripts/generate_cli_reference.py --check
     else
         printf 'CLI reference freshness is checked on the canonical Python 3.14 CI job.\n'
     fi
     printf 'Checking tests, coverage and catalog.\n'
-    "$env_python" -m coverage run -m unittest discover -s tests -v
-    "$env_python" -m coverage report -m
-    "$env_python" -m cpe_access_atlas validate
+    run_python -m coverage run -m unittest discover -s tests -t . -v
+    run_python -m coverage report -m
+    run_python -m cpe_access_atlas validate
     printf 'Local development gates passed.\n'
 fi

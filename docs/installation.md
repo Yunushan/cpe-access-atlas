@@ -51,6 +51,16 @@ than overwritten. Setup downloads the hash-locked development dependencies,
 installs the editable checkout, checks dependency consistency, and validates
 the catalog.
 
+The helpers run Python in isolated mode and clear `PYTHONPATH`/`PYTHONHOME`
+for their commands and editable-build child processes. Pip requires the selected
+virtual environment, ignores inherited `PIP_*` options, and reads no global,
+user, virtual-environment, or `PIP_CONFIG_FILE` configuration. This prevents
+installation destination overrides from escaping the dedicated environment;
+the caller's environment is restored after each command. Setup uses pip's
+default PyPI index. If your organization requires a custom index or pip
+certificate settings, use the direct Python commands above with its approved
+explicit options instead of these helpers.
+
 Check runs dependency consistency, Ruff lint and formatting checks, strict
 typing, source compilation, the unit tests and coverage gate, and catalog
 validation. Generated CLI reference freshness is checked only on Python 3.14,

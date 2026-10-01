@@ -4,6 +4,9 @@ All notable changes are documented here.
 
 ## Unreleased
 
+- Isolate the Bash and PowerShell development helpers from inherited pip
+  configuration and Python import overrides, keeping setup installations in
+  the selected virtual environment and protecting editable-build subprocesses.
 - Add `--json` to `cpe-atlas evidence` and `cpe-atlas plan` so every read-only
   catalog query command (`providers`, `recipes`, `devices`, `status`,
   `evidence`, `plan`) supports the same machine-readable output form. Text

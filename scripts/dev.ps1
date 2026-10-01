@@ -46,6 +46,47 @@ function Invoke-CheckedNative {
     }
 }
 
+function Set-CommandEnvironment {
+    param([string] $Name, $Value)
+
+    if ($null -eq $Value) {
+        Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue
+    } else {
+        [System.Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+}
+
+function Invoke-CheckedPython {
+    param([string] $Executable, [string[]] $Arguments)
+
+    # Editable-build backends spawn child Python without -I, so these import
+    # overrides must also be absent from the process environment they inherit.
+    $previousPythonPath = [System.Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+    $previousPythonHome = [System.Environment]::GetEnvironmentVariable('PYTHONHOME', 'Process')
+    try {
+        Set-CommandEnvironment 'PYTHONPATH' $null
+        Set-CommandEnvironment 'PYTHONHOME' $null
+        Invoke-CheckedNative $Executable (@('-I') + $Arguments)
+    } finally {
+        Set-CommandEnvironment 'PYTHONPATH' $previousPythonPath
+        Set-CommandEnvironment 'PYTHONHOME' $previousPythonHome
+    }
+}
+
+function Invoke-CheckedPip {
+    param([string[]] $Arguments)
+
+    # Isolated pip still reads global and virtualenv configuration. Disable
+    # those files only for this invocation, and restore even on native failure.
+    $previousConfigFile = [System.Environment]::GetEnvironmentVariable('PIP_CONFIG_FILE', 'Process')
+    try {
+        Set-CommandEnvironment 'PIP_CONFIG_FILE' $pipConfigFile
+        Invoke-CheckedPython $venvPython (@('-m', 'pip', '--isolated', '--require-virtualenv') + $Arguments)
+    } finally {
+        Set-CommandEnvironment 'PIP_CONFIG_FILE' $previousConfigFile
+    }
+}
+
 $supportedRuntime = "import sys, sysconfig; supported = sys.implementation.name == 'cpython' and (3, 11) <= sys.version_info[:2] < (3, 16) and not sysconfig.get_config_var('Py_GIL_DISABLED'); sys.exit(0 if supported else 'Use standard CPython 3.11 through 3.15.') # supported-runtime"
 $canonicalReference = "import sys; print('1' if sys.version_info[:2] == (3, 14) else '0') # canonical-reference"
 
@@ -86,39 +127,40 @@ try {
             }
         } elseif ($Action -eq 'setup') {
             Write-Host 'Checking the bootstrap interpreter.'
-            Invoke-CheckedNative $Python @('-c', $supportedRuntime)
+            Invoke-CheckedPython $Python @('-c', $supportedRuntime)
             Write-Host "Creating the dedicated environment: $venvRoot"
-            Invoke-CheckedNative $Python @('-m', 'venv', $venvRoot)
+            Invoke-CheckedPython $Python @('-m', 'venv', $venvRoot)
         } else {
             throw 'The dedicated environment is missing; run setup first.'
         }
 
-        Invoke-CheckedNative $venvPython @('-c', $supportedRuntime)
+        Invoke-CheckedPython $venvPython @('-c', $supportedRuntime)
+        $pipConfigFile = Invoke-CheckedPython $venvPython @('-c', 'import os; print(os.devnull)')
         if ($Action -eq 'setup') {
             Write-Host 'Installing the hash-locked dependencies and editable project.'
-            Invoke-CheckedNative $venvPython @('-m', 'pip', 'install', '--require-hashes', '-r', (Join-Path $repoRoot 'requirements-ci.lock'))
-            Invoke-CheckedNative $venvPython @('-m', 'pip', 'install', '-e', $repoRoot, '--no-deps', '--no-build-isolation')
-            Invoke-CheckedNative $venvPython @('-m', 'pip', 'check')
-            Invoke-CheckedNative $venvPython @('-m', 'cpe_access_atlas', 'validate')
+            Invoke-CheckedPip @('install', '--require-hashes', '-r', (Join-Path $repoRoot 'requirements-ci.lock'))
+            Invoke-CheckedPip @('install', '-e', $repoRoot, '--no-deps', '--no-build-isolation')
+            Invoke-CheckedPip @('check')
+            Invoke-CheckedPython $venvPython @('-m', 'cpe_access_atlas', 'validate')
             Write-Host 'Setup completed. Run check to validate the development environment.'
         } else {
             Write-Host 'Checking dependencies, formatting, types, and source compilation.'
-            Invoke-CheckedNative $venvPython @('-m', 'pip', 'check')
-            Invoke-CheckedNative $venvPython @('-m', 'ruff', 'check', 'src', 'tests', 'scripts')
-            Invoke-CheckedNative $venvPython @('-m', 'ruff', 'format', '--check', 'src', 'tests', 'scripts')
-            Invoke-CheckedNative $venvPython @('-m', 'mypy', 'src', 'scripts')
-            Invoke-CheckedNative $venvPython @('-m', 'compileall', '-q', 'src')
-            $checkReference = Invoke-CheckedNative $venvPython @('-c', $canonicalReference)
+            Invoke-CheckedPip @('check')
+            Invoke-CheckedPython $venvPython @('-m', 'ruff', 'check', 'src', 'tests', 'scripts')
+            Invoke-CheckedPython $venvPython @('-m', 'ruff', 'format', '--check', 'src', 'tests', 'scripts')
+            Invoke-CheckedPython $venvPython @('-m', 'mypy', 'src', 'scripts')
+            Invoke-CheckedPython $venvPython @('-m', 'compileall', '-q', 'src')
+            $checkReference = Invoke-CheckedPython $venvPython @('-c', $canonicalReference)
             if ($checkReference -eq '1') {
                 Write-Host 'Checking the canonical Python 3.14 CLI reference.'
-                Invoke-CheckedNative $venvPython @('scripts/generate_cli_reference.py', '--check')
+                Invoke-CheckedPython $venvPython @('scripts/generate_cli_reference.py', '--check')
             } else {
                 Write-Host 'CLI reference freshness requires Python 3.14; skipping this check.'
             }
             Write-Host 'Running the test and coverage gates, then validating the catalog.'
-            Invoke-CheckedNative $venvPython @('-m', 'coverage', 'run', '-m', 'unittest', 'discover', '-s', 'tests', '-v')
-            Invoke-CheckedNative $venvPython @('-m', 'coverage', 'report', '-m')
-            Invoke-CheckedNative $venvPython @('-m', 'cpe_access_atlas', 'validate')
+            Invoke-CheckedPython $venvPython @('-m', 'coverage', 'run', '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.', '-v')
+            Invoke-CheckedPython $venvPython @('-m', 'coverage', 'report', '-m')
+            Invoke-CheckedPython $venvPython @('-m', 'cpe_access_atlas', 'validate')
             Write-Host 'Development checks passed.'
         }
     } finally {
