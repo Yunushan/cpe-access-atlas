@@ -65,6 +65,13 @@ python -m coverage report -m
 cpe-atlas validate
 ```
 
+For a dedicated checkout environment and the same local checks, use
+`bash scripts/dev.sh setup` then `bash scripts/dev.sh check`, or
+`pwsh -NoProfile -File ./scripts/dev.ps1 setup` then
+`pwsh -NoProfile -File ./scripts/dev.ps1 check`. See the
+[setup and check helpers](docs/installation.md#setup-and-check-helpers) for
+interpreter selection, environment paths, and the checks that still run in CI.
+
 The 100% measured statement/branch coverage gate includes both the runtime and
 the maintenance scripts; strict type checking covers both as well. Coverage is
 not proof of complete security properties or real-device interoperability.

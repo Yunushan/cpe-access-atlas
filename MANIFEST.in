@@ -4,7 +4,7 @@ include .pre-commit-config.yaml .gitignore .gitleaks.toml .gitattributes
 include .github/CODEOWNERS .github/dependabot.yml .github/pull_request_template.md .github/ISSUE_TEMPLATE/config.yml
 recursive-include .github *.yml *.awk *.json
 recursive-include docs *.md
-recursive-include scripts *.py
+recursive-include scripts *.py *.sh *.ps1
 recursive-include tests *.py
 recursive-include schemas *.json
 recursive-include src/cpe_access_atlas/data *.json
