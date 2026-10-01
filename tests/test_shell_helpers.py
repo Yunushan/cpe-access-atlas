@@ -62,10 +62,19 @@ class ShellHelperTests(unittest.TestCase):
         self.environment["PYTHONNOUSERSITE"] = "1"
         self.environment["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    def virtual_environment(self, additional_modules: tuple[str, ...] = ()) -> tuple[Path, Path]:
+    def virtual_environment(
+        self, additional_modules: tuple[str, ...] = (), *, real_pip: bool = False
+    ) -> tuple[Path, Path]:
         environment = self.base / "environment with spaces"
         subprocess.run(  # noqa: S603 -- current interpreter, isolated test venv
-            [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+            [
+                sys.executable,
+                "-I",
+                "-m",
+                "venv",
+                *([] if real_pip else ["--without-pip"]),
+                str(environment),
+            ],
             check=True,
             timeout=120,
             env=self.environment,
@@ -82,16 +91,25 @@ class ShellHelperTests(unittest.TestCase):
         log = self.base / "synthetic-commands.jsonl"
         # The synthetic installer never downloads or installs anything. Real
         # native process calls still exercise quoting, cwd, and exit propagation.
-        for name in ("pip", "cpe_access_atlas", *additional_modules):
+        for name in (*(() if real_pip else ("pip",)), "cpe_access_atlas", *additional_modules):
             package = Path(site) / name
             package.mkdir()
             (package / "__init__.py").write_text("", encoding="utf-8")
             (package / "__main__.py").write_text(
-                "import json, os, sys\n"
+                "import json, os, subprocess, sys\n"
                 "from pathlib import Path\n"
+                "child = None\n"
+                f"if {name!r} == 'pip' and os.environ.get('CPE_ATLAS_SYNTHETIC_CHILD'):\n"
+                "    child = json.loads(subprocess.run([sys.executable, '-c', "
+                '"import importlib.util, json, os, sys; print(json.dumps({'
+                "'isolated': sys.flags.isolated, 'pythonpath': os.environ.get('PYTHONPATH'), "
+                "'pythonhome': os.environ.get('PYTHONHOME'), "
+                "'hostile_import': importlib.util.find_spec('hostile_import') is not None}))\"], "
+                "check=True, capture_output=True, text=True, timeout=30).stdout)\n"
                 f"with Path({str(log)!r}).open('a', encoding='utf-8') as stream:\n"
                 f"    stream.write(json.dumps({{'module': {name!r}, 'args': sys.argv[1:], "
-                "'cwd': str(Path.cwd()), 'prefix': sys.prefix}) + '\\n')\n"
+                "'cwd': str(Path.cwd()), 'prefix': sys.prefix, 'isolated': sys.flags.isolated, "
+                "'pip_config_file': os.environ.get('PIP_CONFIG_FILE'), 'child': child}) + '\\n')\n"
                 "sys.exit(int(os.environ.get('CPE_ATLAS_SYNTHETIC_EXIT', '0')))\n",
                 encoding="utf-8",
             )
@@ -138,6 +156,38 @@ class ShellHelperTests(unittest.TestCase):
                     self.assertEqual(
                         any(call["module"] == "reference" for call in calls), canonical == "1"
                     )
+                    if canonical == "0":
+                        coverage = next(
+                            call["args"]
+                            for call in calls
+                            if call["module"] == "coverage" and call["args"][0] == "run"
+                        )
+                        # Run the helper's real discovery command against one
+                        # maintenance test module. Under -I it must explicitly
+                        # add the trusted checkout root for imports of scripts.
+                        discovered = subprocess.run(  # noqa: S603 -- real coverage, reviewed tests
+                            [
+                                sys.executable,
+                                "-I",
+                                "-m",
+                                "coverage",
+                                "run",
+                                "--data-file",
+                                str(self.base / "discovery.coverage"),
+                                *coverage[1:],
+                                "-p",
+                                "test_release_candidate.py",
+                            ],
+                            cwd=ROOT,
+                            env=self.environment,
+                            capture_output=True,
+                            text=True,
+                            timeout=90,
+                        )
+                        self.assertEqual(
+                            discovered.returncode, 0, discovered.stdout + discovered.stderr
+                        )
+                        self.assertIn("test_exact_dated_first_heading", discovered.stderr)
 
     def invoke(
         self,
@@ -171,10 +221,11 @@ class ShellHelperTests(unittest.TestCase):
                 calls = [json.loads(line) for line in log.read_text().splitlines()]
                 self.assertTrue(all(Path(call["cwd"]) == ROOT for call in calls))
                 self.assertTrue(all(Path(call["prefix"]) == environment for call in calls))
+                self.assertTrue(all(call["isolated"] for call in calls))
                 installs = [
                     call["args"]
                     for call in calls
-                    if call["module"] == "pip" and call["args"][0] == "install"
+                    if call["module"] == "pip" and "install" in call["args"]
                 ]
                 self.assertEqual(len(installs), 2)
                 self.assertIn("--require-hashes", installs[0])
@@ -186,6 +237,146 @@ class ShellHelperTests(unittest.TestCase):
                 self.assertEqual(Path(installs[1][installs[1].index("-e") + 1]), ROOT)
                 self.assertEqual(calls[-1]["module"], "cpe_access_atlas")
                 self.assertEqual(calls[-1]["args"], ["validate"])
+
+    def test_real_pip_ignores_destination_and_index_overrides(self) -> None:
+        environment, log = self.virtual_environment(real_pip=True)
+        python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        site = subprocess.run(  # noqa: S603 -- freshly created test interpreter
+            [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+            env=self.environment,
+        ).stdout.strip()
+        # Inspect the installed pip's effective install options before its
+        # installer executes. No network or installation is part of this test.
+        (Path(site) / "sitecustomize.py").write_text(
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "if '-m' in sys.orig_argv and sys.orig_argv[sys.orig_argv.index('-m') + 1] == 'pip':\n"
+            "    from pip._internal.commands import create_command\n"
+            "    args = sys.orig_argv[sys.orig_argv.index('pip') + 1:]\n"
+            "    command = create_command('install', isolated='--isolated' in args)\n"
+            "    options, _ = command.parse_args([arg for arg in args if arg != 'install'])\n"
+            "    result = {'target': options.target_dir, 'prefix': options.prefix_path, "
+            "'root': options.root_path, 'user': options.use_user_site, "
+            "'index': options.index_url, 'require_venv': options.require_venv, "
+            "'isolated': sys.flags.isolated, 'config_file': os.environ.get('PIP_CONFIG_FILE')}\n"
+            f"    Path({str(log)!r}).write_text(json.dumps(result), encoding='utf-8')\n"
+            "    os._exit(19)\n",
+            encoding="utf-8",
+        )
+        redirected = self.base / "redirected install"
+        config_text = (
+            "[global]\n"
+            f"target = {redirected}\nprefix = {redirected}\nroot = {redirected}\n"
+            "user = true\nindex-url = https://example.invalid/simple\n"
+        )
+        custom_config = self.base / "caller pip config.ini"
+        custom_config.write_text(config_text, encoding="utf-8")
+        site_config = environment / ("pip.ini" if os.name == "nt" else "pip.conf")
+        site_config.write_text(config_text, encoding="utf-8")
+        self.environment["PIP_CONFIG_FILE"] = str(custom_config)
+        overrides = {
+            "PIP_TARGET": str(redirected),
+            "PIP_PREFIX": str(redirected),
+            "PIP_ROOT": str(redirected),
+            "PIP_USER": "true",
+            "PIP_INDEX_URL": "https://example.invalid/simple",
+        }
+        for shell in self.shells:
+            for variables in (False, True):
+                with self.subTest(shell=shell[0], variables=variables):
+                    for name, value in overrides.items():
+                        if variables:
+                            self.environment[name] = value
+                        else:
+                            self.environment.pop(name, None)
+                    result = self.invoke(shell, "setup", environment.relative_to(ROOT).as_posix())
+                    self.assertEqual(result.returncode, 19, result.stdout + result.stderr)
+                    options = json.loads(log.read_text(encoding="utf-8"))
+                    for name in ("target", "prefix", "root", "user"):
+                        self.assertIsNone(options[name], name)
+                    self.assertEqual(options["index"], "https://pypi.org/simple")
+                    self.assertTrue(options["require_venv"])
+                    self.assertTrue(options["isolated"])
+                    self.assertEqual(options["config_file"], os.devnull)
+                    self.assertFalse(redirected.exists())
+                    self.assertEqual(custom_config.read_text(encoding="utf-8"), config_text)
+                    self.assertEqual(site_config.read_text(encoding="utf-8"), config_text)
+
+    def test_editable_backend_child_does_not_inherit_python_import_overrides(self) -> None:
+        environment, log = self.virtual_environment()
+        poison = self.base / "caller Python modules"
+        poison.mkdir()
+        (poison / "hostile_import.py").write_text("raise RuntimeError('caller import')\n")
+        self.environment["PYTHONPATH"] = str(poison)
+        self.environment["PYTHONHOME"] = str(self.base / "invalid Python home")
+        self.environment["CPE_ATLAS_SYNTHETIC_CHILD"] = "1"
+        for shell in self.shells:
+            with self.subTest(shell=shell[0]):
+                log.unlink(missing_ok=True)
+                result = self.invoke(shell, "setup", environment.relative_to(ROOT).as_posix())
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in log.read_text().splitlines()]
+                children = [call["child"] for call in calls if call["module"] == "pip"]
+                self.assertEqual(len(children), 3)
+                for child in children:
+                    # The child intentionally has no -I, as in pip's editable
+                    # build hook. Its import environment must still be clean.
+                    self.assertEqual(child["isolated"], 0)
+                    self.assertIsNone(child["pythonpath"])
+                    self.assertIsNone(child["pythonhome"])
+                    self.assertFalse(child["hostile_import"])
+
+    def test_powershell_restores_caller_environment_after_success_and_failure(self) -> None:
+        powershell = next((shell for shell in self.shells if shell[0] == "pwsh"), None)
+        if powershell is None:
+            self.skipTest("No permitted PowerShell runtime is available")
+        environment, _ = self.virtual_environment()
+        restored = self.base / "restored environment.json"
+
+        def quote(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        invocation = (
+            f"& {quote(str(ROOT / 'scripts/dev.ps1'))} setup "
+            f"-Venv {quote(environment.relative_to(ROOT).as_posix())}"
+        )
+        command = (
+            f"try {{ {invocation} }} finally {{ "
+            "$result = @{config = $env:PIP_CONFIG_FILE; path = $env:PYTHONPATH; "
+            "home = $env:PYTHONHOME}; "
+            f"[System.IO.File]::WriteAllText({quote(str(restored))}, "
+            "($result | ConvertTo-Json -Compress)) }; exit $LASTEXITCODE"
+        )
+        caller_values = {
+            "config": "caller pip config",
+            "path": "caller Python path",
+            "home": "caller home",
+        }
+        names = {"config": "PIP_CONFIG_FILE", "path": "PYTHONPATH", "home": "PYTHONHOME"}
+        for present in (False, True):
+            expected = caller_values if present else dict.fromkeys(caller_values)
+            for key, name in names.items():
+                if present:
+                    self.environment[name] = caller_values[key]
+                else:
+                    self.environment.pop(name, None)
+            for code in (0, 37):
+                with self.subTest(present=present, exit_code=code):
+                    self.environment["CPE_ATLAS_SYNTHETIC_EXIT"] = str(code)
+                    result = subprocess.run(  # noqa: S603 -- local helper, quoted disposable paths
+                        [powershell[1][0], "-NoProfile", "-Command", command],
+                        cwd=self.caller,
+                        env=self.environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=90,
+                    )
+                    self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(restored.read_text(encoding="utf-8")), expected)
 
     def test_native_failure_returns_original_exit_and_stops(self) -> None:
         environment, log = self.virtual_environment()
