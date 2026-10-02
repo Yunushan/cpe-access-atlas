@@ -59,6 +59,7 @@ class ShellHelperTests(unittest.TestCase):
         self.environment = os.environ.copy()
         self.environment.pop("PYTHONPATH", None)
         self.environment.pop("PYTHONHOME", None)
+        self.environment.pop("PYTHONPLATLIBDIR", None)
         self.environment["PYTHONNOUSERSITE"] = "1"
         self.environment["PYTHONDONTWRITEBYTECODE"] = "1"
 
@@ -101,9 +102,10 @@ class ShellHelperTests(unittest.TestCase):
                 "child = None\n"
                 f"if {name!r} == 'pip' and os.environ.get('CPE_ATLAS_SYNTHETIC_CHILD'):\n"
                 "    child = json.loads(subprocess.run([sys.executable, '-c', "
-                '"import importlib.util, json, os, sys; print(json.dumps({'
+                '"import importlib.util, json, os, socket, ssl, sys; print(json.dumps({'
                 "'isolated': sys.flags.isolated, 'pythonpath': os.environ.get('PYTHONPATH'), "
                 "'pythonhome': os.environ.get('PYTHONHOME'), "
+                "'pythonplatlibdir': os.environ.get('PYTHONPLATLIBDIR'), "
                 "'hostile_import': importlib.util.find_spec('hostile_import') is not None}))\"], "
                 "check=True, capture_output=True, text=True, timeout=30).stdout)\n"
                 f"with Path({str(log)!r}).open('a', encoding='utf-8') as stream:\n"
@@ -313,6 +315,7 @@ class ShellHelperTests(unittest.TestCase):
         (poison / "hostile_import.py").write_text("raise RuntimeError('caller import')\n")
         self.environment["PYTHONPATH"] = str(poison)
         self.environment["PYTHONHOME"] = str(self.base / "invalid Python home")
+        self.environment["PYTHONPLATLIBDIR"] = "invalid-platform-library-directory"
         self.environment["CPE_ATLAS_SYNTHETIC_CHILD"] = "1"
         for shell in self.shells:
             with self.subTest(shell=shell[0]):
@@ -328,6 +331,7 @@ class ShellHelperTests(unittest.TestCase):
                     self.assertEqual(child["isolated"], 0)
                     self.assertIsNone(child["pythonpath"])
                     self.assertIsNone(child["pythonhome"])
+                    self.assertIsNone(child["pythonplatlibdir"])
                     self.assertFalse(child["hostile_import"])
 
     def test_powershell_restores_caller_environment_after_success_and_failure(self) -> None:
@@ -347,7 +351,7 @@ class ShellHelperTests(unittest.TestCase):
         command = (
             f"try {{ {invocation} }} finally {{ "
             "$result = @{config = $env:PIP_CONFIG_FILE; path = $env:PYTHONPATH; "
-            "home = $env:PYTHONHOME}; "
+            "home = $env:PYTHONHOME; platlibdir = $env:PYTHONPLATLIBDIR}; "
             f"[System.IO.File]::WriteAllText({quote(str(restored))}, "
             "($result | ConvertTo-Json -Compress)) }; exit $LASTEXITCODE"
         )
@@ -355,8 +359,14 @@ class ShellHelperTests(unittest.TestCase):
             "config": "caller pip config",
             "path": "caller Python path",
             "home": "caller home",
+            "platlibdir": "caller platform library directory",
         }
-        names = {"config": "PIP_CONFIG_FILE", "path": "PYTHONPATH", "home": "PYTHONHOME"}
+        names = {
+            "config": "PIP_CONFIG_FILE",
+            "path": "PYTHONPATH",
+            "home": "PYTHONHOME",
+            "platlibdir": "PYTHONPLATLIBDIR",
+        }
         for present in (False, True):
             expected = caller_values if present else dict.fromkeys(caller_values)
             for key, name in names.items():
