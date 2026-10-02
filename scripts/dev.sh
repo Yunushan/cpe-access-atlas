@@ -73,7 +73,7 @@ sys.exit(0 if ok else 1)"
 
 isolated_python() (
     # pip's editable-build backend launches child Python without -I.
-    unset PYTHONPATH PYTHONHOME
+    unset PYTHONPATH PYTHONHOME PYTHONPLATLIBDIR
     exec "$@"
 )
 

@@ -63,13 +63,16 @@ function Invoke-CheckedPython {
     # overrides must also be absent from the process environment they inherit.
     $previousPythonPath = [System.Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
     $previousPythonHome = [System.Environment]::GetEnvironmentVariable('PYTHONHOME', 'Process')
+    $previousPythonPlatlibdir = [System.Environment]::GetEnvironmentVariable('PYTHONPLATLIBDIR', 'Process')
     try {
         Set-CommandEnvironment 'PYTHONPATH' $null
         Set-CommandEnvironment 'PYTHONHOME' $null
+        Set-CommandEnvironment 'PYTHONPLATLIBDIR' $null
         Invoke-CheckedNative $Executable (@('-I') + $Arguments)
     } finally {
         Set-CommandEnvironment 'PYTHONPATH' $previousPythonPath
         Set-CommandEnvironment 'PYTHONHOME' $previousPythonHome
+        Set-CommandEnvironment 'PYTHONPLATLIBDIR' $previousPythonPlatlibdir
     }
 }
 
