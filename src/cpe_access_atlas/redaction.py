@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from collections.abc import Iterator
+from contextlib import suppress
 from html import unescape
 from io import StringIO
 
@@ -30,7 +32,11 @@ _SENSITIVE_SUFFIX = re.compile(rf"(?i)(?:^|[\W_]){_SECRET_NAME}\Z")
 # Token boundaries prevent retrying a failed match at every character of a
 # long vendor/path name. Quoted JSON keys and command options use the same
 # scanner, while XML name/value pairs are handled before this text pass.
-_FIELD_KEY = r"[\"']?[^\s:=\"',;{}&<>]+[\"']?"
+# Escaped and ordinary characters are disjoint and cannot consume the final
+# unescaped quote. Possessive loops avoid retaining a backtracking frame for
+# every character of a long quoted key or value (supported since Python 3.11).
+_JSON_STRING_KEY = r'"(?:\\.|[^"\\\r\n])*+"'
+_FIELD_KEY = rf"(?:{_JSON_STRING_KEY}|[\"']?[^\s:=\"',;{{}}&<>]+[\"']?)"
 _ASSIGNMENT = re.compile(
     rf"(?<![^\s:=\"',;{{}}&<>])(?P<key>{_FIELD_KEY})"
     r"(?P<separator>[ \t]*[:=][ \t]*)"
@@ -39,18 +45,20 @@ _MULTILINE_ASSIGNMENT = re.compile(
     rf"(?<![^\s:=\"',;{{}}&<>])(?P<key>{_FIELD_KEY})(?P<separator>\s*[:=]\s*)"
 )
 _NEXT_ASSIGNMENT = re.compile(rf"(?:(?<![ \t])[ \t]+|[,;&][ \t]*){_FIELD_KEY}[ \t]*[:=][ \t]*")
-_QUOTED_VALUE = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'", re.DOTALL)
+_QUOTED_VALUE = re.compile(r"\"(?:\\.|[^\"\\])*+\"|'(?:\\.|[^'\\])*+'", re.DOTALL)
 _REPORT_LINES = re.compile(r"[^\r\n]*(?:\r\n?|\n|\Z)")
 _YAML_BLOCK = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?[ \t]*(?:#.*)?\Z")
 # Consume the complete HTTP value, including obsolete folded continuations.
 # Applying the assignment matcher alone would leave every cookie after ';'.
+# Continuation lines cannot consume their following CR/LF, and no suffix needs
+# them back: retain no backtracking frames for a long sequence of folded lines.
 _COOKIE_HEADER = re.compile(
     r"(?im)(?P<key>(?<![\w-])(?:set-cookie|cookie))"
-    r"(?P<separator>[ \t]*:[ \t]*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*"
+    r"(?P<separator>[ \t]*:[ \t]*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*+"
 )
 _AUTHORIZATION_HEADER = re.compile(
     r"(?im)(?P<key>^[ \t]*(?:>[ \t]*)?(?:proxy-)?authorization)"
-    r"(?P<separator>[ \t]*:[ \t]*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*"
+    r"(?P<separator>[ \t]*:[ \t]*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*+"
 )
 _XML_ATTRIBUTE = re.compile(
     r"(?<!\s)(?P<prefix>\s+(?P<name>[\w:.-]+)\s*=\s*)(?P<quote>[\"'])"
@@ -60,7 +68,9 @@ _XML_ATTRIBUTE = re.compile(
 _XML_NAME = re.compile(r"[A-Za-z_][\w:.-]*")
 _OPAQUE_SENSITIVE_CONTENT = re.compile(_SECRET_NAME, re.IGNORECASE)
 _PRIVATE_KEY_BLOCK = re.compile(
-    r"(?P<begin>-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----)"
+    # Keep the final PRIVATE KEY delimiter out of the repeated prefix. Its
+    # words otherwise share that prefix's grammar and require backtracking.
+    r"(?P<begin>-----BEGIN (?P<kind>(?:(?!PRIVATE KEY-----)[A-Z0-9]+ )*+PRIVATE KEY)-----)"
     r".*?(?P<end>-----END (?P=kind)-----|\Z)",
     re.DOTALL,
 )
@@ -68,14 +78,14 @@ _AUTHORIZATION = re.compile(
     r"(?i)(?P<key>[\"']?authorization[\"']?)"
     r"(?P<separator>\s*[:=]\s*)"
     r"(?:(?P<scheme>Bearer|Basic)\s+)?"
-    r"(?:(?P<quote>[\"'])(?:\\.|(?!(?P=quote))[^\\\r\n])*(?P=quote)|"
+    r"(?:(?P<quote>[\"'])(?:\\.|(?!(?P=quote))[^\\\r\n])*+(?P=quote)|"
     r"(?![A-Za-z][A-Za-z0-9_-]*\s+)[^\s,;}\"']+)"
 )
 _AUTHORIZATION_OTHER = re.compile(
     r"(?i)(?P<key>[\"']?authorization[\"']?)"
     r"(?P<separator>\s*[:=]\s*)"
     r"(?P<scheme>(?!Bearer\b|Basic\b)[A-Za-z][A-Za-z0-9_-]*)\s+[^\r\n}]+"
-    r"(?:\r?\n[ \t]+[^\r\n]*)*"
+    r"(?:\r?\n[ \t]+[^\r\n]*)*+"
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _BASIC = re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]+")
@@ -119,6 +129,21 @@ def _is_sensitive_field(name: str) -> bool:
     return name.endswith(("password", "passwd")) or _SENSITIVE_SUFFIX.search(name) is not None
 
 
+def _is_sensitive_assignment_field(name: str) -> bool:
+    """Classify escaped JSON keys without changing their source spelling."""
+
+    if name.startswith('"') and name.endswith('"') and "\\" in name:
+        # Malformed JSON may still be a recognizable text/YAML field;
+        # retain conservative literal recognition if scalar decoding fails.
+        with suppress(json.JSONDecodeError):
+            # This token is one quoted scalar, never a recursive JSON document.
+            # Its length is already bounded by MAX_REPORT_CHARS. Surrogate
+            # escapes may decode to surrogate code points: classification is
+            # safe, and only the original ASCII escapes are emitted afterward.
+            name = json.loads(name)
+    return _is_sensitive_field(name)
+
+
 def _redact_structured_assignments(value: str) -> str:
     """Mask quoted values before interpreting CR/LF as report line boundaries.
 
@@ -133,7 +158,7 @@ def _redact_structured_assignments(value: str) -> str:
     cursor = position = 0
     while match := _MULTILINE_ASSIGNMENT.search(value, position):
         position = match.end()
-        if not _is_sensitive_field(match.group("key")):
+        if not _is_sensitive_assignment_field(match.group("key")):
             continue
         quoted = _QUOTED_VALUE.match(value, position)
         if quoted:
@@ -182,7 +207,7 @@ def _redact_assignments(value: str) -> str:
                 yaml_key_start += 1
         cursor = 0
         while match := _ASSIGNMENT.search(line, cursor):
-            if not _is_sensitive_field(match.group("key")):
+            if not _is_sensitive_assignment_field(match.group("key")):
                 output.write(line[cursor : match.end()])
                 cursor = match.end()
                 continue

@@ -3,11 +3,13 @@
 [English](README.md) · [Türkçe](README.tr.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
 > [!NOTE]
-> Diese Übersicht wurde am 18. September 2026 abgeglichen. Für aktuelle
+> Diese Übersicht wurde am 3. Oktober 2026 abgeglichen. Für aktuelle
 > sicherheitskritische Einschränkungen, neue Optionen und verifizierte
 > Installationsschritte gelten die [englische README](README.md), die
 > [Sicherheitsrichtlinie](SECURITY.md) und die
 > [Installationsanleitung](docs/installation.md) als maßgeblich.
+> Alle Optionen stehen in der [englischen CLI-Referenz](docs/cli-reference.md);
+> für Automatisierung gilt der [JSON- und Exit-Code-Vertrag](docs/cli-output-contract.md).
 
 Firmwarebezogene Forschung und sichere Werkzeuge für den vom Eigentümer
 autorisierten Zugriff auf Modems und Router türkischer Internetanbieter.
@@ -50,7 +52,13 @@ bedeutet nicht, dass alle seine Geräte unterstützt werden.
 | Standard-Webadmin | Vom Anbieter unterstützt |
 | Privilegierter Webadmin | Blockiert; Forschung erforderlich |
 | Linux-Root-Shell | Nicht unterstützt |
-| Letzte Prüfung | 13.09.2026 |
+| Letzte Evidenzprüfung | 27.09.2026 |
+
+`V9.0` ist ein vorläufiger, nicht verifizierter Katalogschlüssel. Die beobachtete
+lokale Oberfläche nennt `V9.0.7` als Hardware-Version; die Zuordnung zur
+physischen Platinenrevision und zum Schlüssel `V9.0` ist ungeklärt. Die folgenden
+Beispiele wählen diesen Forschungseintrag und belegen keine Kompatibilität
+anderer Revisionen. Der Übersetzungsabgleich ist keine neue Hardwareprüfung.
 
 Siehe [Kompatibilität](SUPPORT.md) und
 [Forschungsnotiz](docs/research/zte-h3600p-ttn10-260210.md).
@@ -122,6 +130,122 @@ Eingabe-Backup unterscheiden.
 
 Der Befehl `apply` arbeitet in dieser Version absichtlich nach dem
 Fail-Closed-Prinzip und ändert bei dieser blockierten Firmware nichts.
+
+## Authentifizierte Web-Evidenz
+
+Verwenden Sie den Collector nur auf einem eigenen oder ausdrücklich zur
+Administration freigegebenen H3600P und über ein vertrauenswürdiges, isoliertes
+oder direkt verbundenes LAN:
+
+```shell
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
+```
+
+Das Passwort wird verdeckt abgefragt. Die HTTP-Bestätigung ist verpflichtend:
+Das Challenge/Hash-Verfahren der Firmware stellt keinen geschützten Kanal gegen
+das Mitlesen lokaler HTTP-Anmeldungen oder das Offline-Raten schwacher Passwörter
+bereit. Verwenden Sie ein starkes, nur für dieses Gerät genutztes Passwort.
+Der Befehl führt genau einen normalen Anmeldeversuch aus und wiederholt ihn
+nicht. Ein falsches Passwort kann trotzdem zur Kontosperre beitragen.
+
+Nach der Anmeldung liest er nur feste, begrenzte GET-Ansichten der Startseite
+und des Gerätestatus. Die Ansichten `tr069`, `rsc`, Benutzerverwaltung, `mirror`
+und `capture` werden nur angefordert, wenn die authentifizierte Zugriffsübersicht
+dieselben IDs ausweist. JSON enthält Antwortstrukturen, Zugriffsebenen,
+zugelassene Namen und beobachtete Merkmale. Passwörter, Cookies, Parameterwerte
+und Rohseiten werden weder ausgegeben noch gespeichert. Es werden keine
+Einstellungen abgesendet und keine CWMP-, Shell-, Reset-, Neustart-, Upload-
+oder Firmware-Anfragen ausgeführt. Diese Beobachtungen belegen weder Root-Zugriff
+noch Gerätesupport.
+
+## Offline-UART-Evidenz
+
+Prüfen Sie eine bereits vorhandene private UART-Aufzeichnung, ohne ihre
+Rohdaten zu veröffentlichen:
+
+```shell
+cpe-atlas uart-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --input h3600p-uart-private.log
+```
+
+Der Befehl liest höchstens 8 MiB aus einer lokalen Datei, öffnet keinen seriellen
+Port und sendet nichts an das Gerät. Er liefert nur begrenzte, zugelassene
+Boot-Metadaten und Merkmale; keine Rohzeilen, Dateipfade, Zugangsdaten oder
+Geheimnisse. Wenn die erwartete Firmware und ein anderer Build gemeinsam
+auftreten, lautet `firmware_identity_status` `conflicting-builds-observed`.
+Wiederholungen oder reine Unterschiede in Groß-/Kleinschreibung desselben Builds
+sind kein Konflikt. Auch `matched` bedeutet nur eine beobachtete Versionszeichenfolge;
+ein Shell-Prompt oder UID-0-Text verifiziert keinen Root-Zugriff.
+`root_access_verified` bleibt immer `false`.
+
+## Private Gerätekennung und Konfiguration
+
+Speichern Sie genau `{"serial":"...","mac":"..."}` in einer zugriffsbeschränkten
+UTF-8-JSON-Datei und verwenden Sie `--identity-file`, damit Seriennummer und
+MAC-Adresse nicht in Shell-Historie oder Prozessargumenten stehen. Die Datei ist
+auf 1 KiB begrenzt und ihr Inhalt wird nicht ausgegeben. Die MAC-Adresse muss
+kleingeschrieben sein; `--identity-file` lässt sich nicht mit `--serial` oder
+`--mac` kombinieren. Beispiel einer verschlüsselten Offline-Forschungsdatei aus
+einem privaten Ausgangsbackup:
+
+```shell
+cpe-atlas config-generate --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --input-config config.bin --identity-file device-identity.private.json --output h3600p-research.bin --encrypted --acknowledge-legacy-crypto --acknowledge-unverified-compatibility --i-own-or-administer-this-device
+```
+
+SSH-Passwort und erforderliche Gerätepassphrase werden verdeckt abgefragt.
+Blockierte, unerforschte oder nicht exakt verifizierte Ziele benötigen zusätzlich
+`--acknowledge-unverified-compatibility`. Diese Bestätigung beweist weder
+Firmware-Akzeptanz, Root-Zugriff, Erhalt der Dienste noch Wiederherstellung.
+Ohne Ausgangsbackup enthält die Minimalvorlage keine erhaltene
+Internet-/VoIP-/IPTV-/VLAN-/WLAN-/TR-069-Provisionierung. Unverschlüsselte Ausgabe
+mit Zugangsdaten benötigt ausdrücklich `--allow-unencrypted`. Bewahren Sie
+Originalbackup, Gerätekennungsdatei und Ausgabe getrennt in einem privaten,
+vertrauenswürdigen Verzeichnis auf. Auch mit `--force` darf die Ausgabe weder
+das Ausgangsbackup noch die Gerätekennungsdatei ersetzen.
+
+Wenn verdeckte Eingabe nicht verfügbar ist, stoppt der Befehl ohne sichtbaren
+Eingabefallback. Für Automatisierung dienen `--ssh-password-stdin` und
+`--device-key-stdin`: bei beiden zuerst das SSH-Passwort, dann die Gerätepassphrase,
+jeweils auf einer eigenen LF-/CRLF-Zeile aus einer privaten Pipe oder geschützten
+Datei. Das SSH-Passwort muss 8–128 druckbare Zeichen enthalten; die
+Gerätepassphrase genau 32 ASCII-Zeichen. Zu lange Werte werden abgelehnt,
+nicht abgeschnitten. Diese Optionen deaktivieren keine Terminalausgabe der
+eingegebenen Zeichen; verwenden Sie sie nicht zum interaktiven Tippen sichtbarer
+Passwörter und geben Sie Geheimnisse nie als Kommandozeilenargumente an.
+
+## Authentifizierter Schutz lokaler Dateien
+
+Diese Befehle verarbeiten nur private Dateien, zu deren Nutzung Sie berechtigt
+sind, und fragen die Passphrase verdeckt ab:
+
+```shell
+cpe-atlas private-protect --input config.bin --output config.bin.cpap --i-am-authorized-to-handle-this-private-file
+cpe-atlas private-unprotect --input config.bin.cpap --output restored-config.bin --i-am-authorized-to-handle-this-private-file
+```
+
+Neue Container verwenden Formatversion 2, einen frischen Salt, AES-GCM zur
+Authentifizierung und scrypt mit `N=2^17`, `r=8`, `p=1`. `private-unprotect` liest
+auch alte Container der Version 1. Zur Migration entschlüsseln Sie einen
+Version-1-Container erfolgreich in eine separate private Datei und schützen
+diese erneut; neue Ausgaben verwenden immer Version 2. Unbekannte oder
+überhöhte KDF-Parameter werden vor der Schlüsselableitung abgelehnt.
+
+Dieses Format ist **kein Modem-Importformat**. Es redigiert keine Geheimnisse,
+beweist keine Firmware-Kompatibilität und macht Backups nicht veröffentlichbar.
+Bewahren Sie Container und Passphrase getrennt auf und laden Sie beides weder
+ins Repository noch in einen Fehlerbericht. Entschlüsselte Dateien und
+automatisch redigierte Berichte bleiben privat; prüfen Sie sie vor jeder
+Weitergabe manuell. Die Passphrase umfasst 12–256 Unicode-Zeichen ohne
+C0-/C1-Steuerzeichen, Zeilen-/Absatztrenner oder Surrogate. Ihr exakter Text
+bleibt erhalten; weder Unicode-Normalisierung noch Abschneiden von Leerraum
+findet statt.
+
+Bei fehlender verdeckter Eingabe wird abgebrochen. Automatisierung kann
+`--passphrase-stdin` verwenden; für das Web-Passwort gibt es `--password-stdin`.
+Nutzen Sie nur eine private Pipe oder geschützte Datei, keine sichtbare
+interaktive Terminaleingabe: auch diese Optionen schalten das Echo nicht aus.
+Details stehen in den [Kryptografie-Notizen](docs/config-cryptography.md#authenticated-local-container),
+der [CLI-Referenz](docs/cli-reference.md) und dem
+[JSON- und Exit-Code-Vertrag](docs/cli-output-contract.md).
 
 ## Sicherheit und Berechtigung
 

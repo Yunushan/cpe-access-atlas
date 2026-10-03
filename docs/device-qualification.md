@@ -1,9 +1,11 @@
 # Exact-device qualification
 
-All currently bundled recipes remain unverified research records. No physical
-validation was supplied during the September 17 production-readiness work.
-This document defines evidence needed to change that status; it is not evidence
-that an experiment has happened or instructions to import an unverified file.
+All currently bundled recipes remain unverified research records, with no
+completed exact-device qualification records. Public-source reviews, software
+tests, and private UI identity observations do not supply import, access,
+service-preservation, or recovery qualification. This document defines evidence
+needed to change that status; it is not evidence that an experiment has happened
+or instructions to import an unverified file.
 
 ## Before any device change
 

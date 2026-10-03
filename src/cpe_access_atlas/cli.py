@@ -55,6 +55,7 @@ from .uart_evidence import UartEvidenceError, inspect_uart_log
 from .web_evidence import WebEvidenceError, collect_zte_web_evidence
 
 MAX_CONFIG_IDENTITY_BYTES = 1_024
+OUTPUT_CONTRACT_VERSION = "1"
 
 
 def _recipe_from_args(args: argparse.Namespace) -> Recipe:
@@ -918,6 +919,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument(
+        "--output-contract-version",
+        action="version",
+        version=OUTPUT_CONTRACT_VERSION,
+        help="show the machine-readable output and exit-status contract version",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     providers = subparsers.add_parser("providers", help="list cataloged providers")

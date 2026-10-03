@@ -133,6 +133,45 @@ class ConfigDecodingFuzzTests(unittest.TestCase):
 
 
 class RedactionFuzzTests(unittest.TestCase):
+    @given(st.text(alphabet="aAzZ019 _-:;,'\"\\<>&\t\r\nçğşΩ🔑", max_size=512))
+    @_SUITE_SETTINGS
+    def test_quoted_text_credentials_preserve_escaped_delimiters(self, value: str) -> None:
+        for quote in ('"', "'"):
+            escaped = ("SYNTHETIC_HEAD" + value + "SYNTHETIC_TAIL").replace("\\", "\\\\")
+            escaped = escaped.replace(quote, "\\" + quote)
+            source = f"password={quote}{escaped}{quote} mode=bridge"
+            expected = f"password={quote}[REDACTED]{quote} mode=bridge"
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+
+    @given(
+        st.sampled_from(("password", "Token", "cookie", "api_key", "WPA_PSK", "KeyPassphrase")),
+        st.sampled_from(("", "Café-", "vendor:", "vendor name-", 'vendor"-', "vendor\\-", "🔑-")),
+        st.integers(min_value=1, max_value=2**64 - 1),
+        st.text(alphabet="aAzZ019 _-:;,'\"\\<>&\t\r\nçğşΩ🔑", max_size=256),
+        st.sampled_from(("", "\n", "\r\n \t")),
+    )
+    @_SUITE_SETTINGS
+    def test_json_sensitive_keys_with_generated_escape_spellings_are_fully_removed(
+        self, name: str, prefix: str, mask: int, value: str, whitespace: str
+    ) -> None:
+        # The first credential-name character is always escaped; the mask
+        # varies every other character between literal and Unicode spelling.
+        key = (
+            json.dumps(prefix, ensure_ascii=True)[:-1]
+            + "".join(
+                f"\\u{ord(character):04x}" if index == 0 or (mask >> index) & 1 else character
+                for index, character in enumerate(name)
+            )
+            + '"'
+        )
+        scalar = json.dumps("SYNTHETIC_HEAD" + value + "SYNTHETIC_TAIL", ensure_ascii=False)
+        source = f'{{{key}{whitespace}:{whitespace}{scalar},"mode":"bridge"}}'
+        expected = f'{{{key}{whitespace}:{whitespace}"[REDACTED]","mode":"bridge"}}'
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(json.loads(expected), {prefix + name: "[REDACTED]", "mode": "bridge"})
+        self.assertEqual(redact_text(expected), expected)
+
     @given(
         st.sampled_from(
             (

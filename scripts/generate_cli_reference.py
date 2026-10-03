@@ -34,6 +34,8 @@ def render() -> str:
         "",
         f"Reference for `cpe-atlas` version {__version__}, generated from the",
         "live `argparse` definition so it cannot drift from the actual CLI.",
+        "See [the output contract](cli-output-contract.md) for JSON shapes,",
+        "decision handling, and exit-status semantics.",
         "Regenerate after any CLI change with:",
         "",
         "```shell",

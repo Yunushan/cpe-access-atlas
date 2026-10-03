@@ -1599,7 +1599,12 @@ class RepositoryControlTests(unittest.TestCase):
                     check=False,
                     timeout=10,
                 )
-                self.assertEqual(result.returncode == 0, expected)
+                self.assertEqual(
+                    result.returncode == 0,
+                    expected,
+                    f"awk exit {result.returncode}; stdout={result.stdout!r}; "
+                    f"stderr={result.stderr!r}",
+                )
 
     def test_public_issue_routes_cover_bugs_and_private_contact_requests(self) -> None:
         templates = ROOT / ".github" / "ISSUE_TEMPLATE"

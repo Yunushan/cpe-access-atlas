@@ -1507,6 +1507,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(stdout.strip(), __version__)
 
+    def test_output_contract_version_is_available_without_a_device_or_command(self) -> None:
+        with (
+            patch("cpe_access_atlas.cli.load_recipes") as recipes,
+            patch("cpe_access_atlas.cli.collect_zte_web_evidence") as web,
+        ):
+            code, stdout, stderr = self.run_cli(["--output-contract-version"])
+        self.assertEqual((code, stdout, stderr), (0, "1\n", ""))
+        recipes.assert_not_called()
+        web.assert_not_called()
+
     def test_parser_exit_with_no_code_is_treated_as_success(self) -> None:
         with patch(
             "cpe_access_atlas.cli.build_parser",

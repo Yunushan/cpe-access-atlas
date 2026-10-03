@@ -434,6 +434,21 @@ def _validated_members(archive: tarfile.TarFile) -> tuple[tarfile.TarInfo, ...]:
     return tuple(members)
 
 
+def _replace_canonical_archive(source: Path, destination: Path) -> None:
+    """Bound transient Windows denials while retaining atomic archive replacement."""
+
+    windows_platform: bool = sys.platform == "win32"
+    for delay in (0.01, 0.05, 0.10):
+        try:
+            source.replace(destination)
+            return
+        except PermissionError as exc:
+            if not windows_platform or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                raise
+            time.sleep(delay)
+    source.replace(destination)
+
+
 def canonicalize_sdist(path: Path, epoch: int) -> bytes:
     """Replace build-time tar/gzip metadata without extracting archive contents."""
 
@@ -511,7 +526,7 @@ def canonicalize_sdist(path: Path, epoch: int) -> bytes:
             raise ReproducibleBuildError(
                 "canonical source archive exceeds the compressed-size limit"
             )
-        temporary_path.replace(path)
+        _replace_canonical_archive(temporary_path, path)
         os.utime(path, (epoch, epoch))
         return canonical_archive
     except BaseException:
@@ -820,7 +835,7 @@ def canonicalize_wheel(path: Path, epoch: int) -> bytes:
         if len(canonical_archive) > _MAX_WHEEL_BYTES:
             raise ReproducibleBuildError("canonical wheel exceeds the compressed-size limit")
         temporary_path.write_bytes(canonical_archive)
-        temporary_path.replace(path)
+        _replace_canonical_archive(temporary_path, path)
         os.utime(path, (epoch, epoch))
         return canonical_archive
     except BaseException:
@@ -866,6 +881,120 @@ def _artifact_directory_matches(
         )
     except OSError:
         return False
+
+
+def _source_snapshot_matches(
+    directory: Path,
+    identity: tuple[int, int],
+    expected: dict[str, bytes],
+) -> bool:
+    """Check staged identity and bounded Git bytes, rejecting observed links and reparses."""
+
+    try:
+        expected_directories = {
+            parent.as_posix()
+            for name in expected
+            for parent in PurePosixPath(name).parents
+            if parent != PurePosixPath(".")
+        }
+        seen_files: set[str] = set()
+        pending = [(directory, identity)]
+        while pending:
+            current, current_identity = pending.pop()
+            directory_stat = current.stat(follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(directory_stat.st_mode)
+                or getattr(directory_stat, "st_file_attributes", 0) & 0x400
+                or (directory_stat.st_dev, directory_stat.st_ino) != current_identity
+            ):
+                return False
+            for entry in current.iterdir():
+                entry_stat = entry.stat(follow_symlinks=False)
+                name = entry.relative_to(directory).as_posix()
+                if getattr(entry_stat, "st_file_attributes", 0) & 0x400:
+                    return False
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    if name not in expected_directories:
+                        return False
+                    pending.append((entry, (entry_stat.st_dev, entry_stat.st_ino)))
+                elif stat.S_ISREG(entry_stat.st_mode):
+                    if name not in expected or entry_stat.st_size != len(expected[name]):
+                        return False
+                    with entry.open("rb") as stream:
+                        if stream.read(len(expected[name]) + 1) != expected[name]:
+                            return False
+                    seen_files.add(name)
+                else:
+                    return False
+        return seen_files == expected.keys()
+    except OSError:
+        return False
+
+
+def _require_snapshot_destination_absent(destination: Path) -> None:
+    try:
+        destination.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise FileExistsError(destination)
+
+
+def _verify_moved_source_snapshot(
+    source: Path,
+    destination: Path,
+    identity: tuple[int, int],
+    expected: dict[str, bytes],
+) -> None:
+    if _source_snapshot_matches(destination, identity, expected):
+        return
+    try:
+        destination_stat = destination.stat(follow_symlinks=False)
+        if (
+            stat.S_ISDIR(destination_stat.st_mode)
+            and not getattr(destination_stat, "st_file_attributes", 0) & 0x400
+            and (destination_stat.st_dev, destination_stat.st_ino) == identity
+        ):
+            _require_snapshot_destination_absent(source)
+            destination.rename(source)
+    except OSError:
+        pass
+    raise ReproducibleBuildError(
+        "source snapshot identity, inventory, or content changed during move"
+    )
+
+
+def _move_source_snapshot(
+    source: Path,
+    destination: Path,
+    identity: tuple[int, int],
+    expected: dict[str, bytes],
+) -> None:
+    """Retry only transient Windows renames after rechecking the complete snapshot."""
+
+    windows_platform: bool = sys.platform == "win32"
+    delays = (0.01, 0.05, 0.10)
+    attempt = 0
+    while True:
+        _require_snapshot_destination_absent(destination)
+        if not _source_snapshot_matches(source, identity, expected):
+            raise ReproducibleBuildError("source snapshot identity, inventory, or content changed")
+        try:
+            if windows_platform:
+                source.rename(destination)
+            else:
+                source.replace(destination)
+        except PermissionError as exc:
+            if (
+                not windows_platform
+                or getattr(exc, "winerror", None) not in {5, 32, 33}
+                or attempt == len(delays)
+            ):
+                raise
+            time.sleep(delays[attempt])
+            attempt += 1
+        else:
+            _verify_moved_source_snapshot(source, destination, identity, expected)
+            return
 
 
 def _copy_source_snapshot(
@@ -928,12 +1057,14 @@ def _copy_source_snapshot(
     except ReproducibleBuildError as exc:
         raise ReproducibleBuildError("Git source tree has an unsafe or special entry") from exc
 
-    if destination.exists():
-        raise FileExistsError(destination)
+    _require_snapshot_destination_absent(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=destination.parent, prefix=f".{destination.name}.") as directory:
         staging = Path(directory) / "snapshot"
         staging.mkdir()
+        staging_stat = staging.stat(follow_symlinks=False)
+        staging_identity = (staging_stat.st_dev, staging_stat.st_ino)
+        expected: dict[str, bytes] = {}
         for path, object_id in source_entries:
             payload = subprocess.run(  # noqa: S603 -- fixed Git executable and exact object id
                 [  # noqa: S607 -- exact object id parsed from the immutable tree above
@@ -953,13 +1084,14 @@ def _copy_source_snapshot(
             target = staging.joinpath(*path.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
+            expected[path.as_posix()] = payload
             target.chmod(0o644)
             os.utime(target, (epoch, epoch))
         for child in sorted((path for path in staging.rglob("*") if path.is_dir()), reverse=True):
             child.chmod(0o755)
             os.utime(child, (epoch, epoch))
         os.utime(staging, (epoch, epoch))
-        staging.replace(destination)
+        _move_source_snapshot(staging, destination, staging_identity, expected)
 
 
 def build_once(root: Path, dist_dir: Path, epoch: int) -> tuple[BuiltArtifact, BuiltArtifact]:
