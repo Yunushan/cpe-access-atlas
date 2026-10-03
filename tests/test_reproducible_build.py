@@ -303,6 +303,108 @@ version = { attr = "package.__version__" }
             PureWindowsPath("D:escape"),
         )
 
+    def test_atomic_archive_replacement_retries_temporary_windows_denials(self) -> None:
+        source = self.base / "canonical.tmp"
+        destination = self.base / "package.whl"
+        payload = b"\x00verified canonical archive\xff"
+        original = b"original archive bytes"
+        source.write_bytes(payload)
+        destination.write_bytes(original)
+        real_replace = Path.replace
+        observations = []
+
+        def temporarily_denied(path: Path, target: Path) -> Path:
+            observations.append((path, target, path.read_bytes(), target.read_bytes()))
+            if len(observations) <= 3:
+                error = PermissionError(13, "synthetic temporary native denial")
+                error.winerror = (5, 32, 33)[len(observations) - 1]
+                raise error
+            return real_replace(path, target)
+
+        with (
+            patch.object(reproducible.sys, "platform", "win32"),
+            patch.object(Path, "replace", autospec=True, side_effect=temporarily_denied) as replace,
+            patch.object(reproducible.time, "sleep") as sleep,
+        ):
+            reproducible._replace_canonical_archive(source, destination)
+
+        self.assertEqual(replace.call_count, 4)
+        self.assertEqual(observations, [(source, destination, payload, original)] * 4)
+        self.assertEqual(
+            [entry.args for entry in sleep.call_args_list], [(0.01,), (0.05,), (0.10,)]
+        )
+        self.assertFalse(source.exists())
+        self.assertEqual(destination.read_bytes(), payload)
+
+    def test_atomic_archive_replacement_does_not_retry_other_failures(self) -> None:
+        source = self.base / "canonical.tmp"
+        destination = self.base / "package.whl"
+        source.write_bytes(b"canonical archive")
+        destination.write_bytes(b"original archive")
+        cases = (
+            ("linux", PermissionError, 5),
+            ("linux", PermissionError, 32),
+            ("darwin", PermissionError, 33),
+            ("win32", PermissionError, None),
+            ("win32", PermissionError, 2),
+            ("win32", PermissionError, 13),
+            ("win32", OSError, 5),
+            ("win32", FileNotFoundError, 2),
+        )
+        for platform, exception_type, winerror in cases:
+            with self.subTest(platform=platform, exception_type=exception_type, winerror=winerror):
+                error = exception_type(22, "synthetic ineligible failure")
+                if winerror is not None:
+                    error.winerror = winerror
+                with (
+                    patch.object(reproducible.sys, "platform", platform),
+                    patch.object(Path, "replace", side_effect=error) as replace,
+                    patch.object(reproducible.time, "sleep") as sleep,
+                ):
+                    with self.assertRaises(exception_type) as raised:
+                        reproducible._replace_canonical_archive(source, destination)
+                self.assertIs(raised.exception, error)
+                replace.assert_called_once_with(destination)
+                sleep.assert_not_called()
+                self.assertEqual(source.read_bytes(), b"canonical archive")
+                self.assertEqual(destination.read_bytes(), b"original archive")
+
+    def test_canonical_archive_permanent_denial_is_bounded_and_cleans_temporary_file(self) -> None:
+        for suffix, canonicalize in (
+            (".whl", reproducible.canonicalize_wheel),
+            (".tar.gz", reproducible.canonicalize_sdist),
+        ):
+            with self.subTest(suffix=suffix):
+                path = self.base / suffix.removeprefix(".") / f"package{suffix}"
+                if suffix == ".whl":
+                    self.wheel_archive(path)
+                else:
+                    self.archive(path, mtime=EPOCH + 1)
+                original = path.read_bytes()
+                error = PermissionError(13, "synthetic permanent native denial")
+                error.winerror = 5
+                with (
+                    patch.object(reproducible.sys, "platform", "win32"),
+                    patch.object(Path, "replace", autospec=True, side_effect=error) as replace,
+                    patch.object(reproducible.time, "sleep") as sleep,
+                ):
+                    with self.assertRaises(PermissionError) as raised:
+                        canonicalize(path, EPOCH)
+                self.assertIs(raised.exception, error)
+                self.assertEqual(replace.call_count, 4)
+                self.assertTrue(
+                    all(entry.args == replace.call_args.args for entry in replace.call_args_list)
+                )
+                temporary_path, destination = replace.call_args.args
+                self.assertEqual(destination, path)
+                self.assertEqual(temporary_path.parent, path.parent)
+                self.assertFalse(temporary_path.exists())
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(set(path.parent.iterdir()), {path})
+                self.assertEqual(
+                    [entry.args for entry in sleep.call_args_list], [(0.01,), (0.05,), (0.10,)]
+                )
+
     def test_canonical_source_archives_are_byte_identical(self) -> None:
         first = self.base / "a" / "package.tar.gz"
         second = self.base / "b" / "package.tar.gz"

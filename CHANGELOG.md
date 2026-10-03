@@ -23,6 +23,11 @@ All notable changes are documented here.
   release qualification requirements; no device support is promoted.
 - Align the read-only production-settings auditor and release-control guide
   with candidate `v0.4.0a7`; live controls still require explicit rotation.
+- Bound Windows access/sharing-denial retries during atomic wheel/source archive
+  canonicalization to four attempts. Preserve the verified bytes, original
+  archive and temporary-file cleanup on permanent failure; unrelated errors
+  fail immediately. This mitigates observed transient denial without identifying
+  its underlying operating-system cause.
 - Isolate the Bash and PowerShell development helpers from inherited pip
   configuration and Python import overrides, keeping setup installations in
   the selected virtual environment and protecting editable-build subprocesses.

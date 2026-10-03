@@ -434,6 +434,20 @@ def _validated_members(archive: tarfile.TarFile) -> tuple[tarfile.TarInfo, ...]:
     return tuple(members)
 
 
+def _replace_canonical_archive(source: Path, destination: Path) -> None:
+    """Bound transient Windows denials while retaining atomic archive replacement."""
+
+    for delay in (0.01, 0.05, 0.10):
+        try:
+            source.replace(destination)
+            return
+        except PermissionError as exc:
+            if sys.platform != "win32" or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                raise
+            time.sleep(delay)
+    source.replace(destination)
+
+
 def canonicalize_sdist(path: Path, epoch: int) -> bytes:
     """Replace build-time tar/gzip metadata without extracting archive contents."""
 
@@ -511,7 +525,7 @@ def canonicalize_sdist(path: Path, epoch: int) -> bytes:
             raise ReproducibleBuildError(
                 "canonical source archive exceeds the compressed-size limit"
             )
-        temporary_path.replace(path)
+        _replace_canonical_archive(temporary_path, path)
         os.utime(path, (epoch, epoch))
         return canonical_archive
     except BaseException:
@@ -820,7 +834,7 @@ def canonicalize_wheel(path: Path, epoch: int) -> bytes:
         if len(canonical_archive) > _MAX_WHEEL_BYTES:
             raise ReproducibleBuildError("canonical wheel exceeds the compressed-size limit")
         temporary_path.write_bytes(canonical_archive)
-        temporary_path.replace(path)
+        _replace_canonical_archive(temporary_path, path)
         os.utime(path, (epoch, epoch))
         return canonical_archive
     except BaseException:
