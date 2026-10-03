@@ -28,6 +28,11 @@ All notable changes are documented here.
   archive and temporary-file cleanup on permanent failure; unrelated errors
   fail immediately. This mitigates observed transient denial without identifying
   its underlying operating-system cause.
+- Validate staged source identity, inventory, and exact Git bytes before each
+  bounded Windows snapshot rename and again after success. Refuse occupied
+  destinations and changed content; quarantine only the original staged
+  identity. Keep final artifact publication checks immediate. Check strict
+  typing for all three OS profiles so Windows error handling remains portable.
 - Isolate the Bash and PowerShell development helpers from inherited pip
   configuration and Python import overrides, keeping setup installations in
   the selected virtual environment and protecting editable-build subprocesses.

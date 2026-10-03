@@ -1289,6 +1289,363 @@ version = { attr = "package.__version__" }
             with self.assertRaisesRegex(reproducible.ReproducibleBuildError, "payload differs"):
                 reproducible.build_once(root, self.base / "mutated-dist", EPOCH)
 
+    @staticmethod
+    def snapshot_tree(path: Path) -> tuple[tuple[int, int], dict[str, bytes]]:
+        expected = {"bound.txt": b"good", "folder/nested.txt": b"nested"}
+        path.mkdir()
+        for name, payload in expected.items():
+            target = path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+        root_stat = path.stat(follow_symlinks=False)
+        return (root_stat.st_dev, root_stat.st_ino), expected
+
+    def test_source_snapshot_binding_rejects_tree_and_metadata_changes(self) -> None:
+        for change in ("extra-file", "extra-directory", "missing-file", "size", "bytes"):
+            with self.subTest(change=change):
+                source = self.base / change
+                identity, expected = self.snapshot_tree(source)
+                if change == "extra-file":
+                    (source / "extra.txt").write_bytes(b"extra")
+                elif change == "extra-directory":
+                    (source / "extra").mkdir()
+                elif change == "missing-file":
+                    (source / "bound.txt").unlink()
+                elif change == "size":
+                    (source / "bound.txt").write_bytes(b"longer")
+                else:
+                    (source / "bound.txt").write_bytes(b"evil")
+                self.assertFalse(reproducible._source_snapshot_matches(source, identity, expected))
+
+        source = self.base / "metadata"
+        identity, expected = self.snapshot_tree(source)
+        self.assertTrue(reproducible._source_snapshot_matches(source, identity, expected))
+        self.assertFalse(
+            reproducible._source_snapshot_matches(source, (identity[0], identity[1] + 1), expected)
+        )
+        plain_file = self.base / "plain-file"
+        plain_file.write_bytes(b"not a directory")
+        self.assertFalse(reproducible._source_snapshot_matches(plain_file, identity, expected))
+        real_stat = Path.stat
+        for target, mode, attributes in (
+            (source, stat.S_IFDIR, 0x400),
+            (source / "bound.txt", stat.S_IFREG, 0x400),
+            (source / "bound.txt", stat.S_IFIFO, 0),
+        ):
+            with self.subTest(target=target, mode=mode, attributes=attributes):
+
+                def changed_stat(
+                    path: Path,
+                    *args: object,
+                    target: Path = target,
+                    mode: int = mode,
+                    attributes: int = attributes,
+                    **kwargs: object,
+                ) -> object:
+                    result = real_stat(path, *args, **kwargs)
+                    if path == target:
+                        return Mock(
+                            st_mode=mode,
+                            st_file_attributes=attributes,
+                            st_dev=result.st_dev,
+                            st_ino=result.st_ino,
+                            st_size=result.st_size,
+                        )
+                    return result
+
+                with patch.object(Path, "stat", autospec=True, side_effect=changed_stat):
+                    self.assertFalse(
+                        reproducible._source_snapshot_matches(source, identity, expected)
+                    )
+        with patch.object(Path, "stat", side_effect=PermissionError("cannot inspect snapshot")):
+            self.assertFalse(reproducible._source_snapshot_matches(source, identity, expected))
+
+    def test_source_snapshot_binding_caps_reads_and_closes_stream_on_file_growth(self) -> None:
+        source = self.base / "growing"
+        identity, expected = self.snapshot_tree(source)
+        sizes = []
+
+        class GrowingStream(io.BytesIO):
+            def read(self, size: int = -1) -> bytes:
+                sizes.append(size)
+                return super().read(size)
+
+        stream = GrowingStream(b"good" + b"oversized mutation" * 100)
+        real_open = Path.open
+
+        def grown_open(path: Path, *args: object, **kwargs: object) -> object:
+            if path == source / "bound.txt":
+                return stream
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", autospec=True, side_effect=grown_open):
+            self.assertFalse(reproducible._source_snapshot_matches(source, identity, expected))
+        self.assertEqual(sizes, [len(expected["bound.txt"]) + 1])
+        self.assertTrue(stream.closed)
+
+    def test_source_snapshot_binding_rechecks_queued_directory_identity(self) -> None:
+        source = self.base / "queued"
+        identity, expected = self.snapshot_tree(source)
+        folder = source / "folder"
+        real_stat = Path.stat
+        for change in ("identity", "reparse", "type"):
+            calls = 0
+
+            def swapped_stat(
+                path: Path,
+                *args: object,
+                change: str = change,
+                **kwargs: object,
+            ) -> object:
+                nonlocal calls
+                result = real_stat(path, *args, **kwargs)
+                if path == folder:
+                    calls += 1
+                    if calls == 2:
+                        return Mock(
+                            st_mode=stat.S_IFLNK if change == "type" else result.st_mode,
+                            st_file_attributes=0x400 if change == "reparse" else 0,
+                            st_dev=result.st_dev,
+                            st_ino=result.st_ino + (change == "identity"),
+                        )
+                return result
+
+            with (
+                self.subTest(change=change),
+                patch.object(Path, "stat", autospec=True, side_effect=swapped_stat),
+            ):
+                self.assertFalse(reproducible._source_snapshot_matches(source, identity, expected))
+            self.assertEqual(calls, 2)
+
+    def test_source_snapshot_move_retries_bound_tree_and_verifies_moved_identity(self) -> None:
+        source = self.base / "staged"
+        destination = self.base / "snapshot"
+        identity, expected = self.snapshot_tree(source)
+        real_rename = Path.rename
+        observations = []
+
+        def temporarily_denied(path: Path, target: Path) -> Path:
+            observations.append((path, target, (path / "bound.txt").read_bytes()))
+            if len(observations) <= 3:
+                error = PermissionError(13, "synthetic transient directory denial")
+                error.winerror = (5, 32, 33)[len(observations) - 1]
+                raise error
+            return real_rename(path, target)
+
+        with (
+            patch.object(reproducible.sys, "platform", "win32"),
+            patch.object(Path, "rename", autospec=True, side_effect=temporarily_denied) as rename,
+            patch.object(reproducible.time, "sleep") as sleep,
+            patch.object(
+                reproducible,
+                "_source_snapshot_matches",
+                wraps=reproducible._source_snapshot_matches,
+            ) as matches,
+        ):
+            reproducible._move_source_snapshot(source, destination, identity, expected)
+        self.assertEqual(rename.call_count, 4)
+        self.assertEqual(matches.call_count, 5)
+        self.assertEqual(matches.call_args.args, (destination, identity, expected))
+        self.assertEqual(observations, [(source, destination, b"good")] * 4)
+        self.assertEqual(
+            [entry.args for entry in sleep.call_args_list], [(0.01,), (0.05,), (0.10,)]
+        )
+        self.assertFalse(source.exists())
+        self.assertTrue(reproducible._source_snapshot_matches(destination, identity, expected))
+
+    def test_source_snapshot_move_does_not_retry_other_failures(self) -> None:
+        cases = (
+            ("linux", PermissionError, 5),
+            ("linux", PermissionError, 32),
+            ("darwin", PermissionError, 33),
+            ("win32", PermissionError, None),
+            ("win32", PermissionError, 13),
+            ("win32", OSError, 5),
+            ("win32", FileNotFoundError, 2),
+        )
+        for index, (platform, exception_type, winerror) in enumerate(cases):
+            with self.subTest(platform=platform, exception_type=exception_type, winerror=winerror):
+                source = self.base / f"failure-{index}"
+                destination = self.base / f"destination-{index}"
+                identity, expected = self.snapshot_tree(source)
+                error = exception_type(22, "synthetic ineligible directory failure")
+                if winerror is not None:
+                    error.winerror = winerror
+                with (
+                    patch.object(reproducible.sys, "platform", platform),
+                    patch.object(Path, "rename", side_effect=error) as rename,
+                    patch.object(Path, "replace", side_effect=error) as replace,
+                    patch.object(reproducible.time, "sleep") as sleep,
+                ):
+                    with self.assertRaises(exception_type) as raised:
+                        reproducible._move_source_snapshot(source, destination, identity, expected)
+                self.assertIs(raised.exception, error)
+                self.assertEqual(rename.call_count, int(platform == "win32"))
+                self.assertEqual(replace.call_count, int(platform != "win32"))
+                sleep.assert_not_called()
+                self.assertFalse(destination.exists())
+                self.assertTrue(reproducible._source_snapshot_matches(source, identity, expected))
+
+    def test_source_snapshot_retry_stops_on_new_destination_or_changed_source(self) -> None:
+        for change in ("destination-file", "destination-directory", "content", "inventory"):
+            with self.subTest(change=change):
+                source = self.base / f"source-{change}"
+                destination = self.base / f"destination-{change}"
+                identity, expected = self.snapshot_tree(source)
+                error = PermissionError(13, "synthetic first-attempt denial")
+                error.winerror = 5
+
+                def intrusion(
+                    delay: float,
+                    change: str = change,
+                    source: Path = source,
+                    destination: Path = destination,
+                ) -> None:
+                    if change == "destination-file":
+                        destination.write_bytes(b"unrelated destination")
+                    elif change == "destination-directory":
+                        destination.mkdir()
+                    elif change == "content":
+                        (source / "bound.txt").write_bytes(b"evil")
+                    else:
+                        (source / "extra.txt").write_bytes(b"injected")
+
+                expected_error = (
+                    FileExistsError
+                    if change.startswith("destination")
+                    else reproducible.ReproducibleBuildError
+                )
+                with (
+                    patch.object(reproducible.sys, "platform", "win32"),
+                    patch.object(Path, "rename", side_effect=error) as rename,
+                    patch.object(reproducible.time, "sleep", side_effect=intrusion) as sleep,
+                ):
+                    with self.assertRaises(expected_error):
+                        reproducible._move_source_snapshot(source, destination, identity, expected)
+                rename.assert_called_once_with(destination)
+                sleep.assert_called_once_with(0.01)
+                if change == "destination-file":
+                    self.assertEqual(destination.read_bytes(), b"unrelated destination")
+                elif change == "destination-directory":
+                    self.assertEqual(list(destination.iterdir()), [])
+                else:
+                    self.assertFalse(destination.exists())
+
+    def test_source_snapshot_permanent_denial_has_exact_bound_and_transactional_cleanup(
+        self,
+    ) -> None:
+        destination = self.base / "locked-snapshot"
+        object_id = "a" * 40
+        inventory = subprocess.CompletedProcess(
+            ["git"], 0, f"100644 blob {object_id}\tbound.txt\0".encode(), b""
+        )
+        blob = subprocess.CompletedProcess(["git"], 0, b"good", b"")
+        error = PermissionError(13, "synthetic permanent directory denial")
+        error.winerror = 5
+        with (
+            patch.object(reproducible, "resolve_source_commit", return_value=object_id),
+            patch.object(reproducible.subprocess, "run", side_effect=(inventory, blob)),
+            patch.object(reproducible.sys, "platform", "win32"),
+            patch.object(Path, "rename", autospec=True, side_effect=error) as rename,
+            patch.object(reproducible.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(PermissionError) as raised:
+                reproducible._copy_source_snapshot(self.base, destination, EPOCH)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(rename.call_count, 4)
+        self.assertTrue(all(entry.args == rename.call_args.args for entry in rename.call_args_list))
+        self.assertEqual(
+            [entry.args for entry in sleep.call_args_list], [(0.01,), (0.05,), (0.10,)]
+        )
+        self.assertFalse(destination.exists())
+        self.assertEqual(list(self.base.glob(".locked-snapshot.*")), [])
+
+    def test_source_snapshot_rename_time_content_change_fails_and_quarantines_owned_tree(
+        self,
+    ) -> None:
+        source = self.base / "original-source"
+        destination = self.base / "snapshot"
+        identity, expected = self.snapshot_tree(source)
+        real_rename = Path.rename
+
+        def mutate_before_rename(path: Path, target: Path) -> Path:
+            if path == source:
+                (path / "bound.txt").write_bytes(b"evil")
+            return real_rename(path, target)
+
+        with (
+            patch.object(reproducible.sys, "platform", "win32"),
+            patch.object(Path, "rename", autospec=True, side_effect=mutate_before_rename),
+        ):
+            with self.assertRaisesRegex(reproducible.ReproducibleBuildError, "snapshot.*changed"):
+                reproducible._move_source_snapshot(source, destination, identity, expected)
+        self.assertFalse(destination.exists())
+        self.assertEqual((source / "bound.txt").read_bytes(), b"evil")
+
+    def test_source_snapshot_post_move_refusal_preserves_unknown_or_unquarantinable_paths(
+        self,
+    ) -> None:
+        real_stat = Path.stat
+        for change in (
+            "identity",
+            "file",
+            "reparse",
+            "missing",
+            "occupied-source",
+            "rename-denied",
+        ):
+            with self.subTest(change=change):
+                destination = self.base / f"post-{change}"
+                identity, expected = self.snapshot_tree(destination)
+                source = self.base / f"stage-{change}"
+                (destination / "bound.txt").write_bytes(b"evil")
+                if change == "identity":
+                    identity = (identity[0], identity[1] + 1)
+                elif change == "file":
+                    expected = {"bound.txt": b"good"}
+                    destination = self.base / "post-plain-file"
+                    destination.write_bytes(b"unrelated file")
+                elif change == "missing":
+                    destination = self.base / "post-absent"
+                elif change == "occupied-source":
+                    source.mkdir()
+                    (source / "keep.txt").write_bytes(b"unrelated source")
+
+                def changed_stat(
+                    path: Path,
+                    *args: object,
+                    change: str = change,
+                    destination: Path = destination,
+                    **kwargs: object,
+                ) -> object:
+                    result = real_stat(path, *args, **kwargs)
+                    if change == "reparse" and path == destination:
+                        return Mock(
+                            st_mode=result.st_mode,
+                            st_dev=result.st_dev,
+                            st_ino=result.st_ino,
+                            st_file_attributes=0x400,
+                        )
+                    return result
+
+                with (
+                    patch.object(Path, "stat", autospec=True, side_effect=changed_stat),
+                    patch.object(
+                        Path, "rename", side_effect=PermissionError("cannot quarantine")
+                    ) as rename,
+                ):
+                    with self.assertRaisesRegex(reproducible.ReproducibleBuildError, "during move"):
+                        reproducible._verify_moved_source_snapshot(
+                            source, destination, identity, expected
+                        )
+                self.assertEqual(rename.call_count, int(change == "rename-denied"))
+                if change == "occupied-source":
+                    self.assertEqual((source / "keep.txt").read_bytes(), b"unrelated source")
+                elif change == "file":
+                    self.assertEqual(destination.read_bytes(), b"unrelated file")
+                elif change != "missing":
+                    self.assertEqual((destination / "bound.txt").read_bytes(), b"evil")
+
     def test_source_snapshot_uses_immutable_commit_not_working_tree(self) -> None:
         root = self.base / "root"
         root.mkdir()
