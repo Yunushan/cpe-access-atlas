@@ -2,8 +2,27 @@
 
 All notable changes are documented here.
 
-## Unreleased
+## 0.4.0a7 - 2026-10-03
 
+- Decode valid JSON escape spellings of sensitive report keys before redaction
+  classification while preserving the original formatting. Add escaped-key,
+  malformed-input, surrogate, and property-based regressions. Prevent quoted
+  scalar, folded HTTP header, and private-key prefix matching from retaining
+  per-character backtracking state; manual review remains required before sharing.
+- Report `conflicting-builds-observed` for a UART capture containing the
+  expected firmware and a distinct build. Duplicate or case-only observations
+  do not create a conflict. This remains marker evidence, not root validation.
+- Bound the local web-evidence cookie jar to 16 cookies, 8 KiB of retained
+  name/value data, and an 8 KiB serialized header. Reject excessive responses
+  transactionally and validate direct jars before opening a connection.
+- Add `--output-contract-version` and document JSON shapes, conservative
+  decision handling, and command-specific exit statuses without changing the
+  existing JSON envelopes. Include native awk diagnostics in DCO test failures.
+- Synchronize translated web/UART/private-container workflows, private identity
+  handling, and review dates. Document the unchanged device, operational, and
+  release qualification requirements; no device support is promoted.
+- Align the read-only production-settings auditor and release-control guide
+  with candidate `v0.4.0a7`; live controls still require explicit rotation.
 - Isolate the Bash and PowerShell development helpers from inherited pip
   configuration and Python import overrides, keeping setup installations in
   the selected virtual environment and protecting editable-build subprocesses.

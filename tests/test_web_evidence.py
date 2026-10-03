@@ -16,12 +16,16 @@ from urllib.parse import parse_qs
 
 from cpe_access_atlas.web_evidence import (
     _PARAMETER_NAME,
+    MAX_COOKIE_COUNT,
+    MAX_COOKIE_HEADER_BYTES,
     MAX_COOKIE_VALUE_CHARS,
     MAX_JSON_NESTING,
     MAX_PAGE_ACCESS_ENTRIES,
     MAX_RESPONSE_BYTES,
+    MAX_RETAINED_COOKIE_BYTES,
     MAX_STRUCTURAL_IDENTIFIERS,
     WebEvidenceError,
+    _cookie_header,
     _DeadlineSocket,
     _endpoint_evidence,
     _hardware_revision_marker_present,
@@ -624,6 +628,7 @@ class WebEvidenceTests(unittest.TestCase):
                     "SID=accepted; Path=/",
                     "OVERSIZED=" + ("x" * (MAX_COOKIE_VALUE_CHARS + 1)) + "; Path=/",
                     'UNSAFE="line\\012break"; Path=/',
+                    "BAD%=ignored; Path=/",
                 ),
             ),
             cookies,
@@ -637,6 +642,119 @@ class WebEvidenceTests(unittest.TestCase):
         with patch("cpe_access_atlas.web_evidence.SimpleCookie", return_value=BrokenCookie()):
             _remember_cookies(FakeResponse(b"", cookies=("SID=value",)), cookies)
         self.assertEqual(cookies, {"SID": "accepted"})
+
+    def test_cookie_count_budget_spans_responses_and_replacements_are_transactional(self) -> None:
+        cookies: dict[str, str] = {}
+        for index in range(MAX_COOKIE_COUNT):
+            _remember_cookies(FakeResponse(b"", cookies=(f"C{index}=original",)), cookies)
+        self.assertEqual(len(cookies), MAX_COOKIE_COUNT)
+        original = cookies.copy()
+        with self.assertRaisesRegex(WebEvidenceError, "16-cookie limit") as failure:
+            _remember_cookies(
+                FakeResponse(b"", cookies=("C0=replaced", "OVERFLOW=private-cookie-value")),
+                cookies,
+            )
+        self.assertEqual(cookies, original)
+        self.assertNotIn("OVERFLOW", str(failure.exception))
+        self.assertNotIn("private-cookie-value", str(failure.exception))
+        for value in ("replacement", "", "another-replacement"):
+            _remember_cookies(FakeResponse(b"", cookies=(f"C0={value}; Path=/",)), cookies)
+            self.assertEqual(cookies["C0"], value)
+            self.assertEqual(len(cookies), MAX_COOKIE_COUNT)
+
+    def test_cookie_byte_budgets_include_names_and_serialization_delimiters(self) -> None:
+        cookies: dict[str, str] = {}
+        # Two 4093-byte values plus two names, equals signs and '; ' hit 8 KiB exactly.
+        for name in ("A", "B"):
+            _remember_cookies(FakeResponse(b"", cookies=(f"{name}={'x' * 4093}",)), cookies)
+        self.assertEqual(len(_cookie_header(cookies).encode("ascii")), MAX_COOKIE_HEADER_BYTES)
+        FakeConnection.responses = [FakeResponse(b"ok")]
+        with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
+            _request("192.168.1.1", "GET", "/", 1, cookies)
+        self.assertEqual(
+            len(FakeConnection.requests[0]["headers"]["Cookie"].encode("ascii")),
+            MAX_COOKIE_HEADER_BYTES,
+        )
+        original = cookies.copy()
+        with self.assertRaisesRegex(WebEvidenceError, "Cookie-header limit"):
+            _remember_cookies(FakeResponse(b"", cookies=(f"B={'x' * 4094}",)), cookies)
+        self.assertEqual(cookies, original)
+        with self.assertRaisesRegex(WebEvidenceError, "Cookie-header limit"):
+            _remember_cookies(
+                FakeResponse(b"", cookies=(f"B={'x' * 4092}", f"A={'x' * 4095}")),
+                cookies,
+            )
+        self.assertEqual(cookies, original)
+        oversized = {"A": "x" * 4096, "B": "x" * 4095}
+        self.assertEqual(
+            sum(len(name) + len(value) for name, value in oversized.items()),
+            MAX_RETAINED_COOKIE_BYTES + 1,
+        )
+        with self.assertRaisesRegex(WebEvidenceError, "retained-cookie limit"):
+            _remember_cookies(FakeResponse(b"", cookies=("SID=replacement",)), oversized)
+        with self.assertRaisesRegex(WebEvidenceError, "retained-cookie limit"):
+            _cookie_header(oversized)
+
+    def test_direct_cookie_callers_are_validated_before_opening_a_connection(self) -> None:
+        unsafe_jars: list[dict[Any, Any]] = [
+            {"": "value"},
+            {"bad name": "value"},
+            {"A" * 129: "value"},
+            {None: "value"},
+            {"SID": None},
+            {"SID": "line\nbreak"},
+            {"SID": "non-ascii-\u00e9"},
+            {"SID": "x" * (MAX_COOKIE_VALUE_CHARS + 1)},
+        ]
+        for cookies in unsafe_jars:
+            with self.subTest(cookies=cookies):
+                original = cookies.copy()
+                with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
+                    with self.assertRaisesRegex(WebEvidenceError, "unsafe cookie"):
+                        _request("192.168.1.1", "GET", "/", 1, cookies)
+                    connection.assert_not_called()
+                with self.assertRaisesRegex(WebEvidenceError, "unsafe cookie"):
+                    _remember_cookies(FakeResponse(b"", cookies=("SID=replacement",)), cookies)
+                self.assertEqual(cookies, original)
+        too_many = {f"C{index}": "value" for index in range(MAX_COOKIE_COUNT + 1)}
+        with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
+            with self.assertRaisesRegex(WebEvidenceError, "16-cookie limit"):
+                _request("192.168.1.1", "GET", "/", 1, too_many)
+            connection.assert_not_called()
+
+    def test_response_cookie_budget_failure_closes_transport_without_partial_updates(self) -> None:
+        cookies = {f"C{index}": "original" for index in range(MAX_COOKIE_COUNT)}
+        original = cookies.copy()
+        FakeConnection.responses = [
+            FakeResponse(b"ok", cookies=("C0=replaced", "EXTRA=private-cookie-value"))
+        ]
+        with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
+            with self.assertRaisesRegex(WebEvidenceError, "16-cookie limit"):
+                _request("192.168.1.1", "GET", "/", 1, cookies)
+        self.assertEqual(cookies, original)
+        self.assertEqual(len(FakeConnection.requests), 1)
+        self.assertTrue(FakeConnection.instances[0].closed)
+
+    def test_response_rejection_does_not_commit_cookies_before_reading_metadata(self) -> None:
+        class BrokenMetadataResponse(FakeResponse):
+            def getheader(self, name: str, default: str | None = None) -> str | None:
+                if name == "Content-Type":
+                    raise HTTPException("private response detail")
+                return super().getheader(name, default)
+
+        for item in (
+            FakeResponse(b"x" * (MAX_RESPONSE_BYTES + 1), cookies=("SID=replaced",)),
+            BrokenMetadataResponse(b"ok", cookies=("SID=replaced",)),
+        ):
+            with self.subTest(response=type(item).__name__):
+                self.setUp()
+                cookies = {"SID": "original"}
+                FakeConnection.responses = [item]
+                with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
+                    with self.assertRaises(WebEvidenceError):
+                        _request("192.168.1.1", "GET", "/", 1, cookies)
+                self.assertEqual(cookies, {"SID": "original"})
+                self.assertTrue(FakeConnection.instances[0].closed)
 
     def test_json_and_token_validation_errors_are_sanitized(self) -> None:
         with self.assertRaisesRegex(WebEvidenceError, "HTTP 403"):

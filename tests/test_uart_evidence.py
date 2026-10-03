@@ -124,6 +124,55 @@ class UartEvidenceTests(unittest.TestCase):
             self.assertEqual(allow_listed.board_models, ())
             self.assertNotIn("SYNTHETIC-PRIVATE", repr(allow_listed))
 
+    def test_firmware_identity_requires_one_distinct_matching_build(self) -> None:
+        other = "H3600P V9.0 TTN.8_250626"
+        earlier = "H3600P V9.0 TTN.5_240228"
+        cases = (
+            ("expected only", (EXPECTED,), (EXPECTED,), "matched"),
+            ("repeated expected", (EXPECTED, EXPECTED), (EXPECTED,), "matched"),
+            (
+                "case-only variants",
+                (EXPECTED, EXPECTED.lower()),
+                tuple(sorted((EXPECTED, EXPECTED.lower()))),
+                "matched",
+            ),
+            (
+                "mixed expected and other",
+                (EXPECTED, other),
+                tuple(sorted((EXPECTED, other))),
+                "conflicting-builds-observed",
+            ),
+            (
+                "mixed builds and duplicate variants",
+                (other, EXPECTED.lower(), EXPECTED, other),
+                tuple(sorted((EXPECTED, EXPECTED.lower(), other))),
+                "conflicting-builds-observed",
+            ),
+            (
+                "distinct nonmatching builds",
+                (earlier, other),
+                tuple(sorted((earlier, other))),
+                "different-build-observed",
+            ),
+            (
+                "repeated nonmatching variants",
+                (other, other.lower(), other),
+                tuple(sorted((other, other.lower()))),
+                "different-build-observed",
+            ),
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic-capture.log"
+            for label, observed, versions, status in cases:
+                with self.subTest(capture=label):
+                    path.write_text("\n".join(observed), encoding="ascii")
+                    result = inspect_uart_log(path, EXPECTED.swapcase())
+                    self.assertEqual(result.firmware_versions, versions)
+                    self.assertEqual(result.firmware_identity_status, status)
+                    self.assertTrue(result.recognized_h3600p_boot_output)
+                    self.assertFalse(result.root_access_verified)
+                    self.assertFalse(result.device_io_attempted)
+
     def test_empty_log_is_valid_but_has_no_observations(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "empty.log"

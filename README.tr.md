@@ -3,10 +3,12 @@
 [English](README.md) · [Türkçe](README.tr.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
 > [!NOTE]
-> Bu genel bakış 18 Eylül 2026 tarihinde eşitlendi. Güvenlik açısından kritik
+> Bu genel bakış 3 Ekim 2026 tarihinde eşitlendi. Güvenlik açısından kritik
 > sınırlamalar, yeni komut seçenekleri ve sürüm doğrulama adımları için güncel
 > ve bağlayıcı kaynak [İngilizce README](README.md), [güvenlik politikası](SECURITY.md)
 > ve [kurulum/kurtarma kılavuzudur](docs/installation.md).
+> Tüm seçenekler için [İngilizce CLI başvurusuna](docs/cli-reference.md),
+> otomasyon için [JSON ve çıkış kodu sözleşmesine](docs/cli-output-contract.md) bakın.
 
 Türkiye'deki ISS'lerin sağladığı modem ve yönlendiriciler için, yalnızca cihaz
 sahibinin veya açıkça yetkilendirilmiş yöneticinin kullanacağı, cihaz yazılımı
@@ -16,8 +18,8 @@ sürümüne duyarlı erişim araştırması ve güvenli araçlar.
 > İlk hedef olan Türk Telekom ZTE H3600P
 > `H3600P V9.0 TTN.10_260210` sürümü için kamuya açık ve doğrulanmış bir
 > root/süper-yönetici yöntemi henüz yoktur. Eski WAN/TR-069 yöntemi bu sürümde
-> yamalanmıştır. Proje, eski yöntemi çalıştırmak yerine tam sürümü tanır ve
-> güvenli biçimde durur.
+> yamalandığı bildirilmiştir. Proje, eski yöntemi çalıştırmak yerine tam sürümü
+> tanır ve güvenli biçimde durur.
 
 ## Projenin amacı
 
@@ -65,7 +67,13 @@ Bir ISS'nin listede bulunması tüm modemlerinin desteklendiği anlamına gelmez
 | Standart yerel web yöneticisi | ISS tarafından destekleniyor |
 | Ayrıcalıklı web yöneticisi | Engelli; araştırma gerekli |
 | Linux root kabuğu | Desteklenmiyor |
-| Son kanıt incelemesi | 13 Eylül 2026 |
+| Son kanıt incelemesi | 27 Eylül 2026 |
+
+`V9.0` katalogda geçici ve doğrulaması çözümlenmemiş bir anahtardır. İncelenen
+yerel arayüz, donanım sürümünü `V9.0.7` olarak gösterir; bunun fiziksel kart
+revizyonuna ve `V9.0` anahtarına eşlenmesi henüz doğrulanmamıştır. Aşağıdaki
+örnekler bu araştırma kaydını seçer; başka bir revizyonun uyumluluğunu
+kanıtlamaz. Çevirinin güncellenmesi yeni bir fiziksel doğrulama anlamına gelmez.
 
 Ayrıntılar için [uyumluluk tablosuna](SUPPORT.md) ve
 [tam sürüm araştırma notuna](docs/research/zte-h3600p-ttn10-260210.md) bakın.
@@ -168,6 +176,103 @@ sürümünde güvenli yükleme veya root erişimi kanıtı değildir.
 Yalnızca açıkça belirtilen portları kontrol etmek için `--probe` eklenebilir.
 `apply` komutu bu sürümde kasıtlı olarak kapalıdır; sahiplik onayı verilse
 bile bu engelli tarifte hiçbir değişiklik yapmaz.
+
+## Kimlik doğrulamalı web kanıtı
+
+Yalnızca sahibi olduğunuz veya yönetmeye açıkça yetkili olduğunuz H3600P'de,
+güvenilir ve yalıtılmış ya da doğrudan yerel ağ üzerinden kullanın:
+
+```shell
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
+```
+
+Parola gizli terminal girişiyle istenir. HTTP onayı zorunludur: firmware'in
+challenge/hash giriş yöntemi, yerel HTTP trafiğinin yakalanmasına veya zayıf
+parolaların çevrimdışı tahmin edilmesine karşı güvenli bir kanal sağlamaz.
+Bu cihaza özgü, güçlü ve benzersiz bir parola kullanın. Komut yalnızca bir normal
+giriş denemesi yapar; başarısız girişleri tekrarlamaz. Yanlış parola, cihazın
+hesap kilitleme sayacını yine de etkileyebilir.
+
+Girişten sonra yalnızca sabit ve sınırlı GET istekleriyle kök ve cihaz-durum
+görünümleri okunur; `tr069`, `rsc`, kullanıcı yönetimi, `mirror` ve `capture`
+görünümleri yalnızca kimlik doğrulanmış sayfanın erişim haritasında aynı
+kimliklerle ilan edilmişse istenir. JSON; yanıt yapıları, erişim düzeyleri,
+izin verilen adlar ve işaret gözlemlerini içerir. Parola, çerez, parametre
+değeri veya ham sayfa yazdırılmaz ya da kaydedilmez. Sayfalara ayar gönderilmez;
+CWMP, kabuk, sıfırlama, yeniden başlatma, yükleme veya firmware isteği yapılmaz.
+Bu gözlemler root erişimini veya cihazın desteklendiğini kanıtlamaz.
+
+## Çevrimdışı UART kanıtı
+
+Elinizde bulunan özel bir UART kaydını ham içeriğini paylaşmadan inceleyin:
+
+```shell
+cpe-atlas uart-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --input h3600p-uart-private.log
+```
+
+Komut en fazla 8 MiB yerel dosya okur; seri port açmaz ve cihaza hiçbir şey
+göndermez. Yalnızca sınırlı, izin verilen açılış metaverilerini ve işaret
+gözlemlerini üretir; ham satırlar, dosya yolu, kimlik bilgileri ve sırlar
+yazdırılmaz. Beklenen firmware ve başka bir farklı sürüm birlikte görülürse
+`firmware_identity_status`, `conflicting-builds-observed` olur. Yinelenen veya
+yalnızca harf büyüklüğü farklı olan aynı sürüm bir çelişki sayılmaz. `matched`
+bile yalnızca sürüm metni gözlemidir; bir kabuk istemi veya UID 0 metni root
+doğrulaması değildir ve `root_access_verified` daima `false` kalır.
+
+## Özel kimlik dosyası ve yapılandırma
+
+Seri numarası ve MAC adresini kabuk geçmişinden ve süreç argümanlarından uzak
+tutmak için erişimi kısıtlı UTF-8 JSON dosyasında tam olarak
+`{"serial":"...","mac":"..."}` alanlarını saklayın. `--identity-file`, en fazla
+1 KiB okur ve içeriği yazdırmaz; `--serial` veya `--mac` ile birlikte kullanılmaz.
+MAC değeri küçük harfli olmalıdır. Özel bir başlangıç yedeğinden çevrimdışı,
+şifreli araştırma çıktısı örneği:
+
+```shell
+cpe-atlas config-generate --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --input-config config.bin --identity-file device-identity.private.json --output h3600p-research.bin --encrypted --acknowledge-legacy-crypto --acknowledge-unverified-compatibility --i-own-or-administer-this-device
+```
+
+SSH parolası ve gerekli cihaz şifreleme parolası gizli olarak istenir.
+Uyumluluk onayı; firmware kabulünü, root erişimini, hizmetlerin korunmasını
+veya kurtarmayı doğrulamaz. Başlangıç yedeği verilmeden üretilen asgari şablon,
+ISS'nin İnternet/VoIP/IPTV/VLAN/Wi-Fi/TR-069 ayarlarını korumaz. Şifrelenmemiş,
+kimlik bilgisi içeren çıktı ayrıca `--allow-unencrypted` gerektirir. Orijinal
+yedeği, kimlik dosyasını ve çıktıyı ayrı, özel ve güvenilir bir dizinde tutun;
+`--force` kullanılsa bile çıktı, yedek veya kimlik dosyasıyla aynı olamaz.
+
+## Yerel dosyaları kimlik doğrulamalı koruma
+
+Bu iki komut yalnızca yetkili olduğunuz yerel özel dosyalar içindir; parolayı
+komut satırına koymadan gizli istemi kullanırlar:
+
+```shell
+cpe-atlas private-protect --input config.bin --output config.bin.cpap --i-am-authorized-to-handle-this-private-file
+cpe-atlas private-unprotect --input config.bin.cpap --output restored-config.bin --i-am-authorized-to-handle-this-private-file
+```
+
+Yeni dosyalar sürüm 2 biçimini, taze salt, AES-GCM kimlik doğrulaması ve scrypt
+`N=2^17`, `r=8`, `p=1` parametrelerini kullanır. `private-unprotect`, eski sürüm 1
+dosyalarını da okur. Geçiş için sürüm 1 dosyasını ayrı özel bir dosyaya başarıyla
+çözdükten sonra yeniden koruyun; yeni yazımlar daima sürüm 2'dir. Bilinmeyen veya
+aşırı KDF parametreleri anahtar türetmeden önce reddedilir.
+
+Bu biçim **modeme aktarım biçimi değildir**; sırları sansürlemez, firmware
+uyumluluğunu kanıtlamaz ve yedeği yayımlanabilir hale getirmez. Korumalı dosya
+ve parolayı ayrı tutun; hiçbirini depoya veya hata raporuna eklemeyin. Çözülen dosya ve
+otomatik sansürlenen raporlar da özel kalır; paylaşmadan önce elle inceleyin.
+Parola 12–256 Unicode karakter olmalı; C0/C1 denetim karakterleri, satır/paragraf
+ayırıcıları ve surrogate kod noktaları içermemelidir. Tam metni koruyun:
+Unicode normalleştirmesi veya boşluk kırpma uygulanmaz.
+
+Gizli terminal girişi yoksa komut görünür girişe geçmeden durur. Otomasyonda
+web parolası için `--password-stdin`, dosya koruma parolası için
+`--passphrase-stdin` kullanın; yapılandırma sırları için yukarıda açıklanan
+stdin seçenekleri geçerlidir. Değerleri yalnızca özel bir pipe veya erişimi
+kısıtlı dosyadan sağlayın. Bu seçenekler terminal yankısını kapatmaz; görünür
+terminalde etkileşimli parola yazmak için kullanılmamalıdır. Ayrıntılar için
+[şifreleme notlarına](docs/config-cryptography.md#authenticated-local-container),
+[CLI başvurusuna](docs/cli-reference.md) ve
+[JSON/çıkış kodu sözleşmesine](docs/cli-output-contract.md) bakın.
 
 ## Erişim terimleri
 

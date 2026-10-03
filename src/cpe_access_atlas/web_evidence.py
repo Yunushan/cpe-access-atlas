@@ -20,6 +20,11 @@ from .policy import parse_single_private_address, parse_timeout
 
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_COOKIE_VALUE_CHARS = 4_096
+# Normal firmware sessions use one SID. Allow a small auxiliary session set,
+# while bounding both retained ASCII data and the complete outbound field.
+MAX_COOKIE_COUNT = 16
+MAX_RETAINED_COOKIE_BYTES = 8_192
+MAX_COOKIE_HEADER_BYTES = 8_192
 MAX_STRUCTURAL_IDENTIFIERS = 512
 MAX_PAGE_ACCESS_ENTRIES = 512
 MAX_JSON_NESTING = 64
@@ -276,7 +281,44 @@ def _read_bounded(response: HTTPResponse) -> bytes:
     return body
 
 
+def _safe_cookie_pair(name: object, value: object) -> bool:
+    return (
+        isinstance(name, str)
+        and isinstance(value, str)
+        and _SAFE_COOKIE_NAME.fullmatch(name) is not None
+        and len(value) <= MAX_COOKIE_VALUE_CHARS
+        and _SAFE_COOKIE_VALUE.fullmatch(value) is not None
+    )
+
+
+def _cookie_header(cookies: dict[str, str]) -> str:
+    """Validate the complete jar before constructing a bounded ASCII header."""
+
+    if len(cookies) > MAX_COOKIE_COUNT:
+        raise WebEvidenceError("router session exceeds the 16-cookie limit")
+    retained_bytes = 0
+    header_bytes = 0
+    fields: list[str] = []
+    for name, value in cookies.items():
+        if not _safe_cookie_pair(name, value):
+            raise WebEvidenceError("router session contains an unsafe cookie")
+        # The accepted grammar is ASCII, so character counts are byte counts.
+        pair_bytes = len(name) + len(value)
+        retained_bytes += pair_bytes
+        if retained_bytes > MAX_RETAINED_COOKIE_BYTES:
+            raise WebEvidenceError("router session exceeds the 8 KiB retained-cookie limit")
+        header_bytes += pair_bytes + 1 + (2 if fields else 0)
+        if header_bytes > MAX_COOKIE_HEADER_BYTES:
+            raise WebEvidenceError("router session exceeds the 8 KiB Cookie-header limit")
+        fields.append(f"{name}={value}")
+    return "; ".join(fields)
+
+
 def _remember_cookies(response: HTTPResponse, cookies: dict[str, str]) -> None:
+    # Internal callers must supply a valid bounded jar too. Work on a copy so
+    # a later response cookie cannot leave earlier replacements committed.
+    _cookie_header(cookies)
+    candidate = cookies.copy()
     for raw_cookie in response.msg.get_all("Set-Cookie", []):
         parsed = SimpleCookie()
         try:
@@ -285,12 +327,11 @@ def _remember_cookies(response: HTTPResponse, cookies: dict[str, str]) -> None:
             continue
         for name, morsel in parsed.items():
             value = morsel.value
-            if (
-                _SAFE_COOKIE_NAME.fullmatch(name)
-                and len(value) <= MAX_COOKIE_VALUE_CHARS
-                and _SAFE_COOKIE_VALUE.fullmatch(value)
-            ):
-                cookies[name] = value
+            if _safe_cookie_pair(name, value):
+                candidate[name] = value
+                _cookie_header(candidate)
+    cookies.clear()
+    cookies.update(candidate)
 
 
 def _request(
@@ -306,8 +347,9 @@ def _request(
         "Connection": "close",
         "User-Agent": "cpe-access-atlas/read-only-web-evidence",
     }
-    if cookies:
-        headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in cookies.items())
+    cookie_header = _cookie_header(cookies)
+    if cookie_header:
+        headers["Cookie"] = cookie_header
     if data is not None:
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         headers["Content-Length"] = str(len(data))
@@ -326,9 +368,10 @@ def _request(
         connection.request(method, path, body=data, headers=headers)
         response = connection.getresponse()
         body = _read_bounded(response)
-        _remember_cookies(response, cookies)
         content_type = response.getheader("Content-Type", "")
-        return _Response(status=response.status, content_type=content_type, body=body)
+        result = _Response(status=response.status, content_type=content_type, body=body)
+        _remember_cookies(response, cookies)
+        return result
     except (HTTPException, OSError, TimeoutError) as exc:
         raise WebEvidenceError("unable to complete the bounded local HTTP request") from exc
     finally:

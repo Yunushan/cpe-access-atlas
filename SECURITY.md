@@ -50,6 +50,11 @@ Session cookies are kept only in process memory and are never included in the
 evidence output. The client does not call a logout endpoint, so the router-side
 session may remain valid until the device expires or otherwise invalidates it.
 The operation performs no configuration change and makes no login retry.
+The client accepts at most 16 retained cookies, 8 KiB of combined cookie
+name/value data, and an 8 KiB serialized Cookie header. A response that exceeds
+these budgets fails with a sanitized error and leaves the prior cookie jar
+unchanged. These application budgets supplement the response, header, and
+absolute request-deadline limits.
 
 Never commit:
 

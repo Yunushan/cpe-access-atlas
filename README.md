@@ -67,7 +67,7 @@ combination of ISP, model, hardware revision, firmware, and access level.
 | Standard local web admin | ISP-supported |
 | Privileged web admin | Blocked; research required |
 | Linux root shell | Not supported |
-| Last evidence review | 2026-09-26 |
+| Last catalog evidence review | 2026-09-27 |
 
 Public community evidence says the older provisioning interception workflow
 does not work on this build. No official firmware image, recovery-tested
@@ -115,6 +115,8 @@ production-stable PyPI distribution.
 
 See [the full CLI reference](docs/cli-reference.md) for every command and
 option, generated directly from the CLI so it cannot drift out of date.
+Automation must follow [the versioned output and exit-status contract](docs/cli-output-contract.md):
+rendering a `STOP` plan successfully returns zero and never authorizes a device change.
 
 `cpe-atlas devices` lists model names found on official Turkish ISP device
 pages. These are public listing records only; they do not imply firmware
@@ -201,6 +203,9 @@ router. It reports only bounded metadata such as observed H3600P build strings,
 U-Boot/kernel versions, SoC/hardware identifiers, memory size, secure-boot text,
 and prompt-presence booleans. It never prints the input path or raw log, and an
 observed prompt is not reported as verified root access.
+If the expected firmware appears alongside a different build, the identity
+summary reports `conflicting-builds-observed`; it does not select one capture
+as the installed firmware.
 
 Only attempt a new capture on an owned spare or recovery-tested unit. Public
 research for an older Digi H3600P reports a 3.3 V AUX3 header at 115200 8N1,
@@ -392,6 +397,9 @@ It requires `--output`, never prints report contents to the terminal, and writes
 the result through the same owner-only artifact writer described above. Keep
 the destination directory private and under your control, and manually review
 every report, screenshot, capture, and exported text before sharing it.
+Valid JSON escape spellings of recognized sensitive keys are decoded for
+classification while their original formatting is preserved. This does not
+make malformed documents or unknown sensitive fields safe to publish.
 
 Modifying ISP-provided equipment can break connectivity, VoIP, IPTV, updates,
 remote support, warranty coverage, or contractual terms. Rented or loaned
@@ -436,6 +444,8 @@ the administrator-visible controls. The
 [operational-resilience runbook](docs/operations.md) defines the fail-closed
 incident, revocation, and recovery process and identifies the recovery exercise
 that remains required before a production-support claim.
+The [production readiness requirements](docs/production-readiness.md) bring
+the software, release, device, and operational evidence gates together.
 
 ## Research sources
 

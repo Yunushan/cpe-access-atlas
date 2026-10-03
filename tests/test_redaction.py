@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 import unittest
 from itertools import product
 from unittest.mock import patch
@@ -163,6 +164,163 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("abc.def.ghi", output)
         self.assertIn("[REDACTED-PUBLIC-IP]", output)
         self.assertIn("fd00::1", output)
+
+    def test_escaped_json_sensitive_keys_preserve_source_formatting(self) -> None:
+        for key in (
+            r"\u0070assword",
+            r"pass\u0077ord",
+            r"\u0063ook\u0069e",
+            r"\u0054oken",
+            r"api\u005fkey",
+            r"WPA\u005fPSK",
+            r"PreShared\u004bey",
+            r"cfg:pass\u0077ord",
+            r"vendor name-pass\u0077ord",
+            r"vendor\"-pass\u0077ord",
+            r"vendor\\-pass\u0077ord",
+            r"\ud83d\udd11-pass\u0077ord",
+        ):
+            for before_colon, after_colon in product(("", "\n", "\r\n \t"), repeat=2):
+                source = (
+                    f'{{ "{key}"{before_colon}:{after_colon}"SYNTHETIC_SECRET", '
+                    '"mode" : "bridge" }'
+                )
+                expected = source.replace("SYNTHETIC_SECRET", "[REDACTED]")
+                with self.subTest(key=key, before=before_colon, after=after_colon):
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+                    self.assertEqual(json.loads(expected)[json.loads(f'"{key}"')], "[REDACTED]")
+        self.assertEqual(
+            redact_text(r'"pass\u0077ord"=SYNTHETIC_SECRET mode=bridge'),
+            r'"pass\u0077ord"=[REDACTED] mode=bridge',
+        )
+
+    def test_escaped_json_nonsecret_keys_and_literal_text_escapes_are_preserved(self) -> None:
+        for key in (
+            r"\u006dode",
+            r"Password\u004cength",
+            r"WPA\u005fPSKEnabled",
+            r"pass\\u0077ord",
+            r"vendor\"-mode",
+            r"\ud83d\udd11-mode",
+        ):
+            source = f'{{"{key}":"visible","mode":"bridge"}}'
+            with self.subTest(key=key):
+                self.assertEqual(redact_text(source), source)
+                self.assertEqual(redact_text(redact_text(source)), source)
+        for source in (
+            r"pass\u0077ord=visible",
+            r"'pass\u0077ord': 'visible'",
+            r'<DM name="pass\u0077ord" val="visible"/>',
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(redact_text(source), source)
+
+    def test_malformed_json_key_escapes_use_conservative_literal_recognition(self) -> None:
+        for key in (r"\qpassword", r"\uZZZZ-password", r"\u123-password"):
+            source = f'{{"{key}":"SYNTHETIC_SECRET","mode":"bridge"}}'
+            expected = source.replace("SYNTHETIC_SECRET", "[REDACTED]")
+            with self.subTest(key=key):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        for key in (r"pass\uZZZZword", r"\qmode", "mode\\"):
+            source = f'{{"{key}":"visible"}}'
+            with self.subTest(key=key):
+                self.assertEqual(redact_text(source), source)
+                self.assertEqual(redact_text(redact_text(source)), source)
+
+    def test_surrogate_json_key_escapes_never_require_reencoding(self) -> None:
+        for key in (r"\ud800-pass\u0077ord", r"\udfff-pass\u0077ord"):
+            source = f'{{"{key}":"SYNTHETIC_SECRET"}}'
+            expected = source.replace("SYNTHETIC_SECRET", "[REDACTED]")
+            with self.subTest(key=key):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+                self.assertEqual(expected.encode("utf-8").decode("utf-8"), expected)
+        for key in (r"\ud800-mode", r"\udfff-mode"):
+            source = f'{{"{key}":"visible"}}'
+            with self.subTest(key=key):
+                self.assertEqual(redact_text(source), source)
+
+    def test_long_escaped_json_keys_keep_bounded_forward_scanning(self) -> None:
+        prefix = r"vendor\u005f" * 20_000
+        secret = f'{{"{prefix}pass\\u0077ord":"SYNTHETIC_SECRET","mode":"bridge"}}'
+        expected = secret.replace("SYNTHETIC_SECRET", "[REDACTED]")
+        self.assertEqual(redact_text(secret), expected)
+        self.assertEqual(redact_text(expected), expected)
+        public = f'{{"{prefix}Setting":"visible"}}'
+        self.assertEqual(redact_text(public), public)
+        incomplete = '"' + (r"vendor\"name " * 20_000)
+        self.assertEqual(redact_text(incomplete), incomplete)
+
+    def test_large_quoted_and_folded_inputs_do_not_amplify_working_memory(self) -> None:
+        # Allocate fixtures first: measure redaction's additional working memory,
+        # including output, rather than the test's input/expected strings. The
+        # old quote/fold loops used 100-300 MiB for these 1 Mi-character inputs.
+        size = 1024 * 1024
+        plain = "a" * size
+        escaped = r"a\"b\\c" * (size // 7)
+        folded = " \n" * (size // 2)
+        pem_prefix = "A " * (size // 2)
+        quoted_key = f'{{"{plain}":"visible"}}'
+        escaped_key = f'{{"{escaped}":"visible"}}'
+        incomplete_key = '"' + plain
+        incomplete_escaped_key = '"' + escaped
+        pem_begin = f"-----BEGIN {pem_prefix}PRIVATE KEY-----"
+        malformed_pem = f"-----BEGIN {pem_prefix}PUBLIC KEY-----\nvisible"
+        cases = (
+            ("quoted key", quoted_key, quoted_key),
+            ("escaped key", escaped_key, escaped_key),
+            ("unterminated key", incomplete_key, incomplete_key),
+            ("unterminated escaped key", incomplete_escaped_key, incomplete_escaped_key),
+            ("quoted secret", f'password="{plain}"', 'password="[REDACTED]"'),
+            ("single-quoted secret", f"password='{plain}'", "password='[REDACTED]'"),
+            ("escaped secret", f'password="{escaped}"', 'password="[REDACTED]"'),
+            ("unterminated secret", f'password="{plain}', "password=[REDACTED]"),
+            (
+                "quoted authorization",
+                f'Captured Authorization: "{plain}"',
+                'Captured Authorization: "[REDACTED]"',
+            ),
+            (
+                "escaped authorization",
+                f'Captured Authorization: "{escaped}"',
+                'Captured Authorization: "[REDACTED]"',
+            ),
+            (
+                "single-quoted authorization",
+                f"Captured Authorization: '{plain}'",
+                "Captured Authorization: '[REDACTED]'",
+            ),
+            (
+                "unterminated authorization",
+                f'Captured Authorization: "{plain}',
+                "Captured Authorization: [REDACTED]",
+            ),
+            ("folded cookie", "Cookie: SID=secret\n" + folded, "Cookie: [REDACTED]\n"),
+            (
+                "folded authorization",
+                "Authorization: Custom secret\n" + folded,
+                "Authorization: [REDACTED]\n",
+            ),
+            (
+                "captured folded authorization",
+                "Captured Authorization: Custom secret\n" + folded,
+                "Captured Authorization: [REDACTED]\n",
+            ),
+            ("PEM words", pem_begin + "\nsecret", pem_begin + "\n[REDACTED]\n"),
+            ("malformed PEM words", malformed_pem, malformed_pem),
+        )
+        for label, source, expected in cases:
+            with self.subTest(input=label):
+                tracemalloc.start()
+                try:
+                    output = redact_text(source)
+                    _, peak = tracemalloc.get_traced_memory()
+                finally:
+                    tracemalloc.stop()
+                self.assertEqual(output, expected)
+                self.assertLess(peak, 20 * 1024 * 1024)
 
     def test_redacts_quoted_secrets_and_auth_headers(self) -> None:
         output = redact_text(
@@ -522,6 +680,24 @@ class RedactionTests(unittest.TestCase):
                 output = redact_text(source)
                 self.assertNotIn("SYNTHETIC_KEY_MATERIAL", output)
                 self.assertEqual(output, redact_text(output))
+
+    def test_private_key_kind_words_cannot_consume_the_required_delimiter(self) -> None:
+        for prefix in (
+            "PRIVATE KEY RSA ",
+            "RSA PRIVATE KEY ENCRYPTED ",
+            "PRIVATE PRIVATE KEY ",
+            "ENCRYPTED OPENSSH ",
+        ):
+            kind = prefix + "PRIVATE KEY"
+            begin, end = f"-----BEGIN {kind}-----", f"-----END {kind}-----"
+            for suffix in (end + "\nvisible", "-----END OTHER PRIVATE KEY-----", ""):
+                source = begin + "\nSYNTHETIC_KEY_MATERIAL\n" + suffix
+                expected = begin + "\n[REDACTED]\n" + (suffix if suffix.startswith(end) else "")
+                with self.subTest(kind=kind, suffix=suffix):
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+        malformed = "-----BEGIN RSA PRIVATE KEY WITHOUT DELIMITER-----\nvisible"
+        self.assertEqual(redact_text(malformed), malformed)
 
     def test_report_size_limit_is_enforced(self) -> None:
         with patch("cpe_access_atlas.redaction.MAX_REPORT_CHARS", 16):

@@ -58,7 +58,9 @@ stable until its hardware verification status is `exact`.
 
 ### Why it is not marked supported
 
-As of 2026-09-13:
+The catalog evidence was reviewed on 2026-09-27; the
+[research note](docs/research/zte-h3600p-ttn10-260210.md) also records the
+2026-10-02 public-source follow-up. Neither review supplies device qualification:
 
 - the archived community tool states that newer firmware is unsupported and
   limits its working range to older builds;

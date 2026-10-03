@@ -137,9 +137,14 @@ def _security_state(data: bytes, subject: bytes) -> str:
 
 
 def _firmware_status(versions: tuple[str, ...], expected: str) -> str:
-    if any(version.casefold() == expected.casefold() for version in versions):
+    """Match only when the capture identifies one distinct compatible build."""
+
+    distinct_versions = {version.casefold() for version in versions}
+    if expected.casefold() in distinct_versions:
+        if len(distinct_versions) > 1:
+            return "conflicting-builds-observed"
         return "matched"
-    if versions:
+    if distinct_versions:
         return "different-build-observed"
     return "not-observed"
 
