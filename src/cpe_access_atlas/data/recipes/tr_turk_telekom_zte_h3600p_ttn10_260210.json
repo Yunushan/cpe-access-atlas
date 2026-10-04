@@ -92,11 +92,24 @@
     {
       "title": "H298A-only CWMP proof-of-concept reviewed as a cross-model lead",
       "url": "https://github.com/Faharee/ZTE-H298A-Root"
+    },
+    {
+      "title": "Other-model factory-mode field report requiring existing superadmin access",
+      "url": "https://github.com/FuLi001/zte_modem_tools/blob/eb7ff65f16ace0c2b8ab784dd5f227c3666d8c6b/docs/g7615tv2-xe-wuhan-telecom.md"
+    },
+    {
+      "title": "H3601P documentation without published firmware implementation, reviewed as a cross-model lead",
+      "url": "https://github.com/wmemcmp/h3601p/blob/fa450d7be1b06d807ef6528023850bf21d4e40cc/README.md"
+    },
+    {
+      "title": "Official generic H3600P TR-064 product capability, not exact-build access proof",
+      "url": "https://www.zte.com.cn/global/home_and_enterprise/smart_home/zxhn_h3600p.html"
     }
   ],
   "next_evidence": [
     "An authoritative, sanitized mapping from the physical board revision to the signed-in UI's Donanım Versiyonu V9.0.7 and the provisional catalog V9.0 key; the inspected underside label shows the model but no revision or firmware marking, and original credentials and identifiers must remain private.",
-    "Sanitized authenticated web-evidence output showing which advertised privilege-level-3 page views the known standard account can read and which parameter names they expose.",
+    "An exact-build account/service handler or an additional advertised operation that bridges the privilege gap; retained ordinary-admin checks already rendered rsc and tr069 views as 404 pages, without establishing backend absence or an authorization bypass.",
+    "The same device's actual configuration-encryption input and a validated private baseline decryption; retained type-4 exports remain encrypted, and serial/MAC or the chosen SSH password are not substitutes for that input.",
     "Private SHA-256 hash and offline inspection of an exact TTN.10_260210 firmware artifact, if available.",
     "An exact-build parameter inventory showing whether the reported access-control paths exist.",
     "A source-reviewed, isolated observation of the H3600P CWMP data model before any parameter is sent.",
@@ -105,5 +118,5 @@
     "Sanitized protocol metadata proving the requested change and a separate login verification.",
     "Independent reproduction that preserves Internet, IPTV, VoIP, and WAN-management safety."
   ],
-  "last_reviewed": "2026-09-27"
+  "last_reviewed": "2026-10-04"
 }
