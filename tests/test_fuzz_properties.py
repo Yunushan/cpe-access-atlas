@@ -133,6 +133,105 @@ class ConfigDecodingFuzzTests(unittest.TestCase):
 
 
 class RedactionFuzzTests(unittest.TestCase):
+    @given(
+        st.sampled_from(("[SYNTHETIC_FIRST]", "{SYNTHETIC_FIRST}")),
+        st.sampled_from((" ", ";", ",", "}", "]", "\t")),
+        st.text(alphabet="abcXYZ019 _-;,'\"&/\\{}[]!$%çğşΩ", max_size=200),
+    )
+    @_SUITE_SETTINGS
+    def test_container_prefixes_mask_complete_plaintext_suffixes(
+        self, prefix: str, separator: str, suffix: str
+    ) -> None:
+        source = f"password={prefix}{separator}SYNTHETIC_{suffix}_TAIL mode=bridge"
+        expected = 'password="[REDACTED]" mode=bridge'
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+
+    @given(
+        st.recursive(
+            st.one_of(
+                st.none(),
+                st.booleans(),
+                st.integers(),
+                st.text(alphabet="aAzZ019 _-:;,\"'\\{}[]<>&\t\r\nçğşΩ🔑", max_size=64),
+            ),
+            lambda children: st.one_of(
+                st.lists(children, max_size=5),
+                st.dictionaries(st.sampled_from(("value", "hint", "unknown")), children),
+            ),
+            max_leaves=30,
+        ),
+        st.sampled_from(("password", "cookie", "authorization", "WPA_PSK")),
+        st.sampled_from((None, 0, 2, "\t")),
+    )
+    @_SUITE_SETTINGS
+    def test_sensitive_json_subtrees_are_removed_without_exposing_descendants(
+        self, subtree: object, name: str, indent: int | str | None
+    ) -> None:
+        secret = {"value": subtree, "marker": "SYNTHETIC_SECRET"}
+        source = json.dumps({name: secret, "mode": "bridge"}, indent=indent, ensure_ascii=False)
+        expected = json.dumps(
+            {name: "[REDACTED]", "mode": "bridge"}, indent=indent, ensure_ascii=False
+        )
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(json.loads(expected), {name: "[REDACTED]", "mode": "bridge"})
+        self.assertEqual(redact_text(expected), expected)
+
+    @given(
+        st.lists(
+            st.text(alphabet="abc019 ;,={}[]!$&'\"çğşΩ", max_size=80),
+            min_size=1,
+            max_size=20,
+        ),
+        st.sampled_from(("", "  ", "- ", "  -   ")),
+        st.sampled_from(("\n", "\r\n", "\r")),
+    )
+    @_SUITE_SETTINGS
+    def test_yaml_plain_scalar_continuations_are_fully_removed(
+        self, lines: list[str], prefix: str, newline: str
+    ) -> None:
+        indentation = " " * (len(prefix) + 2)
+        sibling = " " * len(prefix)
+        source = (
+            f"{prefix}password: SYNTHETIC_FIRST{newline}"
+            + "".join(f"{indentation}SYNTHETIC_{line}{newline}" for line in lines)
+            + f"{sibling}mode: bridge{newline}"
+        )
+        expected = f"{prefix}password: [REDACTED]{newline}{sibling}mode: bridge{newline}"
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+
+    @given(
+        st.lists(
+            st.text(alphabet="abc019 ;,={}[]!$&çğşΩ", max_size=80),
+            min_size=1,
+            max_size=20,
+        ),
+        st.sampled_from(('"', "'")),
+        st.sampled_from(("", "  ", "- ", "  -   ")),
+        st.sampled_from(("\n", "\r\n", "\r")),
+    )
+    @_SUITE_SETTINGS
+    def test_yaml_sensitive_mappings_remove_quoted_keys_and_all_values(
+        self, values: list[str], quote: str, prefix: str, newline: str
+    ) -> None:
+        indentation = " " * (len(prefix) + 2)
+        sibling = " " * len(prefix)
+        source = (
+            f"{prefix}password:{newline}"
+            + "".join(
+                f"{indentation}{quote}key{index}{quote}: {quote}SYNTHETIC_{value}{quote}{newline}"
+                for index, value in enumerate(values)
+            )
+            + f"{sibling}mode: bridge{newline}"
+        )
+        expected = (
+            f"{prefix}password:{newline}{indentation}[REDACTED]{newline}"
+            f"{sibling}mode: bridge{newline}"
+        )
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+
     @given(st.text(alphabet="aAzZ019 _-:;,'\"\\<>&\t\r\nçğşΩ🔑", max_size=512))
     @_SUITE_SETTINGS
     def test_quoted_text_credentials_preserve_escaped_delimiters(self, value: str) -> None:

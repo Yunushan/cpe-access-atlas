@@ -56,6 +56,12 @@ these budgets fails with a sanitized error and leaves the prior cookie jar
 unchanged. These application budgets supplement the response, header, and
 absolute request-deadline limits.
 
+The evidence report retains the supplied private IP in its `host` field.
+Keep reports private and remove addresses before sharing. The client rejects
+an incomplete declared HTTP body and stops on HTTP 401 during collection;
+neither condition causes a login retry. HTTP 403 remains an authorization
+observation, not proof that authentication failed.
+
 Never commit:
 
 - exported modem configuration files;
@@ -72,6 +78,15 @@ is an operational signal, not a guaranteed alert or response service. Release
 artifacts are generated with a CycloneDX SBOM, SHA-256 checksums, and GitHub
 build-provenance attestations once the release workflow is enabled for a
 protected tag.
+
+The `gitleaks` job installs a fixed scanner version with a reviewed archive
+SHA-256 and checks its version before execution. It scans the complete
+checked-out history, including merge-only and binary-attributed changes, and
+the current tree. Independent Git integrity checks reject missing or corrupt
+history before scanning; repository fingerprint ignore files are rejected and
+inline allow comments cannot suppress findings. Real-scanner regression fixtures
+run in the same job so a passing Python-only test suite cannot substitute for the
+secret-scanning gate.
 
 "No open CodeQL alerts" is not a claim of zero findings. High/critical alerts
 dismissed as accepted compatibility risks must exactly match the numbered,

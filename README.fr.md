@@ -161,6 +161,13 @@ requête CWMP, shell, réinitialisation, redémarrage, téléversement ou firmwa
 n'est envoyée. Ces observations ne prouvent ni l'accès root ni la prise en
 charge de l'appareil.
 
+Le champ JSON `host` contient l'adresse IP privée fournie. Conservez le rapport
+en privé et retirez cette adresse avant de le partager. Un corps HTTP plus court
+que sa longueur déclarée ou une réponse HTTP 401 pendant la collecte interrompt
+l'opération sans nouvelle
+tentative de connexion. HTTP 403 peut indiquer qu'un compte authentifié n'est
+pas autorisé à consulter la page concernée.
+
 ## Preuves UART hors ligne
 
 Examinez un journal UART privé déjà disponible sans en publier le contenu brut :

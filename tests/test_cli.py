@@ -1273,7 +1273,7 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("manual-review-needed", stdout)
                 self.assertNotIn(str(output), stdout)
                 self.assertIn("Manual review required before sharing", stdout)
-                self.assertIn("unrecognized sensitive fields may remain", stdout)
+                self.assertIn("unsupported formats or unrecognized fields", stdout)
                 self.assertIn("Never upload configuration backups", stdout)
                 self.assertEqual(list(Path(directory).glob(".redacted.txt.*")), [])
 

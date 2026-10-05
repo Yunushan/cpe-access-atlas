@@ -268,16 +268,23 @@ class _DeadlineSocket:
 
 def _read_bounded(response: HTTPResponse) -> bytes:
     raw_length = response.getheader("Content-Length")
-    if raw_length is not None:
+    expected_length = None
+    # HTTPResponse resolves framing before this call: chunked transfer coding
+    # overrides Content-Length, while bodyless responses have an effective
+    # length of zero. Save that effective length before read() consumes it.
+    if raw_length is not None and not response.chunked:
         try:
             declared_length = int(raw_length)
         except ValueError as exc:
             raise WebEvidenceError("router returned an invalid Content-Length header") from exc
         if declared_length < 0 or declared_length > MAX_RESPONSE_BYTES:
             raise WebEvidenceError("router response exceeds the 1 MiB evidence limit")
+        expected_length = response.length
     body = response.read(MAX_RESPONSE_BYTES + 1)
     if len(body) > MAX_RESPONSE_BYTES:
         raise WebEvidenceError("router response exceeds the 1 MiB evidence limit")
+    if expected_length is not None and len(body) != expected_length:
+        raise WebEvidenceError("router response ended before its declared Content-Length")
     return body
 
 
@@ -390,6 +397,19 @@ def _request(
 def _require_ok(response: _Response, label: str) -> None:
     if response.status != 200:
         raise WebEvidenceError(f"{label} returned HTTP {response.status}; no retry was attempted")
+
+
+def _reject_authentication_loss(response: _Response) -> None:
+    if response.status == 401:
+        raise WebEvidenceError(
+            "router rejected the authenticated session with HTTP 401; "
+            "no further page requests were attempted"
+        )
+    if _looks_like_login_page(response.body):
+        raise WebEvidenceError(
+            "router returned the login page after accepting the login response; "
+            "no further page requests were attempted"
+        )
 
 
 def _json_object(response: _Response, label: str) -> dict[str, Any]:
@@ -795,18 +815,15 @@ def collect_zte_web_evidence(
     }
     root_markers = dict.fromkeys(_ROOT_RESEARCH_MARKERS, False)
     for name, path in _READ_ONLY_ENDPOINTS:
+        response = _request(target, "GET", path, bounded_timeout, cookies)
+        _reject_authentication_loss(response)
         endpoint = _endpoint_evidence(
-            _request(target, "GET", path, bounded_timeout, cookies),
+            response,
             expected_firmware=expected_firmware,
             expected_model=expected_model,
             expected_hardware=expected_hardware,
         )
         endpoints[name] = endpoint
-        if name == "authenticated_root" and endpoint["login_page_detected"]:
-            raise WebEvidenceError(
-                "router returned the login page after accepting the login response; "
-                "no management page probes were attempted"
-            )
         for key in identity_markers:
             identity_markers[key] = (
                 identity_markers[key] or endpoint["expected_identity_markers"][key]
@@ -821,14 +838,16 @@ def collect_zte_web_evidence(
     for page_id in _ROOT_RESEARCH_PAGE_IDS:
         if page_id not in advertised_ids:
             continue
+        response = _request(
+            target,
+            "GET",
+            f"/?_type=menuView&_tag={page_id}&Menu3Location=0",
+            bounded_timeout,
+            cookies,
+        )
+        _reject_authentication_loss(response)
         endpoint = _endpoint_evidence(
-            _request(
-                target,
-                "GET",
-                f"/?_type=menuView&_tag={page_id}&Menu3Location=0",
-                bounded_timeout,
-                cookies,
-            ),
+            response,
             expected_firmware=expected_firmware,
             expected_model=expected_model,
             expected_hardware=expected_hardware,

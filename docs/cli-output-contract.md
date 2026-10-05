@@ -43,6 +43,17 @@ Target records contain `id`, `status`, `confidence`, `isp`, `device`,
 `qualification_records`. They expose reviewed catalog assertions, not a live
 identity check of the unit selected by the operator.
 
+`web_evidence.host` retains the supplied private target IP. Sanitized output
+excludes credentials, cookies, raw pages, and HTML input/parameter values; it
+does not make the report suitable for publication without manual review and
+removal of private addresses. `authenticated: true` records an accepted login
+response and collection without an observed HTTP 401 or return to the login
+page. It does not prove firmware identity or access to every page: a 403 can
+legitimately report an authenticated account's lack of authorization. An HTTP
+401 during collection fails the command without retrying the login or emitting
+a successful report. A body shorter than its effective declared HTTP length
+also fails rather than becoming incomplete successful evidence.
+
 Firmware matching results may be null when no corresponding expectation was
 supplied. `firmware_evidence_matches` concerns strings and an optional supplied
 hash; `firmware_identity_verified` remains false in this release. These fields
