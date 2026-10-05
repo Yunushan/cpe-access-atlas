@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tracemalloc
 import unittest
 from itertools import product
@@ -10,6 +12,7 @@ from unittest.mock import patch
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+import cpe_access_atlas.redaction as redaction
 from cpe_access_atlas.redaction import RedactionError, redact_text
 
 
@@ -625,6 +628,62 @@ class RedactionTests(unittest.TestCase):
                 self.assertEqual(redact_text(expected), expected)
         self.assertEqual(redact_text("password: &synthetic \n"), "password: [REDACTED]\n")
         self.assertEqual(redact_text("password: # comment"), "password: [REDACTED]")
+
+    def test_yaml_prefixes_are_not_revisited_as_assignments(self) -> None:
+        # This deterministic operation-count invariant does not depend on CPU
+        # speed. The old outer cursor called the prefix scanner once per fake
+        # assignment, repeatedly traversing the same remaining property chain.
+        for prefix, count in product(
+            (
+                "password: !<",
+                "password: &",
+                "password: !",
+                "password:&",
+                "password:!",
+                "password: # ",
+                "password: # c\n&",
+            ),
+            (8, 64, 256),
+        ):
+            with self.subTest(prefix=prefix, count=count):
+                with patch.object(
+                    redaction, "_yaml_value_start", wraps=redaction._yaml_value_start
+                ) as scanner:
+                    redaction._redact_container_assignments(prefix * count)
+                self.assertEqual(scanner.call_count, 1)
+        for malformed in (
+            "!<missing",
+            "!<tag>without-separation",
+            "!<tag\nvalue",
+            "&",
+        ):
+            source = f"password: {malformed}\nSYNTHETIC_DESCENDANT\nmode: bridge"
+            self.assertEqual(redact_text(source), 'password: "[REDACTED]"')
+        self.assertEqual(redact_text("password: !"), 'password: "[REDACTED]"')
+
+    def test_large_yaml_prefix_chains_complete_with_bounded_resources(self) -> None:
+        # Use a generous process deadline, not a tiny/flaky timing assertion.
+        # Each input is under 600 KiB. The former cubic malformed-tag scan
+        # needed seconds for 12 KiB; the 40,000-prefix case cannot pass by
+        # merely optimizing that repeated-suffix implementation's constants.
+        script = """
+from cpe_access_atlas.redaction import redact_text
+for prefix in ('password: !<', 'password: &', 'password: !', 'password:&', 'password:!',
+               'password: # ', 'password: # c\\n&'):
+    output = redact_text(prefix * 40000)
+    if prefix == 'password: !<':
+        assert output == 'password: "[REDACTED]"'
+print('completed seven bounded prefix cases')
+"""
+        result = subprocess.run(  # noqa: S603 - fixed test-authored script and current interpreter
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "completed seven bounded prefix cases")
 
     def test_json_atom_prefixes_do_not_expose_yaml_plain_scalar_continuations(self) -> None:
         for atom in ("123", "true", "false", "null", "-1.2e+3"):

@@ -55,7 +55,7 @@ _JSON_VALUE_BOUNDARY = re.compile(r"[ \t\r\n]*(?=[,}\]]|\Z)")
 _REPORT_LINES = re.compile(r"[^\r\n]*(?:\r\n?|\n|\Z)")
 _YAML_BLOCK = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?[ \t]*(?:#.*)?\Z")
 _YAML_SEQUENCE = re.compile(r"-(?:[ \t]|\Z)")
-_YAML_PROPERTY = re.compile(r"(?:&[^\s,\[\]{}]+|!<[^>\r\n]*>|![^\s,\[\]{}]*)[ \t\r\n]+")
+_YAML_PROPERTY = re.compile(r"(?:&[^\s,\[\]{}]+|!<[^>\r\n]*>|!(?!<)[^\s,\[\]{}]*)[ \t\r\n]+")
 # Consume the complete HTTP value, including obsolete folded continuations.
 # Applying the assignment matcher alone would leave every cookie after ';'.
 # Continuation lines cannot consume their following CR/LF, and no suffix needs
@@ -189,8 +189,8 @@ def _container_value_end(value: str, position: int) -> int:
     return len(value)
 
 
-def _yaml_value_start(value: str, position: int) -> int:
-    """Skip bounded YAML properties/comments before a sensitive flow value."""
+def _yaml_value_start(value: str, position: int) -> int | None:
+    """Skip YAML prefixes once; an ambiguous property consumes the remainder."""
 
     while position < len(value):
         if value[position] == "#":
@@ -199,6 +199,11 @@ def _yaml_value_start(value: str, position: int) -> int:
                 position += 1
         elif property_match := _YAML_PROPERTY.match(value, position):
             position = property_match.end()
+        elif value[position] in "!&":
+            # A property lacking its terminator/separator is ambiguous. Do not
+            # retry assignments inside the token just scanned; that repeats an
+            # absent-terminator search for each fake key in a malformed suffix.
+            return None
         else:
             break
     return position
@@ -241,7 +246,9 @@ def _redact_container_assignments(value: str) -> str:
         container_start = (
             _yaml_value_start(value, position) if ":" in match.group("separator") else position
         )
-        if (
+        if container_start is None:
+            end = len(value)
+        elif (
             container_start < len(value)
             and value[container_start] in "[{"
             and not value.startswith("[REDACTED]", container_start)
@@ -277,6 +284,10 @@ def _redact_container_assignments(value: str) -> str:
             if _JSON_VALUE_BOUNDARY.match(value, end) is None:
                 end = _flow_plain_value_end(value, end)
         else:
+            # Prefixes can contain apparent assignments (including inside a
+            # comment). They have already been inspected; restarting the next
+            # search inside them makes long property chains quadratic.
+            position = container_start
             continue
         output.write(value[cursor:position])
         output.write('"[REDACTED]"')

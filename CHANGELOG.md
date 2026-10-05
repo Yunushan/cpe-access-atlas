@@ -6,8 +6,9 @@ All notable changes are documented here.
 
 - Redact complete sensitive JSON/flow containers and YAML plain or nested
   continuation values, so recognized fields cannot retain descendant values
-  merely because they span lines. Add structured and property-based regressions;
-  manual review before sharing remains required.
+  merely because they span lines. Keep malformed YAML property scans bounded and
+  add structured, property-based, and adversarial-input regressions; manual
+  review before sharing remains required.
 - Reject HTTP bodies that end before their effective declared length. Preserve
   chunked and bodyless framing semantics, and reject incomplete responses before
   retaining their cookies. Stop web-evidence collection on HTTP 401 or a returned
