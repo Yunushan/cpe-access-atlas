@@ -348,16 +348,19 @@ class WebTLSIntegrationTests(unittest.TestCase):
         self.assertEqual(server.prefixes[0][:1], b"\x16")
 
     def test_connect_tls_and_response_share_one_deadline(self) -> None:
+        # Each phase fits within five seconds, but their sum does not. Leave
+        # real TLS and runner scheduling enough headroom to reach HTTP before
+        # the shared deadline expires; resetting it per phase would succeed.
         server = _LoopbackTLS(
             self.server_contexts["trusted"],
             [_http(b"too late")],
-            connect_delay=0.35,
-            handshake_delay=0.35,
-            response_delay=0.45,
+            connect_delay=1,
+            handshake_delay=1,
+            response_delay=3.5,
         )
         with server.running():
             with self.assertRaises(WebEvidenceError) as raised:
-                _request(TARGET, "GET", "/", 1, {}, tls_context=self.client_context())
+                _request(TARGET, "GET", "/", 5, {}, tls_context=self.client_context())
         self.assertIsInstance(raised.exception.__cause__, TimeoutError)
         self.assertEqual(server.connections, [(TARGET, 443)])
         self.assertEqual(len(server.requests), 1)
