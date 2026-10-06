@@ -161,17 +161,19 @@ def check_sdist(
             "COVERAGE_FILE": str(extracted / ".coverage"),
         }
         config = str(extracted / "pyproject.toml")
+        # The complete suite includes real subprocess, filesystem and TLS work.
+        # Give it bounded runner headroom without extending coverage reporting.
         commands = (
-            ["run", "--rcfile", config, "-m", "unittest", "discover", "-s", "tests", "-v"],
-            ["report", "--rcfile", config, "-m"],
+            (["run", "--rcfile", config, "-m", "unittest", "discover", "-s", "tests", "-v"], 600),
+            (["report", "--rcfile", config, "-m"], 300),
         )
-        for command in commands:
+        for command, timeout in commands:
             subprocess.run(  # noqa: S603 -- fixed tool/args; execute only reviewed local archives
                 [sys.executable, "-m", "coverage", *command],
                 cwd=extracted,
                 env=environment,
                 check=True,
-                timeout=300,
+                timeout=timeout,
             )
     print("Source archive matches the reviewed source; bundled tests and coverage passed.")
 
