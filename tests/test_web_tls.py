@@ -274,6 +274,9 @@ class WebTLSIntegrationTests(unittest.TestCase):
                 expected_hardware="V9",
                 tls_ca_pem=self.ca_pem,
             )
+        self.assertEqual(result["transport"], "local-https")
+        self.assertIs(result["tls_peer_verified"], True)
+        self.assertEqual(result["tls_trust_source"], "provided-ca")
         self.assertTrue(result["authenticated"])
         self.assertEqual(result["login_attempts"], 1)
         self.assertEqual(len(server.requests), 6)

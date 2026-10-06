@@ -399,6 +399,9 @@ class WebEvidenceTests(unittest.TestCase):
                 expected_hardware="V9.0",
             )
 
+        self.assertEqual(result["transport"], "local-http")
+        self.assertIs(result["tls_peer_verified"], False)
+        self.assertEqual(result["tls_trust_source"], "not-applicable")
         self.assertTrue(result["authenticated"])
         self.assertEqual(result["login_attempts"], 1)
         self.assertEqual(
@@ -550,6 +553,9 @@ class WebEvidenceTests(unittest.TestCase):
                 expected_model="H3600P V9",
                 expected_hardware="V9.0",
             )
+        self.assertEqual(result["transport"], "local-https")
+        self.assertIs(result["tls_peer_verified"], True)
+        self.assertEqual(result["tls_trust_source"], "system")
         self.assertFalse(result["observed_root_research_string_markers"]["root_literal"])
         self.assertFalse(
             result["endpoints"]["status_data"]["root_research_string_markers"]["root_literal"]
