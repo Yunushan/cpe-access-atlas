@@ -35,10 +35,14 @@ Before creating a tag:
 
    ```shell
    python -m pip install --require-hashes -r requirements-release.lock
-   python -m pip install -e . --no-deps --no-build-isolation
    python scripts/build_reproducible.py --dist-dir dist
    python -m twine check dist/*
+   python scripts/check_sdist.py --dist-dir dist
    ```
+
+   Use a fresh tooling environment with no installed project for this archive
+   check. CI's package-smoke job enforces the same condition, so neither the
+   archive tests nor their subprocesses may rely on an editable installation.
 
 5. Review the candidate yourself as the solo maintainer, then create an
    annotated `vX.Y.Z` tag and push it through the protected release process.

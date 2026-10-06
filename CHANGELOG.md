@@ -2,7 +2,7 @@
 
 All notable changes are documented here.
 
-## 0.4.0a8 - 2026-10-05
+## 0.4.0a8 - 2026-10-06
 
 - Redact complete sensitive JSON/flow containers and YAML plain or nested
   continuation values, so recognized fields cannot retain descendant values
@@ -22,6 +22,8 @@ All notable changes are documented here.
   including merge-only and binary-attributed changes, and the current tree.
   Independently reject incomplete or corrupt Git history and repository ignore
   suppressions. Require real-scanner regressions for these cases.
+- Run CI's source-archive checks without an installed project. Keep isolated
+  shell-helper discovery tests independent of an editable checkout installation.
 - Clarify the retained private target IP in web-evidence reports in all five
   README languages and the output contract. Prepare the next exact release tag
   and regenerate the CLI reference; no device qualification is promoted.
