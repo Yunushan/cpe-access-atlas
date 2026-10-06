@@ -86,9 +86,9 @@ requirements until an authorized administrator updates the repository settings.
   a new version through the protected process. See
   [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 - For the next candidate, `v0.4.0a9`, rotate the live tag rules and release
-  environment in the order below before creating its tag. The rules shown
-  here are the required candidate state, not a claim that the live settings
-  have already been changed.
+  environment using the fail-closed rotation procedure below before creating
+  its tag. The three rulesets below describe the required final state, not
+  their mutation order or a claim that live settings have already changed.
 - Protect release-tag creation with three deliberately separate rulesets:
   1. a rotating quarantine with `include: refs/tags/v*`, only
      `exclude: refs/tags/v0.4.0a9`, the creation restriction, and **no bypass
@@ -173,13 +173,21 @@ cannot be mistaken for a valid prepublication state. The script remains read-onl
 
 When rotating from one candidate to the next, avoid a transient open namespace:
 
-1. add the next exact trusted-creator rule while the next tag is still covered
-   by the zero-bypass quarantine;
-2. change the release environment's sole allowed tag to the next exact tag while
-   that tag is still quarantined;
-3. change the quarantine's single exclusion to the next exact tag;
-4. remove the prior candidate's exact creator rule; and
-5. run the prepublication audit successfully before creating the tag.
+1. remove every exclusion from the no-bypass `refs/tags/v*` creation quarantine
+   and verify that it denies all release-tag creation;
+2. while that quarantine stays closed, retarget the existing owner-only exact
+   creator rule to the next candidate without changing its trusted owner;
+3. change the release environment's sole allowed tag to the next exact tag,
+   retaining disabled administrator bypass;
+4. read back and verify both candidate controls before changing the quarantine;
+5. exclude only the next exact tag from the quarantine; and
+6. run the prepublication audit successfully before creating the tag.
+
+Keep the no-bypass update/deletion rule intact throughout. Never exclude a new
+candidate before its exact owner-only creation rule is active. If a mutation,
+read-back, or final audit fails, stop publication, ensure the creation quarantine
+again denies every release tag, and do not create a tag. Confirm the live state
+after an uncertain API outcome before continuing.
 
 If a candidate is abandoned, rotate the controls first and never create its tag.
 Already-created release tags are unaffected by adding a creation restriction and
