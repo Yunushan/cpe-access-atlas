@@ -69,6 +69,7 @@ class SdistTests(unittest.TestCase):
         self.archive()
         commands: list[list[str]] = []
         roots: list[Path] = []
+        timeouts: list[object] = []
 
         def run(command: list[str], **kwargs: object) -> None:
             root = kwargs["cwd"]
@@ -82,7 +83,7 @@ class SdistTests(unittest.TestCase):
             self.assertEqual(kwargs["env"]["COVERAGE_FILE"], str(root / ".coverage"))
             self.assertEqual(kwargs["env"]["CPE_ATLAS_TEST_ENV"], "preserved")
             self.assertIs(kwargs["check"], True)
-            self.assertEqual(kwargs["timeout"], 300)
+            timeouts.append(kwargs["timeout"])
             self.assertNotIn("shell", kwargs)
             self.assertEqual(command[:3], [sys.executable, "-m", "coverage"])
             self.assertIn(str(root / "pyproject.toml"), command)
@@ -103,6 +104,7 @@ class SdistTests(unittest.TestCase):
             ):
                 sdist.check_sdist(self.dist, self.source)
         self.assertEqual([command[0] for command in commands], ["run", "report"])
+        self.assertEqual(timeouts, [600, 300])
         self.assertEqual(commands[0][3:], ["-m", "unittest", "discover", "-s", "tests", "-v"])
         self.assertTrue(all(not root.exists() for root in roots))
         self.assertIn("bundled tests and coverage passed", output.getvalue())
@@ -324,7 +326,7 @@ class SdistTests(unittest.TestCase):
         self.archive()
         for failure in (
             subprocess.CalledProcessError(1, ["coverage"]),
-            subprocess.TimeoutExpired(["coverage"], 300),
+            subprocess.TimeoutExpired(["coverage"], 600),
         ):
             with self.subTest(failure=failure):
                 with patch.object(sdist.subprocess, "run", side_effect=failure) as run:

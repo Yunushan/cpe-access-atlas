@@ -39,7 +39,7 @@
       "review_by": "2027-03-18",
       "documentation": "docs/research/zte-h3600p-ttn10-260210.md",
       "compensating_controls": [
-        "web evidence requires an explicit local-HTTP authentication acknowledgement",
+        "legacy HTTP web evidence requires explicit HTTP transport selection and a local-HTTP authentication acknowledgement in both the CLI and public Python API; verified HTTPS is the default",
         "the client makes one login attempt with no automatic retry",
         "security guidance requires a trusted isolated or direct LAN and a high-entropy unique router password"
       ],
