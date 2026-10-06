@@ -138,15 +138,25 @@ Administration freigegebenen H3600P und über ein vertrauenswürdiges, isolierte
 oder direkt verbundenes LAN:
 
 ```shell
-cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device
 ```
 
-Das Passwort wird verdeckt abgefragt. Die HTTP-Bestätigung ist verpflichtend:
-Das Challenge/Hash-Verfahren der Firmware stellt keinen geschützten Kanal gegen
-das Mitlesen lokaler HTTP-Anmeldungen oder das Offline-Raten schwacher Passwörter
-bereit. Verwenden Sie ein starkes, nur für dieses Gerät genutztes Passwort.
-Der Befehl führt genau einen normalen Anmeldeversuch aus und wiederholt ihn
-nicht. Ein falsches Passwort kann trotzdem zur Kontosperre beitragen.
+Standard ist HTTPS auf Port 443 mit mindestens TLS 1.2 und Prüfung der
+Zertifikatskette sowie der angegebenen Ziel-IP anhand des Systemvertrauens.
+Für eine unabhängig als vertrauenswürdig bestätigte private CA verwenden Sie
+`--tls-ca-file trusted-router-ca.pem`. Erlaubt sind nur ASCII-PEM-Zertifikate,
+höchstens 65.536 Byte und acht Zertifikate; die IP-Prüfung bleibt aktiv. Ein
+Zertifikat aus einer ungeprüften Verbindung begründet kein unabhängiges
+Vertrauen. Bei einem Prüfungsfehler wird abgebrochen, ohne Weiterleitung,
+automatische Wiederholung oder Rückfall auf HTTP.
+
+Unverschlüsseltes HTTP auf Port 80 erfordert gleichzeitig `--transport http`
+und `--acknowledge-local-http-authentication`. Challenge-Antwort und Sitzung
+sind dabei ungeschützt; verwenden Sie nur ein vertrauenswürdiges, isoliertes
+oder direkt verbundenes LAN und ein starkes, gerätespezifisches Passwort.
+HTTPS mit HTTP-Bestätigung oder HTTP mit CA-Datei wird vor Passworteingabe und
+Netzwerkzugriff abgelehnt. Das Passwort wird verdeckt abgefragt. Es gibt genau
+einen normalen Anmeldeversuch; ein falsches Passwort kann zur Kontosperre beitragen.
 
 Nach der Anmeldung liest er nur feste, begrenzte GET-Ansichten der Startseite
 und des Gerätestatus. Die Ansichten `tr069`, `rsc`, Benutzerverwaltung, `mirror`
@@ -157,6 +167,12 @@ und Rohseiten werden weder ausgegeben noch gespeichert. Es werden keine
 Einstellungen abgesendet und keine CWMP-, Shell-, Reset-, Neustart-, Upload-
 oder Firmware-Anfragen ausgeführt. Diese Beobachtungen belegen weder Root-Zugriff
 noch Gerätesupport.
+JSON enthält `transport` als `local-https` oder `local-http` sowie
+`tls_peer_verified` und `tls_trust_source`, aber keine Details des
+Serverzertifikats. `SSLKEYLOGFILE` aktiviert keine Aufzeichnung von
+TLS-Sitzungsgeheimnissen. Verifizierte HTTPS-Anmeldung und Zertifikatsbereitstellung
+sind auf dem konkreten TTN.10-Gerät noch nicht nachgewiesen; ein erreichbarer
+HTTPS-Port belegt sie nicht.
 
 Das JSON-Feld `host` enthält die angegebene private IP-Adresse. Halten Sie den
 Bericht privat und entfernen Sie die Adresse vor der Weitergabe. Ein

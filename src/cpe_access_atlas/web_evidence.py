@@ -8,6 +8,7 @@ import io
 import json
 import re
 import socket
+import ssl
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -28,6 +29,13 @@ MAX_COOKIE_HEADER_BYTES = 8_192
 MAX_STRUCTURAL_IDENTIFIERS = 512
 MAX_PAGE_ACCESS_ENTRIES = 512
 MAX_JSON_NESTING = 64
+MAX_TLS_CA_BYTES = 65_536
+MAX_TLS_CA_CERTIFICATES = 8
+_CERTIFICATE_PEM = re.compile(
+    r"-----BEGIN CERTIFICATE-----\r?\n"
+    r"(?:[A-Za-z0-9+/=]+\r?\n)+"
+    r"-----END CERTIFICATE-----"
+)
 
 _LOGIN_RESPONSE_ROOT = "ajax_response_xml_root"
 _ROUTE_TYPE = re.compile(r"_type=([A-Za-z][A-Za-z0-9_.-]{0,95})")
@@ -169,6 +177,71 @@ _SAFE_EMITTED_IDENTIFIER_VALUES: dict[str, dict[str, str]] = {
 
 class WebEvidenceError(ValueError):
     """Raised when bounded local web evidence collection cannot continue safely."""
+
+
+def _make_tls_context(tls_ca_pem: str | None) -> ssl.SSLContext:
+    """Build verified trust without honoring TLS session-key logging settings."""
+
+    if tls_ca_pem is not None:
+        if (
+            not isinstance(tls_ca_pem, str)
+            or not tls_ca_pem.isascii()
+            or not 0 < len(tls_ca_pem) <= MAX_TLS_CA_BYTES
+        ):
+            raise WebEvidenceError("TLS CA input must be bounded ASCII certificate-only PEM")
+        certificates = list(_CERTIFICATE_PEM.finditer(tls_ca_pem))
+        if (
+            not 1 <= len(certificates) <= MAX_TLS_CA_CERTIFICATES
+            or _CERTIFICATE_PEM.sub("", tls_ca_pem).strip()
+        ):
+            raise WebEvidenceError("TLS CA input must contain only one to eight PEM certificates")
+    try:
+        # create_default_context can enable SSLKEYLOGFILE as a side effect.
+        # Configure the secure client context directly: never write TLS keys or
+        # disable certificate/IP verification, including for caller-supplied CA.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.verify_flags |= ssl.VERIFY_X509_STRICT
+        if tls_ca_pem is None:
+            context.load_default_certs(ssl.Purpose.SERVER_AUTH)
+        else:
+            context.load_verify_locations(cadata=tls_ca_pem)
+    except (OSError, ValueError) as exc:
+        raise WebEvidenceError("unable to load verified TLS certificate trust") from exc
+    return context
+
+
+def _prepare_web_transport(
+    transport: str,
+    acknowledge_local_http_authentication: bool,
+    tls_ca_pem: str | None,
+) -> ssl.SSLContext | None:
+    if transport not in ("https", "http"):
+        raise WebEvidenceError("web transport must be https or http")
+    if not isinstance(acknowledge_local_http_authentication, bool):
+        raise WebEvidenceError("HTTP authentication acknowledgement must be a boolean")
+    if transport == "http":
+        if tls_ca_pem is not None:
+            raise WebEvidenceError("TLS CA input cannot be used with HTTP transport")
+        if acknowledge_local_http_authentication is not True:
+            raise WebEvidenceError("local HTTP authentication requires explicit acknowledgement")
+        return None
+    if acknowledge_local_http_authentication:
+        raise WebEvidenceError("HTTP authentication acknowledgement requires HTTP transport")
+    return _make_tls_context(tls_ca_pem)
+
+
+def validate_web_evidence_transport(
+    transport: str,
+    *,
+    acknowledge_local_http_authentication: bool = False,
+    tls_ca_pem: str | None = None,
+) -> None:
+    """Validate transport and trust before requesting secrets or opening sockets."""
+
+    _prepare_web_transport(transport, acknowledge_local_http_authentication, tls_ca_pem)
 
 
 @dataclass(frozen=True)
@@ -348,7 +421,25 @@ def _request(
     timeout: float,
     cookies: dict[str, str],
     data: bytes | None = None,
+    *,
+    transport: str = "https",
+    tls_context: ssl.SSLContext | None = None,
 ) -> _Response:
+    if transport not in ("https", "http"):
+        raise WebEvidenceError("web transport must be https or http")
+    if transport == "https":
+        tls_context = tls_context if tls_context is not None else _make_tls_context(None)
+        if (
+            tls_context.verify_mode != ssl.CERT_REQUIRED
+            or not tls_context.check_hostname
+            or tls_context.minimum_version < ssl.TLSVersion.TLSv1_2
+            or tls_context.keylog_filename
+        ):
+            raise WebEvidenceError(
+                "TLS requires certificate and IP verification without key logging"
+            )
+    elif tls_context is not None:
+        raise WebEvidenceError("TLS context cannot be used with HTTP transport")
     headers = {
         "Accept": "application/json, text/xml, text/html;q=0.9, */*;q=0.1",
         "Connection": "close",
@@ -362,7 +453,7 @@ def _request(
         headers["Content-Length"] = str(len(data))
 
     deadline = time.monotonic() + timeout
-    connection = HTTPConnection(host, 80, timeout=timeout)
+    connection = HTTPConnection(host, 443 if transport == "https" else 80, timeout=timeout)
     response: HTTPResponse | None = None
     raw_socket: socket.socket | None = None
     try:
@@ -371,6 +462,16 @@ def _request(
         raw_socket = connection.sock
         if raw_socket is None:
             raise HTTPException("local HTTP connection has no socket")
+        if tls_context is not None:
+            # TCP and TLS consume one request budget. No HTTP request, cookie,
+            # username or challenge response is sent before peer verification.
+            raw_socket.settimeout(_remaining_request_time(deadline))
+            raw_socket = tls_context.wrap_socket(
+                raw_socket, server_hostname=host, do_handshake_on_connect=False
+            )
+            connection.sock = raw_socket
+            raw_socket.settimeout(_remaining_request_time(deadline))
+            raw_socket.do_handshake()
         connection.sock = cast(socket.socket, _DeadlineSocket(raw_socket, deadline))
         connection.request(method, path, body=data, headers=headers)
         response = connection.getresponse()
@@ -379,8 +480,14 @@ def _request(
         result = _Response(status=response.status, content_type=content_type, body=body)
         _remember_cookies(response, cookies)
         return result
+    except ssl.SSLCertVerificationError as exc:
+        raise WebEvidenceError(
+            "TLS peer certificate or IP verification failed; no HTTP fallback was attempted"
+        ) from exc
     except (HTTPException, OSError, TimeoutError) as exc:
-        raise WebEvidenceError("unable to complete the bounded local HTTP request") from exc
+        raise WebEvidenceError(
+            f"unable to complete the bounded local {transport.upper()} request"
+        ) from exc
     finally:
         if response is not None:
             with suppress(OSError):
@@ -731,11 +838,16 @@ def collect_zte_web_evidence(
     expected_firmware: str,
     expected_model: str,
     expected_hardware: str,
+    transport: str = "https",
+    acknowledge_local_http_authentication: bool = False,
+    tls_ca_pem: str | None = None,
 ) -> dict[str, object]:
     """Authenticate once and collect sanitized GET-only status-page evidence.
 
     The sole POST is the normal web-console login operation. No configuration,
     CWMP, shell, reboot, reset, upload, or firmware endpoint is requested.
+    HTTPS verifies the certificate and target IP. Legacy HTTP requires both
+    explicit transport selection and acknowledgement; there is no downgrade.
     """
 
     address = parse_single_private_address(host)
@@ -751,6 +863,9 @@ def collect_zte_web_evidence(
     ):
         _required_string(value, label, 256)
 
+    tls_context = _prepare_web_transport(
+        transport, acknowledge_local_http_authentication, tls_ca_pem
+    )
     cookies: dict[str, str] = {}
     target = str(address)
     entry = _json_object(
@@ -760,6 +875,8 @@ def collect_zte_web_evidence(
             "/?_type=loginData&_tag=login_entry",
             bounded_timeout,
             cookies,
+            transport=transport,
+            tls_context=tls_context,
         ),
         "login-entry request",
     )
@@ -779,6 +896,8 @@ def collect_zte_web_evidence(
             "/?_type=loginData&_tag=login_token",
             bounded_timeout,
             cookies,
+            transport=transport,
+            tls_context=tls_context,
         )
     )
     password_digest = _zte_login_compatibility_digest(password, challenge)
@@ -798,6 +917,8 @@ def collect_zte_web_evidence(
             bounded_timeout,
             cookies,
             login_body,
+            transport=transport,
+            tls_context=tls_context,
         ),
         "web login",
     )
@@ -815,7 +936,15 @@ def collect_zte_web_evidence(
     }
     root_markers = dict.fromkeys(_ROOT_RESEARCH_MARKERS, False)
     for name, path in _READ_ONLY_ENDPOINTS:
-        response = _request(target, "GET", path, bounded_timeout, cookies)
+        response = _request(
+            target,
+            "GET",
+            path,
+            bounded_timeout,
+            cookies,
+            transport=transport,
+            tls_context=tls_context,
+        )
         _reject_authentication_loss(response)
         endpoint = _endpoint_evidence(
             response,
@@ -844,6 +973,8 @@ def collect_zte_web_evidence(
             f"/?_type=menuView&_tag={page_id}&Menu3Location=0",
             bounded_timeout,
             cookies,
+            transport=transport,
+            tls_context=tls_context,
         )
         _reject_authentication_loss(response)
         endpoint = _endpoint_evidence(
@@ -865,7 +996,15 @@ def collect_zte_web_evidence(
         {entry["page_id"] for entry in advertised_access if entry["visibility_level"] >= 3}
     )
     return {
-        "transport": "local-http",
+        "transport": f"local-{transport}",
+        "tls_peer_verified": transport == "https",
+        "tls_trust_source": (
+            "not-applicable"
+            if transport == "http"
+            else "provided-ca"
+            if tls_ca_pem is not None
+            else "system"
+        ),
         "host": target,
         "authenticated": True,
         "login_attempts": 1,

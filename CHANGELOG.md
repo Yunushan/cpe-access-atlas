@@ -2,6 +2,26 @@
 
 All notable changes are documented here.
 
+## 0.4.0a9 - 2026-10-06
+
+- Default authenticated web-evidence collection to HTTPS on port 443 with
+  certificate-chain and target-IP verification and a TLS 1.2 minimum. Accept an
+  optional independently trusted, certificate-only PEM CA bundle without
+  disabling IP verification. Bound CA input to 65,536 bytes and eight certificates.
+- Require both explicit HTTP transport selection and the local-HTTP
+  authentication acknowledgement for plaintext compatibility mode, including
+  direct Python collector calls. Reject contradictory transport options before
+  secret input or network access. Never redirect, retry, or fall back to HTTP.
+- Include connection and TLS handshake work in the whole-request deadline and
+  prevent `SSLKEYLOGFILE` from enabling session-secret logging. Report transport,
+  peer-verification state, and trust source without exposing certificate details.
+- Re-review the unchanged firmware challenge-response compatibility risk and
+  document migration in all five README languages. Exact-device HTTPS login and
+  certificate provisioning remain unqualified; none of the 62 catalog recipes
+  gains device, root-access, or recovery qualification.
+- Prepare candidate `v0.4.0a9`; preserve the immutable a8 release and its evidence.
+  Live release controls still require a separate reviewed rotation.
+
 ## 0.4.0a8 - 2026-10-06
 
 - Redact complete sensitive JSON/flow containers and YAML plain or nested

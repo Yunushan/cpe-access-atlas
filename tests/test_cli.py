@@ -926,12 +926,23 @@ class CliTests(unittest.TestCase):
 
     def test_web_evidence_requires_authorization_before_secret_input(self) -> None:
         with (
+            patch("cpe_access_atlas.cli._read_private_file") as read_ca,
             patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
             patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
         ):
-            code, stdout, stderr = self.run_cli(["web-evidence", *TARGET, "--host", "192.168.1.1"])
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--tls-ca-file",
+                    "private-ca.pem",
+                ]
+            )
         self.assertEqual((code, stdout), (3, ""))
         self.assertIn("ownership/authorization", stderr)
+        read_ca.assert_not_called()
         prompt.assert_not_called()
         collect.assert_not_called()
 
@@ -946,6 +957,8 @@ class CliTests(unittest.TestCase):
                     *TARGET,
                     "--host",
                     "192.168.1.1",
+                    "--transport",
+                    "http",
                     "--i-own-or-administer-this-device",
                 ]
             )
@@ -954,7 +967,7 @@ class CliTests(unittest.TestCase):
         prompt.assert_not_called()
         collect.assert_not_called()
 
-    def test_web_evidence_outputs_only_sanitized_json(self) -> None:
+    def test_web_evidence_defaults_to_https_and_outputs_only_sanitized_json(self) -> None:
         evidence = {
             "authenticated": True,
             "configuration_mutation_attempted": False,
@@ -978,7 +991,6 @@ class CliTests(unittest.TestCase):
                     "--timeout",
                     "7",
                     "--i-own-or-administer-this-device",
-                    "--acknowledge-local-http-authentication",
                 ]
             )
         self.assertEqual((code, stderr), (0, ""))
@@ -996,6 +1008,175 @@ class CliTests(unittest.TestCase):
             expected_firmware="H3600P V9.0 TTN.10_260210",
             expected_model="H3600P V9",
             expected_hardware="V9.0",
+            transport="https",
+            acknowledge_local_http_authentication=False,
+            tls_ca_pem=None,
+        )
+
+    def test_web_evidence_explicit_http_requires_and_forwards_acknowledgement(self) -> None:
+        secret = "SYNTHETIC-PRIVATE-WEB-PASSWORD"
+        stdin = StringIO(f"{secret}\nuntouched-next-line\n")
+        with (
+            patch("cpe_access_atlas.cli.sys.stdin", stdin),
+            patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+            patch("cpe_access_atlas.cli.collect_zte_web_evidence", return_value={}) as collect,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "web-evidence",
+                    *TARGET,
+                    "--host",
+                    "192.168.1.1",
+                    "--transport",
+                    "http",
+                    "--i-own-or-administer-this-device",
+                    "--acknowledge-local-http-authentication",
+                    "--password-stdin",
+                ]
+            )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertNotIn(secret, stdout)
+        self.assertEqual(stdin.read(), "untouched-next-line\n")
+        prompt.assert_not_called()
+        collect.assert_called_once_with(
+            "192.168.1.1",
+            "admin",
+            secret,
+            timeout=5.0,
+            expected_firmware="H3600P V9.0 TTN.10_260210",
+            expected_model="H3600P V9",
+            expected_hardware="V9.0",
+            transport="http",
+            acknowledge_local_http_authentication=True,
+            tls_ca_pem=None,
+        )
+
+    def test_web_evidence_rejects_incompatible_transport_options_before_private_input(self) -> None:
+        cases = (
+            ["--acknowledge-local-http-authentication"],
+            ["--transport", "http", "--tls-ca-file", "private-ca.pem"],
+            [
+                "--transport",
+                "http",
+                "--acknowledge-local-http-authentication",
+                "--tls-ca-file",
+                "private-ca.pem",
+            ],
+        )
+        for options in cases:
+            with (
+                self.subTest(options=options),
+                patch("cpe_access_atlas.cli._read_private_file") as read_ca,
+                patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+                patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "web-evidence",
+                        *TARGET,
+                        "--host",
+                        "192.168.1.1",
+                        "--i-own-or-administer-this-device",
+                        *options,
+                    ]
+                )
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("HTTP", stderr)
+            self.assertNotIn("private-ca.pem", stderr)
+            read_ca.assert_not_called()
+            prompt.assert_not_called()
+            collect.assert_not_called()
+
+    def test_web_evidence_rejects_bad_ca_files_before_secret_or_network(self) -> None:
+        cases = (
+            b"",
+            b"not a PEM certificate",
+            b"-----BEGIN CERTIFICATE-----\nU1lOVEhFVElD\n-----END CERTIFICATE-----\n",
+            b"-----BEGIN PRIVATE KEY-----\nSYNTHETIC\n-----END PRIVATE KEY-----\n",
+            b"X" * 65_537,
+            b"PRIVATE-CA-CONTENTS-\xff",
+        )
+        with TemporaryDirectory() as directory:
+            ca_path = Path(directory) / "private-ca-name.pem"
+            for index, contents in enumerate(cases):
+                ca_path.write_bytes(contents)
+                with (
+                    self.subTest(case=index),
+                    patch("cpe_access_atlas.cli.getpass.getpass") as prompt,
+                    patch("cpe_access_atlas.cli.collect_zte_web_evidence") as collect,
+                    patch("socket.create_connection") as connect,
+                ):
+                    code, stdout, stderr = self.run_cli(
+                        [
+                            "web-evidence",
+                            *TARGET,
+                            "--host",
+                            "192.168.1.1",
+                            "--i-own-or-administer-this-device",
+                            "--tls-ca-file",
+                            str(ca_path),
+                        ]
+                    )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertIn("TLS", stderr)
+                self.assertNotIn("PRIVATE-CA-CONTENTS", stderr)
+                self.assertNotIn(str(ca_path), stderr)
+                prompt.assert_not_called()
+                collect.assert_not_called()
+                connect.assert_not_called()
+
+    def test_web_evidence_validates_ca_before_secret_and_forwards_exact_text(self) -> None:
+        # The TLS validator's certificate semantics are exercised separately;
+        # this verifies the CLI's bounded input, ordering and unchanged forwarding.
+        pem = "-----BEGIN CERTIFICATE-----\r\nU1lOVEhFVElD\r\n-----END CERTIFICATE-----\r\n"
+        events: list[str] = []
+
+        def validated(*args: object, **kwargs: object) -> None:
+            events.append("validated")
+
+        def prompted(prompt: str) -> str:
+            events.append("prompted")
+            return "SYNTHETIC-PRIVATE-PASSWORD"
+
+        with TemporaryDirectory() as directory:
+            ca_path = Path(directory) / "private-ca.pem"
+            ca_path.write_bytes(pem.encode("ascii"))
+            with (
+                patch(
+                    "cpe_access_atlas.cli.validate_web_evidence_transport", side_effect=validated
+                ) as validate,
+                patch("cpe_access_atlas.cli.getpass.getpass", side_effect=prompted),
+                patch("cpe_access_atlas.cli.collect_zte_web_evidence", return_value={}) as collect,
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "web-evidence",
+                        *TARGET,
+                        "--host",
+                        "192.168.1.1",
+                        "--i-own-or-administer-this-device",
+                        "--tls-ca-file",
+                        str(ca_path),
+                    ]
+                )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(events, ["validated", "prompted"])
+        self.assertNotIn("SYNTHETIC-PRIVATE-PASSWORD", stdout)
+        self.assertNotIn("U1lOVEhFVElD", stdout)
+        validate.assert_called_once_with(
+            "https", acknowledge_local_http_authentication=False, tls_ca_pem=pem
+        )
+        collect.assert_called_once_with(
+            "192.168.1.1",
+            "admin",
+            "SYNTHETIC-PRIVATE-PASSWORD",
+            timeout=5.0,
+            expected_firmware="H3600P V9.0 TTN.10_260210",
+            expected_model="H3600P V9",
+            expected_hardware="V9.0",
+            transport="https",
+            acknowledge_local_http_authentication=False,
+            tls_ca_pem=pem,
         )
 
     def test_web_evidence_adapter_rejects_other_models_before_secret_input(self) -> None:

@@ -183,15 +183,25 @@ Yalnızca sahibi olduğunuz veya yönetmeye açıkça yetkili olduğunuz H3600P'
 güvenilir ve yalıtılmış ya da doğrudan yerel ağ üzerinden kullanın:
 
 ```shell
-cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device
 ```
 
-Parola gizli terminal girişiyle istenir. HTTP onayı zorunludur: firmware'in
-challenge/hash giriş yöntemi, yerel HTTP trafiğinin yakalanmasına veya zayıf
-parolaların çevrimdışı tahmin edilmesine karşı güvenli bir kanal sağlamaz.
-Bu cihaza özgü, güçlü ve benzersiz bir parola kullanın. Komut yalnızca bir normal
-giriş denemesi yapar; başarısız girişleri tekrarlamaz. Yanlış parola, cihazın
-hesap kilitleme sayacını yine de etkileyebilir.
+Varsayılan bağlantı, 443 portunda HTTPS'tir; en az TLS 1.2, güvenilir sertifika
+zinciri ve verilen hedef IP'nin sertifikayla eşleşmesi gerekir. Sistem güven
+deposu kullanılır. Güvenilirliğini bağımsız olarak doğruladığınız özel bir CA
+için `--tls-ca-file trusted-router-ca.pem` ekleyin. Dosya yalnızca ASCII PEM
+sertifikaları içerebilir; sınır 65.536 bayt ve sekiz sertifikadır. IP doğrulaması
+kapatılmaz. Doğrulanmamış bağlantıdan alınan sertifika tek başına güven sağlamaz.
+Doğrulama başarısızsa işlem durur; yönlendirme, otomatik tekrar veya HTTP'ye
+geri dönüş yapılmaz.
+
+Eski HTTP yolu, 80 portunda ancak `--transport http` ile
+`--acknowledge-local-http-authentication` birlikte seçildiğinde kullanılır.
+Challenge yanıtı ve oturum bu yolda şifrelenmez; yalnızca güvenilir, yalıtılmış
+veya doğrudan yerel ağda ve cihaza özgü, güçlü bir parola ile kullanın. HTTPS ile
+HTTP onayı veya HTTP ile CA dosyası, parola okunmadan ve ağa bağlanılmadan
+reddedilir. Parola gizli terminal girişiyle istenir. Yalnızca bir normal giriş
+denemesi yapılır; yanlış parola yine de hesap kilitleme sayacını etkileyebilir.
 
 Girişten sonra yalnızca sabit ve sınırlı GET istekleriyle kök ve cihaz-durum
 görünümleri okunur; `tr069`, `rsc`, kullanıcı yönetimi, `mirror` ve `capture`
@@ -201,6 +211,11 @@ izin verilen adlar ve işaret gözlemlerini içerir. Parola, çerez, parametre
 değeri veya ham sayfa yazdırılmaz ya da kaydedilmez. Sayfalara ayar gönderilmez;
 CWMP, kabuk, sıfırlama, yeniden başlatma, yükleme veya firmware isteği yapılmaz.
 Bu gözlemler root erişimini veya cihazın desteklendiğini kanıtlamaz.
+JSON, `transport` için `local-https` veya `local-http` ile `tls_peer_verified`
+ve `tls_trust_source` alanlarını içerir; eş sertifikanın ayrıntıları yazdırılmaz.
+`SSLKEYLOGFILE`, TLS oturum sırlarının kaydını etkinleştirmez. Tam TTN.10 hedefinde
+doğrulanmış HTTPS girişi ve sertifika sağlama yolu henüz cihaz üzerinde sınanmamıştır;
+443 portuna erişilebilmesi bunları kanıtlamaz.
 
 JSON içindeki `host`, verilen özel IP adresini içerir. Raporu özel tutun ve
 paylaşmadan önce adresi kaldırın. Bildirilen uzunluğundan kısa HTTP gövdesi veya

@@ -20,6 +20,13 @@ Before creating a tag:
    version. `Unreleased`, displaced entries, and prefix matches fail; ordinary
    prose that merely mentions the version remains valid.
 2. Run the development checks from `CONTRIBUTING.md`.
+   For the a9 transport change, verify the default HTTPS path, trusted and
+   untrusted certificates, target-IP mismatches, TLS handshake deadlines, and
+   explicit HTTP acknowledgement gates with isolated local fixtures. Confirm
+   that no verification failure redirects, retries, or downgrades the request
+   and that `SSLKEYLOGFILE` does not produce session secrets. Local TLS tests do
+   not establish certificate provisioning or authenticated interoperability on
+   an exact physical router; retain the unqualified device and recovery status.
 3. For early feedback, manually dispatch **Release preflight** from the
    candidate commit on `main` with the intended `vX.Y.Z` tag. This recommended,
    non-publishing workflow first rejects a non-`main` ref or invalid candidate
@@ -78,11 +85,13 @@ historical publisher that used that environment.
 publisher that did not use the `release` environment. Commit
 `e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
 while carrying the earlier broad publishing workflow. Never create or publish
-either tag. For `v0.4.0a8`, rotate the creation quarantine to exclude only
+either tag. For `v0.4.0a9`, rotate the creation quarantine to exclude only
 that exact tag and bind the release environment to the same tag before the
-prepublication audit. Keep the published `v0.4.0a5`, `v0.4.0a6`, and `v0.4.0a7`
-tags protected by the no-bypass update/deletion rule. A broad creation bypass
-or `v*` environment rule would reopen a historical-workflow path.
+prepublication audit. Keep the published `v0.4.0a5`, `v0.4.0a6`, `v0.4.0a7`, and
+`v0.4.0a8` tags protected by the no-bypass update/deletion rule. A broad creation
+bypass or `v*` environment rule would reopen a historical-workflow path.
+Preserve a8's immutable assets, tag, and release/recovery receipts. Candidate
+documentation does not prove that live controls have been rotated for a9.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, DCO, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen

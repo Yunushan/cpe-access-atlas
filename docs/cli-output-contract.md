@@ -54,6 +54,25 @@ legitimately report an authenticated account's lack of authorization. An HTTP
 a successful report. A body shorter than its effective declared HTTP length
 also fails rather than becoming incomplete successful evidence.
 
+From 0.4.0a9, `web_evidence.transport` is `local-https` for the default verified
+HTTPS connection or `local-http` for explicitly acknowledged plaintext mode.
+The additive boolean `tls_peer_verified` is true for a successful HTTPS report
+and false for HTTP. `tls_trust_source` is `system` for the default HTTPS trust,
+`provided-ca` when an independently trusted CA bundle was supplied, or
+`not-applicable` for HTTP. These fields describe the connection's transport and
+trust selection, not firmware identity, root access, or device qualification.
+No peer-certificate details are emitted. Consumers must handle unsupported
+transport or trust-source values conservatively.
+
+HTTPS uses port 443, TLS 1.2 or newer, certificate-chain validation, and target-IP
+identity validation. `--tls-ca-file` accepts at most 65,536 bytes of
+certificate-only ASCII PEM with at most eight certificates; it retains IP
+validation. Legacy port-80 HTTP requires both `--transport http` and
+`--acknowledge-local-http-authentication`. Contradictory transport options fail
+before password input or network access. No redirect, retry, or fallback is
+performed, and TLS setup shares the whole-request deadline. Verification errors
+do not produce a successful report with `tls_peer_verified: false`.
+
 Firmware matching results may be null when no corresponding expectation was
 supplied. `firmware_evidence_matches` concerns strings and an optional supplied
 hash; `firmware_identity_verified` remains false in this release. These fields
@@ -77,6 +96,12 @@ false even if the log contains a shell prompt or UID-zero marker.
 | 3 | Explicit ownership/private-file authorization or local-HTTP acknowledgement was refused; `apply` refuses a valid target request with 3 because no mutating adapter exists, while invalid arguments/catalog lookup still return 2 |
 | 4 | An output operation was refused, including an existing destination or the application-required `redact --output` option absent |
 | 130 | Interrupted by the operator; no automatic retry was attempted |
+
+For `web-evidence`, missing ownership or the acknowledgement required by
+explicit HTTP mode returns 3. HTTPS with the HTTP acknowledgement, HTTP with a
+CA file, and invalid CA material return 2 before secret input or network access.
+Ownership is checked before a CA file is read. The HTTPS default does not
+require a local-HTTP acknowledgement.
 
 `plan` renders a decision successfully with exit **0 even when it says STOP**.
 Read `decision`; do not chain a device action after a zero exit from `plan`.

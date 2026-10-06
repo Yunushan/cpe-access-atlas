@@ -85,15 +85,15 @@ requirements until an authorized administrator updates the repository settings.
   immutability for an existing release. Preserve older artifacts and publish
   a new version through the protected process. See
   [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-- For the next candidate, `v0.4.0a8`, rotate the live tag rules and release
-  environment in the order below before creating its tag. The rules shown
-  here are the required candidate state, not a claim that the live settings
-  have already been changed.
+- For the next candidate, `v0.4.0a9`, rotate the live tag rules and release
+  environment using the fail-closed rotation procedure below before creating
+  its tag. The three rulesets below describe the required final state, not
+  their mutation order or a claim that live settings have already changed.
 - Protect release-tag creation with three deliberately separate rulesets:
   1. a rotating quarantine with `include: refs/tags/v*`, only
-     `exclude: refs/tags/v0.4.0a8`, the creation restriction, and **no bypass
+     `exclude: refs/tags/v0.4.0a9`, the creation restriction, and **no bypass
      actors**;
-  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a8`, no
+  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a9`, no
      exclusions, the creation restriction, and the personal repository owner
      as the only always-bypass actor; and
   3. a full `refs/tags/v*` update/deletion restriction with no exclusions and
@@ -121,7 +121,7 @@ requirements until an authorized administrator updates the repository settings.
 - Configure a `release` environment without mandatory reviewers. The owner
   authorizes publication by creating the protected release tag after checking
   the candidate. Disable administrator bypass and select exactly the current
-  candidate tag (`v0.4.0a8`), not `v*`, unrestricted refs, or branches. Update
+  candidate tag (`v0.4.0a9`), not `v*`, unrestricted refs, or branches. Update
   that one policy only when the package version advances to a reviewed candidate.
   This exact-tag boundary prevents a tag created later at an older commit from
   running that commit's historical publishing workflow with release credentials.
@@ -173,13 +173,21 @@ cannot be mistaken for a valid prepublication state. The script remains read-onl
 
 When rotating from one candidate to the next, avoid a transient open namespace:
 
-1. add the next exact trusted-creator rule while the next tag is still covered
-   by the zero-bypass quarantine;
-2. change the release environment's sole allowed tag to the next exact tag while
-   that tag is still quarantined;
-3. change the quarantine's single exclusion to the next exact tag;
-4. remove the prior candidate's exact creator rule; and
-5. run the prepublication audit successfully before creating the tag.
+1. remove every exclusion from the no-bypass `refs/tags/v*` creation quarantine
+   and verify that it denies all release-tag creation;
+2. while that quarantine stays closed, retarget the existing owner-only exact
+   creator rule to the next candidate without changing its trusted owner;
+3. change the release environment's sole allowed tag to the next exact tag,
+   retaining disabled administrator bypass;
+4. read back and verify both candidate controls before changing the quarantine;
+5. exclude only the next exact tag from the quarantine; and
+6. run the prepublication audit successfully before creating the tag.
+
+Keep the no-bypass update/deletion rule intact throughout. Never exclude a new
+candidate before its exact owner-only creation rule is active. If a mutation,
+read-back, or final audit fails, stop publication, ensure the creation quarantine
+again denies every release tag, and do not create a tag. Confirm the live state
+after an uncertain API outcome before continuing.
 
 If a candidate is abandoned, rotate the controls first and never create its tag.
 Already-created release tags are unaffected by adding a creation restriction and
