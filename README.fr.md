@@ -139,16 +139,27 @@ Utilisez le collecteur uniquement sur un H3600P vous appartenant ou que vous
 isolé ou directement relié :
 
 ```shell
-cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device
 ```
 
-Le mot de passe est demandé sans affichage. La confirmation HTTP est obligatoire :
-le mécanisme challenge/hash du micrologiciel ne fournit pas de canal protégé
-contre la capture de l'authentification HTTP locale ou les tentatives hors ligne
-sur des mots de passe faibles. Employez un mot de passe fort et propre à cet
-appareil. Une seule tentative normale de connexion est effectuée, sans nouvelle
-tentative automatique. Un mot de passe incorrect peut néanmoins contribuer au
-verrouillage du compte.
+HTTPS sur le port 443 est utilisé par défaut, avec TLS 1.2 au minimum et
+vérification de la chaîne de certificats et de l'IP cible à partir de la
+confiance système. Pour une autorité privée dont la confiance a été établie
+indépendamment, ajoutez `--tls-ca-file trusted-router-ca.pem`. Seuls des
+certificats PEM ASCII sont acceptés, au maximum 65 536 octets et huit
+certificats ; la vérification de l'IP reste active. Un certificat obtenu par
+une connexion non vérifiée ne constitue pas une source de confiance indépendante.
+Tout échec arrête la collecte, sans redirection, nouvelle tentative automatique
+ni repli vers HTTP.
+
+HTTP non chiffré sur le port 80 exige à la fois `--transport http` et
+`--acknowledge-local-http-authentication`. La réponse au challenge et la session
+ne sont alors pas protégées : utilisez seulement un réseau local de confiance,
+isolé ou directement relié, et un mot de passe fort propre au routeur. HTTPS avec
+la confirmation HTTP, ou HTTP avec un fichier CA, est refusé avant la saisie du
+mot de passe ou tout accès réseau. Le mot de passe est demandé sans affichage.
+Une seule tentative normale est effectuée ; un mot de passe incorrect peut
+néanmoins contribuer au verrouillage du compte.
 
 Après l'authentification, seules des requêtes GET fixes et bornées lisent les
 vues d'accueil et d'état de l'appareil. Les vues `tr069`, `rsc`, de gestion des
@@ -160,6 +171,11 @@ affiché ni enregistré. Aucune page de configuration n'est soumise ; aucune
 requête CWMP, shell, réinitialisation, redémarrage, téléversement ou firmware
 n'est envoyée. Ces observations ne prouvent ni l'accès root ni la prise en
 charge de l'appareil.
+Le JSON indique `transport` (`local-https` ou `local-http`), `tls_peer_verified`
+et `tls_trust_source`, sans détails du certificat du serveur. `SSLKEYLOGFILE`
+n'active pas l'enregistrement des secrets de session TLS. L'authentification
+HTTPS vérifiée et le provisionnement des certificats n'ont pas encore été validés
+sur l'appareil TTN.10 exact ; un port HTTPS accessible ne les prouve pas.
 
 Le champ JSON `host` contient l'adresse IP privée fournie. Conservez le rapport
 en privé et retirez cette adresse avant de le partager. Un corps HTTP plus court

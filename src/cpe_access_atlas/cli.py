@@ -52,7 +52,12 @@ from .private_files import write_private_bytes, write_private_text
 from .redaction import MAX_REPORT_CHARS, RedactionError, redact_text
 from .report import build_research_template
 from .uart_evidence import UartEvidenceError, inspect_uart_log
-from .web_evidence import WebEvidenceError, collect_zte_web_evidence
+from .web_evidence import (
+    MAX_TLS_CA_BYTES,
+    WebEvidenceError,
+    collect_zte_web_evidence,
+    validate_web_evidence_transport,
+)
 
 MAX_CONFIG_IDENTITY_BYTES = 1_024
 OUTPUT_CONTRACT_VERSION = "1"
@@ -717,14 +722,29 @@ def command_web_evidence(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 3
-    if not args.acknowledge_local_http_authentication:
+    if recipe.vendor != "ZTE" or recipe.model != "H3600P V9":
+        raise WebEvidenceError("the read-only web evidence adapter is limited to ZTE H3600P V9")
+    if args.transport == "http" and args.tls_ca_file is not None:
+        raise WebEvidenceError("a TLS CA certificate file requires HTTPS transport")
+    if args.transport == "http" and not args.acknowledge_local_http_authentication:
         print(
             "Refused: acknowledge that this firmware's local login uses HTTP before continuing.",
             file=sys.stderr,
         )
         return 3
-    if recipe.vendor != "ZTE" or recipe.model != "H3600P V9":
-        raise WebEvidenceError("the read-only web evidence adapter is limited to ZTE H3600P V9")
+
+    tls_ca_pem: str | None = None
+    if args.tls_ca_file is not None:
+        ca_bytes = _read_private_file(args.tls_ca_file, MAX_TLS_CA_BYTES, "TLS CA certificate file")
+        try:
+            tls_ca_pem = ca_bytes.decode("ascii")
+        except UnicodeError as exc:
+            raise WebEvidenceError("TLS CA certificate file must contain ASCII PEM") from exc
+    validate_web_evidence_transport(
+        args.transport,
+        acknowledge_local_http_authentication=args.acknowledge_local_http_authentication,
+        tls_ca_pem=tls_ca_pem,
+    )
 
     password = _read_secret(
         args,
@@ -741,6 +761,9 @@ def command_web_evidence(args: argparse.Namespace) -> int:
         expected_firmware=recipe.firmware,
         expected_model=recipe.model,
         expected_hardware=recipe.hardware_revision,
+        transport=args.transport,
+        acknowledge_local_http_authentication=args.acknowledge_local_http_authentication,
+        tls_ca_pem=tls_ca_pem,
     )
     print(
         json.dumps(
@@ -1081,6 +1104,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_target_arguments(web_evidence)
     web_evidence.add_argument("--host", required=True, help="one RFC1918 or IPv6 ULA literal")
     web_evidence.add_argument("--username", default="admin", help="local web-console username")
+    web_evidence.add_argument(
+        "--transport",
+        choices=("https", "http"),
+        default="https",
+        help="verified HTTPS on port 443 (default), or explicitly acknowledged HTTP on port 80",
+    )
+    web_evidence.add_argument(
+        "--tls-ca-file",
+        help="ASCII PEM CA certificates for HTTPS trust (at most 65536 bytes; IP identity checked)",
+    )
     web_evidence.add_argument(
         "--password-stdin",
         action="store_true",

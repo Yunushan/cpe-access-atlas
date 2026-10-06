@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import json
 import socket
+import ssl
+import tempfile
 import threading
 import time
 import unittest
@@ -11,8 +13,9 @@ from email.message import Message
 from http.client import HTTPConnection as RealHTTPConnection
 from http.client import HTTPException, HTTPResponse
 from http.cookies import CookieError
+from pathlib import Path
 from typing import Any, ClassVar
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs
 
 from cpe_access_atlas.web_evidence import (
@@ -25,6 +28,7 @@ from cpe_access_atlas.web_evidence import (
     MAX_RESPONSE_BYTES,
     MAX_RETAINED_COOKIE_BYTES,
     MAX_STRUCTURAL_IDENTIFIERS,
+    MAX_TLS_CA_BYTES,
     WebEvidenceError,
     _cookie_header,
     _DeadlineSocket,
@@ -33,6 +37,7 @@ from cpe_access_atlas.web_evidence import (
     _json_object,
     _login_succeeded,
     _login_token,
+    _make_tls_context,
     _read_bounded,
     _remaining_request_time,
     _remember_cookies,
@@ -42,6 +47,7 @@ from cpe_access_atlas.web_evidence import (
     _response_kind,
     _zte_login_compatibility_digest,
     collect_zte_web_evidence,
+    validate_web_evidence_transport,
 )
 
 
@@ -155,6 +161,181 @@ class WebEvidenceTests(unittest.TestCase):
         FakeConnection.instances = []
         FakeConnection.request_error = None
 
+    def test_tls_context_requires_certificate_ip_and_modern_protocol_without_key_logging(
+        self,
+    ) -> None:
+        context = _make_tls_context(None)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertTrue(context.verify_flags & ssl.VERIFY_X509_STRICT)
+        self.assertIsNone(context.keylog_filename)
+        validate_web_evidence_transport("https")
+
+    def test_public_transport_options_fail_before_network_io(self) -> None:
+        cases = (
+            {"transport": "ftp"},
+            {"transport": "http"},
+            {"transport": "http", "acknowledge_local_http_authentication": 1},
+            {"transport": "https", "acknowledge_local_http_authentication": True},
+            {
+                "transport": "http",
+                "acknowledge_local_http_authentication": True,
+                "tls_ca_pem": "SYNTHETIC-PRIVATE",
+            },
+            {"tls_ca_pem": b"SYNTHETIC-PRIVATE"},
+            {"tls_ca_pem": ""},
+            {"tls_ca_pem": "SYNTHETIC-PRIVATE-\u00e9"},
+            {"tls_ca_pem": "x" * (MAX_TLS_CA_BYTES + 1)},
+            {"tls_ca_pem": "SYNTHETIC-PRIVATE"},
+            {"tls_ca_pem": "-----BEGIN CERTIFICATE-----\nYQ==\n-----END CERTIFICATE-----"},
+            {"tls_ca_pem": "-----BEGIN CERTIFICATE-----\nYQ==\n-----END CERTIFICATE-----\n" * 9},
+            {
+                "tls_ca_pem": "-----BEGIN CERTIFICATE-----\nYQ==\n-----END CERTIFICATE-----\n"
+                "SYNTHETIC-PRIVATE"
+            },
+        )
+        for options in cases:
+            with self.subTest(option_names=tuple(options)):
+                with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
+                    with self.assertRaises(WebEvidenceError) as error:
+                        collect_zte_web_evidence(
+                            "192.168.1.1",
+                            "admin",
+                            "secret",
+                            timeout=1,
+                            expected_firmware="firmware",
+                            expected_model="model",
+                            expected_hardware="hardware",
+                            **options,
+                        )
+                connection.assert_not_called()
+                self.assertNotIn("SYNTHETIC-PRIVATE", str(error.exception))
+        validate_web_evidence_transport("http", acknowledge_local_http_authentication=True)
+
+    def test_tls_trust_loading_failure_does_not_expose_details(self) -> None:
+        with patch.object(
+            ssl.SSLContext, "load_default_certs", side_effect=OSError("SYNTHETIC-PRIVATE")
+        ):
+            with self.assertRaisesRegex(
+                WebEvidenceError, "verified TLS certificate trust"
+            ) as error:
+                validate_web_evidence_transport("https")
+        self.assertNotIn("SYNTHETIC-PRIVATE", str(error.exception))
+
+    def test_low_level_request_rejects_insecure_tls_configuration_before_connecting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            contexts = []
+            unverified = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            contexts.append(unverified)
+            wrong_identity = _make_tls_context(None)
+            wrong_identity.check_hostname = False
+            contexts.append(wrong_identity)
+            old_protocol = _make_tls_context(None)
+            old_protocol.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+            contexts.append(old_protocol)
+            key_logging = _make_tls_context(None)
+            key_logging.keylog_filename = str(Path(directory) / "synthetic-keylog.txt")
+            contexts.append(key_logging)
+            for context in contexts:
+                with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
+                    with self.assertRaisesRegex(WebEvidenceError, "TLS requires"):
+                        _request("192.168.1.1", "GET", "/", 1, {}, tls_context=context)
+                connection.assert_not_called()
+            # Release the configured handle before Windows removes the fixture.
+            key_logging.keylog_filename = None
+        for options in (
+            {"transport": "ftp"},
+            {"transport": "http", "tls_context": _make_tls_context(None)},
+        ):
+            with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
+                with self.assertRaises(WebEvidenceError):
+                    _request("192.168.1.1", "GET", "/", 1, {}, **options)
+            connection.assert_not_called()
+
+    def test_tcp_tls_and_request_share_one_deadline(self) -> None:
+        now = [100.0]
+        tcp = Mock(spec=socket.socket)
+        tls = Mock(spec=ssl.SSLSocket)
+        context = _make_tls_context(None)
+
+        class TimedConnection(FakeConnection):
+            def connect(self) -> None:
+                self.sock = tcp
+                now[0] += 0.6
+
+        def wrap(_self: ssl.SSLContext, sock: object, **options: object) -> object:
+            self.assertIs(sock, tcp)
+            self.assertEqual(
+                options, {"server_hostname": "192.168.1.1", "do_handshake_on_connect": False}
+            )
+            self.assertAlmostEqual(tcp.settimeout.call_args.args[0], 0.4)
+            tcp.close()  # Model wrap_socket transferring the descriptor.
+            now[0] += 0.1
+            return tls
+
+        def handshake() -> None:
+            self.assertAlmostEqual(tls.settimeout.call_args.args[0], 0.3)
+            self.assertEqual(FakeConnection.requests, [])
+            now[0] += 0.1
+
+        tls.do_handshake.side_effect = handshake
+        FakeConnection.responses = [FakeResponse(b"ok")]
+        with (
+            patch("cpe_access_atlas.web_evidence.HTTPConnection", TimedConnection),
+            patch("cpe_access_atlas.web_evidence.time.monotonic", side_effect=lambda: now[0]),
+            patch.object(ssl.SSLContext, "wrap_socket", new=wrap),
+        ):
+            result = _request("192.168.1.1", "GET", "/", 1, {}, tls_context=context)
+        self.assertEqual(result.body, b"ok")
+        self.assertEqual(FakeConnection.instances[0].port, 443)
+        self.assertEqual(len(FakeConnection.requests), 1)
+        tls.do_handshake.assert_called_once()
+        tls.close.assert_called()
+        tcp.close.assert_called()
+
+    def test_exhausted_or_failed_tls_connection_never_sends_an_http_request(self) -> None:
+        def exercise_failure(failure: str) -> None:
+            self.setUp()
+            now = [100.0]
+            tcp = Mock(spec=socket.socket)
+            tls = Mock(spec=ssl.SSLSocket)
+            context = _make_tls_context(None)
+
+            class TimedConnection(FakeConnection):
+                def connect(self) -> None:
+                    self.sock = tcp
+                    now[0] += 1.1 if failure == "tcp-budget" else 0.6
+
+            def wrap(_self: ssl.SSLContext, sock: object, **options: object) -> object:
+                if failure == "wrap-error":
+                    raise ssl.SSLError("SYNTHETIC-PRIVATE")
+                tcp.close()
+                now[0] += 0.5 if failure == "wrap-budget" else 0.1
+                return tls
+
+            tls.do_handshake.side_effect = TimeoutError("SYNTHETIC-PRIVATE")
+            with (
+                patch("cpe_access_atlas.web_evidence.HTTPConnection", TimedConnection),
+                patch("cpe_access_atlas.web_evidence.time.monotonic", side_effect=lambda: now[0]),
+                patch.object(ssl.SSLContext, "wrap_socket", new=wrap),
+            ):
+                with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTPS") as error:
+                    _request("192.168.1.1", "GET", "/", 1, {}, tls_context=context)
+            self.assertEqual(FakeConnection.requests, [])
+            self.assertEqual(len(FakeConnection.instances), 1)
+            self.assertTrue(FakeConnection.instances[0].closed)
+            self.assertNotIn("SYNTHETIC-PRIVATE", str(error.exception))
+            tcp.close.assert_called()
+            if failure in {"wrap-budget", "handshake-error"}:
+                tls.close.assert_called()
+            if failure != "handshake-error":
+                tls.do_handshake.assert_not_called()
+
+        for failure in ("tcp-budget", "wrap-budget", "wrap-error", "handshake-error"):
+            with self.subTest(failure=failure):
+                exercise_failure(failure)
+
     def test_collects_sanitized_exact_target_evidence(self) -> None:
         firmware = "H3600P V9.0 TTN.10_260210"
         root = (
@@ -212,6 +393,8 @@ class WebEvidenceTests(unittest.TestCase):
                 "private-password",
                 timeout=5,
                 expected_firmware=firmware,
+                transport="http",
+                acknowledge_local_http_authentication=True,
                 expected_model="H3600P V9",
                 expected_hardware="V9.0",
             )
@@ -569,14 +752,14 @@ class WebEvidenceTests(unittest.TestCase):
         FakeConnection.request_error = OSError("private transport detail")
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
             with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP"):
-                _request("192.168.1.1", "GET", "/", 1, {})
+                _request("192.168.1.1", "GET", "/", 1, {}, transport="http")
         self.assertTrue(FakeConnection.instances[0].closed)
 
         self.setUp()
         FakeConnection.responses = [HTTPException("private protocol detail")]
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
             with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP"):
-                _request("192.168.1.1", "GET", "/", 1, {})
+                _request("192.168.1.1", "GET", "/", 1, {}, transport="http")
         self.assertTrue(FakeConnection.instances[0].closed)
 
     def test_expired_deadline_and_missing_http_socket_are_sanitized(self) -> None:
@@ -591,7 +774,7 @@ class WebEvidenceTests(unittest.TestCase):
 
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", NoSocketConnection):
             with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP request"):
-                _request("127.0.0.1", "GET", "/", 1, {})
+                _request("127.0.0.1", "GET", "/", 1, {}, transport="http")
         self.assertTrue(FakeConnection.instances[0].closed)
 
     def test_slow_dripping_headers_and_body_cannot_extend_request_deadline(self) -> None:
@@ -650,7 +833,7 @@ class WebEvidenceTests(unittest.TestCase):
                 ):
                     started = time.monotonic()
                     with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP request"):
-                        _request("127.0.0.1", "GET", "/", 0.25, {})
+                        _request("127.0.0.1", "GET", "/", 0.25, {}, transport="http")
                     self.assertLess(time.monotonic() - started, 1)
                 server.join(timeout=2)
                 self.assertFalse(server.is_alive())
@@ -690,7 +873,7 @@ class WebEvidenceTests(unittest.TestCase):
                     host, port, timeout=timeout
                 ),
             ):
-                result = _request("127.0.0.1", "GET", "/", 1, cookies)
+                result = _request("127.0.0.1", "GET", "/", 1, cookies, transport="http")
             server.join(timeout=2)
             self.assertFalse(server.is_alive())
             self.assertEqual(result, response(b"ok"))
@@ -815,7 +998,7 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(len(_cookie_header(cookies).encode("ascii")), MAX_COOKIE_HEADER_BYTES)
         FakeConnection.responses = [FakeResponse(b"ok")]
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
-            _request("192.168.1.1", "GET", "/", 1, cookies)
+            _request("192.168.1.1", "GET", "/", 1, cookies, transport="http")
         self.assertEqual(
             len(FakeConnection.requests[0]["headers"]["Cookie"].encode("ascii")),
             MAX_COOKIE_HEADER_BYTES,
@@ -856,7 +1039,7 @@ class WebEvidenceTests(unittest.TestCase):
                 original = cookies.copy()
                 with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
                     with self.assertRaisesRegex(WebEvidenceError, "unsafe cookie"):
-                        _request("192.168.1.1", "GET", "/", 1, cookies)
+                        _request("192.168.1.1", "GET", "/", 1, cookies, transport="http")
                     connection.assert_not_called()
                 with self.assertRaisesRegex(WebEvidenceError, "unsafe cookie"):
                     _remember_cookies(FakeResponse(b"", cookies=("SID=replacement",)), cookies)
@@ -864,7 +1047,7 @@ class WebEvidenceTests(unittest.TestCase):
         too_many = {f"C{index}": "value" for index in range(MAX_COOKIE_COUNT + 1)}
         with patch("cpe_access_atlas.web_evidence.HTTPConnection") as connection:
             with self.assertRaisesRegex(WebEvidenceError, "16-cookie limit"):
-                _request("192.168.1.1", "GET", "/", 1, too_many)
+                _request("192.168.1.1", "GET", "/", 1, too_many, transport="http")
             connection.assert_not_called()
 
     def test_response_cookie_budget_failure_closes_transport_without_partial_updates(self) -> None:
@@ -875,7 +1058,7 @@ class WebEvidenceTests(unittest.TestCase):
         ]
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
             with self.assertRaisesRegex(WebEvidenceError, "16-cookie limit"):
-                _request("192.168.1.1", "GET", "/", 1, cookies)
+                _request("192.168.1.1", "GET", "/", 1, cookies, transport="http")
         self.assertEqual(cookies, original)
         self.assertEqual(len(FakeConnection.requests), 1)
         self.assertTrue(FakeConnection.instances[0].closed)
@@ -898,7 +1081,7 @@ class WebEvidenceTests(unittest.TestCase):
                 FakeConnection.responses = [item]
                 with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
                     with self.assertRaises(WebEvidenceError):
-                        _request("192.168.1.1", "GET", "/", 1, cookies)
+                        _request("192.168.1.1", "GET", "/", 1, cookies, transport="http")
                 self.assertEqual(cookies, {"SID": "original"})
                 self.assertTrue(FakeConnection.instances[0].closed)
 

@@ -170,8 +170,23 @@ Collect authenticated, read-only web evidence from an owned H3600P without
 printing the password, cookies, parameter values, or raw pages:
 
 ```shell
-cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device --acknowledge-local-http-authentication
+cpe-atlas web-evidence --isp "turk-telekom" --model "H3600P" --hardware-revision "V9.0" --firmware "H3600P V9.0 TTN.10_260210" --host 192.168.1.1 --username admin --i-own-or-administer-this-device
 ```
+
+HTTPS on port 443 is the default. It requires TLS 1.2 or newer and verifies the
+certificate chain and the supplied target IP using system trust. For a private
+CA whose authenticity you have established independently, add
+`--tls-ca-file trusted-router-ca.pem`. This accepts only certificate PEM in
+ASCII, at most 65,536 bytes and eight certificates, and retains IP verification.
+An unauthenticated certificate obtained from the same connection is not an
+independent trust source. Verification failure stops collection; the client
+does not redirect, retry, or fall back to HTTP.
+
+Legacy HTTP on port 80 requires both `--transport http` and
+`--acknowledge-local-http-authentication`. It exposes the challenge response and
+session to the local network path; use a trusted isolated or direct LAN and a
+high-entropy password unique to the router. HTTPS with the HTTP acknowledgement,
+or HTTP with a CA file, is rejected before password input or network access.
 
 The password is requested with hidden terminal input. The command makes one
 normal web-console login attempt, then issues only bounded GET requests for the
@@ -187,15 +202,18 @@ private and remove that address before sharing it. It never
 submits those pages and does not send CWMP, configuration, shell, reboot, reset,
 upload, or firmware requests or save raw responses. An incorrect password can
 still contribute to the router's login lockout, so the command never retries
-automatically. The HTTP acknowledgement is required because this firmware
-exposes its challenge-hash login over local HTTP.
+automatically. JSON identifies `transport` as `local-https` or `local-http`,
+with `tls_peer_verified` and `tls_trust_source`; it contains no peer-certificate
+details. `SSLKEYLOGFILE` does not enable TLS session-secret logging.
 
 An incomplete declared HTTP body, HTTP 401, or a returned login page during
 collection stops the command without retrying authentication. HTTP 403 remains
 an observation that the account may lack permission to view that page.
 
 This evidence can show what the exact authenticated firmware exposes; it does
-not itself enable root access or make the blocked recipe rootable.
+not itself enable root access or make the blocked recipe rootable. Verified
+HTTPS login and certificate provisioning have not been qualified on the exact
+TTN.10 target; a reachable HTTPS port alone does not establish either.
 
 Inspect a private UART boot capture without printing its raw lines, device
 identity values, or possible credentials:

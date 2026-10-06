@@ -34,17 +34,41 @@ exactly one private IP literal and tests only explicitly listed TCP ports. It
 performs no discovery, subnet scan, authentication attempt, or configuration
 change.
 
-The separate `web-evidence` operation requires both the ownership/authorization
-and local-HTTP acknowledgements. It performs exactly one normal web-console
-login against that private IP and then makes only bounded, read-only requests
-to a fixed set of status and advertised page-view endpoints. The login uses the
-router's plaintext HTTP service on port 80: the password itself is not sent,
-but the username, password-derived challenge response, session token, and
-session cookie have no TLS protection. An attacker on the local network path
-could observe or alter them, hijack the authenticated session, or use the
-captured challenge/response for offline password guessing. Run this operation
-only on a trusted, isolated or direct LAN and use a password-manager-generated,
-high-entropy password unique to this router.
+The separate `web-evidence` operation always requires ownership/authorization.
+Its default transport is HTTPS on port 443, with TLS 1.2 or newer, certificate
+chain validation, and verification that the certificate identifies the supplied
+private IP. System trust is the default; `--tls-ca-file` may supply an
+independently trusted CA bundle containing only ASCII PEM certificates, at most
+65,536 bytes and eight certificates. It cannot contain private keys or disable
+target-IP validation. Establish that CA's authenticity independently of the
+connection being authenticated. A certificate downloaded from an unverified
+peer does not establish that peer's identity.
+
+Plaintext compatibility mode requires both `--transport http` and
+`--acknowledge-local-http-authentication`; it uses port 80. Direct Python
+`collect_zte_web_evidence` calls have the same HTTPS default and require
+`transport="http"` with `acknowledge_local_http_authentication=True` for HTTP.
+Their optional `tls_ca_pem` is subject to the same certificate-only limits.
+HTTPS with the HTTP acknowledgement, or HTTP with CA material, fails before
+network access; the CLI also rejects these combinations before secret input.
+The CLI checks ownership before reading a CA file. There is no
+insecure-verification option, redirect, automatic retry, or HTTP fallback.
+Connection setup and the TLS handshake consume the existing
+whole-request deadline. The collector does not enable TLS session-secret
+logging from `SSLKEYLOGFILE`.
+
+The operation performs exactly one normal web-console login and then makes
+only bounded, read-only requests to fixed status and advertised page-view
+endpoints. The firmware's `SHA-256(password + challenge)` transform is unchanged.
+In explicitly selected HTTP mode the password itself is not sent, but the
+username, derived response, session token, and cookie have no TLS protection.
+An attacker on that path could observe or alter them, hijack the session, or
+guess low-entropy passwords offline. Use a trusted isolated or direct LAN and
+a password-manager-generated, high-entropy password unique to the router.
+Verified HTTPS protects the transport under its trust assumptions; it does not
+turn the firmware transform into a password KDF or qualify the exact device.
+The TTN.10 target's HTTPS certificate provisioning and authenticated collector
+flow still require exact-device evidence.
 
 Session cookies are kept only in process memory and are never included in the
 evidence output. The client does not call a logout endpoint, so the router-side
@@ -57,8 +81,11 @@ unchanged. These application budgets supplement the response, header, and
 absolute request-deadline limits.
 
 The evidence report retains the supplied private IP in its `host` field.
-Keep reports private and remove addresses before sharing. The client rejects
-an incomplete declared HTTP body and stops on HTTP 401 during collection;
+It records `local-https` or `local-http`, a peer-verification boolean, and
+`system`, `provided-ca`, or `not-applicable` as the trust source; peer-certificate
+details are not emitted. Keep reports private and remove addresses before
+sharing. The client rejects an incomplete declared HTTP body and stops on
+HTTP 401 during collection;
 neither condition causes a login retry. HTTP 403 remains an authorization
 observation, not proof that authentication failed.
 
