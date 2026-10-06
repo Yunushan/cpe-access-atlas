@@ -227,6 +227,8 @@ class WebEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             contexts = []
             unverified = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            # Isolate certificate rejection from the separate protocol-floor case.
+            unverified.minimum_version = ssl.TLSVersion.TLSv1_2
             contexts.append(unverified)
             wrong_identity = _make_tls_context(None)
             wrong_identity.check_hostname = False
