@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
+import io
 import json
 import socket
 import threading
@@ -8,7 +9,7 @@ import time
 import unittest
 from email.message import Message
 from http.client import HTTPConnection as RealHTTPConnection
-from http.client import HTTPException
+from http.client import HTTPException, HTTPResponse
 from http.cookies import CookieError
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -56,6 +57,12 @@ class FakeResponse:
     ) -> None:
         self.status = status
         self.body = body
+        self.chunked = False
+        self.length = (
+            int(content_length)
+            if content_length is not None and content_length.isdecimal()
+            else None
+        )
         self.msg = Message()
         if content_type is not None:
             self.msg.add_header("Content-Type", content_type)
@@ -127,6 +134,18 @@ def response(
     content_type: str = "text/plain",
 ) -> _Response:
     return _Response(status=status, content_type=content_type, body=body)
+
+
+def parsed_response(wire_bytes: bytes) -> HTTPResponse:
+    """Use the standard HTTP parser and body reader without making a connection."""
+
+    class MemorySocket:
+        def makefile(self, mode: str) -> io.BytesIO:
+            return io.BytesIO(wire_bytes)
+
+    parsed = HTTPResponse(MemorySocket())
+    parsed.begin()
+    return parsed
 
 
 class WebEvidenceTests(unittest.TestCase):
@@ -477,6 +496,75 @@ class WebEvidenceTests(unittest.TestCase):
                 )
         self.assertEqual(request.call_count, 3)
 
+    def test_authentication_loss_stops_at_each_evidence_endpoint_without_retry(self) -> None:
+        root = (
+            b'_PageAccessAuthor["tr069"] = {"VisibilityLevel":3,"Limitation":0};'
+            b'_PageAccessAuthor["rsc"] = {"VisibilityLevel":3,"Limitation":0};'
+        )
+        failures = (
+            (response(b"SYNTHETIC-PRIVATE-SESSION", status=401), "HTTP 401"),
+            (
+                response(b'<input id="Frm_Username">login_entry SYNTHETIC-PRIVATE-SESSION'),
+                "returned the login page",
+            ),
+        )
+        for failed_index in range(5):
+            for failure, message in failures:
+                with self.subTest(failed_evidence_endpoint=failed_index, message=message):
+                    responses = [
+                        response(b'{"lockingTime":0,"sess_token":"session"}'),
+                        response(b"<ajax_response_xml_root>challenge</ajax_response_xml_root>"),
+                        response(b'{"login_need_refresh":true}'),
+                        *[
+                            response(root if index == 0 else b"status")
+                            for index in range(failed_index)
+                        ],
+                        failure,
+                    ]
+                    with patch(
+                        "cpe_access_atlas.web_evidence._request", side_effect=responses
+                    ) as request:
+                        with self.assertRaisesRegex(WebEvidenceError, message) as error:
+                            collect_zte_web_evidence(
+                                "192.168.1.1",
+                                "admin",
+                                "secret",
+                                timeout=5,
+                                expected_firmware="firmware",
+                                expected_model="model",
+                                expected_hardware="hardware",
+                            )
+                    self.assertEqual(request.call_count, 4 + failed_index)
+                    self.assertEqual(
+                        [call.args[1] for call in request.call_args_list].count("POST"), 1
+                    )
+                    self.assertNotIn("SYNTHETIC-PRIVATE", str(error.exception))
+
+    def test_authorization_denial_does_not_claim_authentication_loss(self) -> None:
+        root = b'_PageAccessAuthor["tr069"] = {"VisibilityLevel":3,"Limitation":0};'
+        responses = [
+            response(b'{"lockingTime":0,"sess_token":"session"}'),
+            response(b"<ajax_response_xml_root>challenge</ajax_response_xml_root>"),
+            response(b'{"login_need_refresh":true}'),
+            response(root, status=403),
+            response(b"Forbidden", status=403),
+            response(b"Forbidden", status=403),
+            response(b"Forbidden", status=403),
+        ]
+        with patch("cpe_access_atlas.web_evidence._request", side_effect=responses) as request:
+            result = collect_zte_web_evidence(
+                "192.168.1.1",
+                "admin",
+                "secret",
+                timeout=5,
+                expected_firmware="firmware",
+                expected_model="model",
+                expected_hardware="hardware",
+            )
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(request.call_count, 7)
+        self.assertTrue(all(item["http_status"] == 403 for item in result["endpoints"].values()))
+
     def test_http_request_wraps_transport_errors_and_closes(self) -> None:
         FakeConnection.request_error = OSError("private transport detail")
         with patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection):
@@ -619,6 +707,63 @@ class WebEvidenceTests(unittest.TestCase):
             _read_bounded(FakeResponse(b"a" * (MAX_RESPONSE_BYTES + 1)))
         self.assertEqual(_read_bounded(FakeResponse(b"ok", content_length="2")), b"ok")
 
+    def test_real_http_parser_rejects_truncated_content_length(self) -> None:
+        for body in (b"", b'{"login_need_refresh":true}', b"<html>partial status</html>"):
+            with self.subTest(body=body):
+                with parsed_response(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n" + body
+                ) as parsed:
+                    with self.assertRaisesRegex(WebEvidenceError, "before its declared"):
+                        _read_bounded(parsed)
+
+    def test_real_http_parser_uses_effective_framing(self) -> None:
+        cases = (
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", b"ok"),
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", b""),
+            (b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nok", b"ok"),
+            (b"HTTP/1.1 204 No Content\r\n\r\n", b""),
+            # A 304 Content-Length describes the selected representation, not
+            # a body that should be read from this response.
+            (b"HTTP/1.1 304 Not Modified\r\nContent-Length: 100\r\n\r\n", b""),
+            (
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n",
+                b"ok",
+            ),
+        )
+        for wire_bytes, expected in cases:
+            with self.subTest(response=wire_bytes):
+                with parsed_response(wire_bytes) as parsed:
+                    self.assertEqual(_read_bounded(parsed), expected)
+
+        # HTTPResponse gives chunked coding precedence over a conflicting
+        # Content-Length. Do not mistake that ignored value for missing bytes.
+        for ignored_length in (b"100", b"invalid", b"1048577"):
+            with self.subTest(ignored_length=ignored_length):
+                with parsed_response(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: "
+                    + ignored_length
+                    + b"\r\n\r\n2\r\nok\r\n0\r\n\r\n"
+                ) as parsed:
+                    self.assertEqual(_read_bounded(parsed), b"ok")
+
+    def test_real_http_parser_rejects_incomplete_chunks_and_caps_decoded_body(self) -> None:
+        for chunks in (b"2\r\no", b"2\r\nok\r\n", b"invalid\r\n"):
+            with self.subTest(chunks=chunks):
+                with parsed_response(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks
+                ) as parsed:
+                    with self.assertRaises(HTTPException):
+                        _read_bounded(parsed)
+        body = b"x" * (MAX_RESPONSE_BYTES + 1)
+        with parsed_response(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            + f"{len(body):x}\r\n".encode()
+            + body
+            + b"\r\n0\r\n\r\n"
+        ) as parsed:
+            with self.assertRaisesRegex(WebEvidenceError, "exceeds"):
+                _read_bounded(parsed)
+
     def test_cookie_filtering_and_parse_failure(self) -> None:
         cookies: dict[str, str] = {}
         _remember_cookies(
@@ -744,6 +889,7 @@ class WebEvidenceTests(unittest.TestCase):
 
         for item in (
             FakeResponse(b"x" * (MAX_RESPONSE_BYTES + 1), cookies=("SID=replaced",)),
+            FakeResponse(b"partial", content_length="100", cookies=("SID=replaced",)),
             BrokenMetadataResponse(b"ok", cookies=("SID=replaced",)),
         ):
             with self.subTest(response=type(item).__name__):

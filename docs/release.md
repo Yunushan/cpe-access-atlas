@@ -35,10 +35,14 @@ Before creating a tag:
 
    ```shell
    python -m pip install --require-hashes -r requirements-release.lock
-   python -m pip install -e . --no-deps --no-build-isolation
    python scripts/build_reproducible.py --dist-dir dist
    python -m twine check dist/*
+   python scripts/check_sdist.py --dist-dir dist
    ```
+
+   Use a fresh tooling environment with no installed project for this archive
+   check. CI's package-smoke job enforces the same condition, so neither the
+   archive tests nor their subprocesses may rely on an editable installation.
 
 5. Review the candidate yourself as the solo maintainer, then create an
    annotated `vX.Y.Z` tag and push it through the protected release process.
@@ -74,11 +78,11 @@ historical publisher that used that environment.
 publisher that did not use the `release` environment. Commit
 `e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
 while carrying the earlier broad publishing workflow. Never create or publish
-either tag. For `v0.4.0a7`, rotate the creation quarantine to exclude only
+either tag. For `v0.4.0a8`, rotate the creation quarantine to exclude only
 that exact tag and bind the release environment to the same tag before the
-prepublication audit. Keep the published `v0.4.0a5` and `v0.4.0a6` tags protected by the
-no-bypass update/deletion rule. A broad creation bypass or `v*` environment
-rule would reopen a historical-workflow path.
+prepublication audit. Keep the published `v0.4.0a5`, `v0.4.0a6`, and `v0.4.0a7`
+tags protected by the no-bypass update/deletion rule. A broad creation bypass
+or `v*` environment rule would reopen a historical-workflow path.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, DCO, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen

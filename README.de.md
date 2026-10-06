@@ -158,6 +158,13 @@ Einstellungen abgesendet und keine CWMP-, Shell-, Reset-, Neustart-, Upload-
 oder Firmware-Anfragen ausgeführt. Diese Beobachtungen belegen weder Root-Zugriff
 noch Gerätesupport.
 
+Das JSON-Feld `host` enthält die angegebene private IP-Adresse. Halten Sie den
+Bericht privat und entfernen Sie die Adresse vor der Weitergabe. Ein
+gegenüber der angegebenen Länge unvollständiger HTTP-Body oder HTTP 401 während
+der Erfassung führt zum Abbruch ohne erneuten Anmeldeversuch. HTTP 403 kann
+fehlende Berechtigung eines bereits
+authentifizierten Kontos für die jeweilige Seite anzeigen.
+
 ## Offline-UART-Evidenz
 
 Prüfen Sie eine bereits vorhandene private UART-Aufzeichnung, ohne ihre

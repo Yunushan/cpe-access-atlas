@@ -2,6 +2,32 @@
 
 All notable changes are documented here.
 
+## 0.4.0a8 - 2026-10-06
+
+- Redact complete sensitive JSON/flow containers and YAML plain or nested
+  continuation values, so recognized fields cannot retain descendant values
+  merely because they span lines. Keep malformed YAML property scans bounded and
+  add structured, property-based, and adversarial-input regressions; manual
+  review before sharing remains required.
+- Reject HTTP bodies that end before their effective declared length. Preserve
+  chunked and bodyless framing semantics, and reject incomplete responses before
+  retaining their cookies. Stop web-evidence collection on HTTP 401 or a returned
+  login page at any requested endpoint without retrying; preserve HTTP 403 as an
+  authorization-denial observation.
+- Preserve complete UART Linux version tokens up to 64 characters and reject
+  overlong tokens without exposing their contents. Do not report a shortened
+  identifier as an observed version.
+- Replace the PR-pagination-dependent secret-scanning action with a
+  checksum-pinned Gitleaks executable. Scan the complete checked-out ancestry,
+  including merge-only and binary-attributed changes, and the current tree.
+  Independently reject incomplete or corrupt Git history and repository ignore
+  suppressions. Require real-scanner regressions for these cases.
+- Run CI's source-archive checks without an installed project. Keep isolated
+  shell-helper discovery tests independent of an editable checkout installation.
+- Clarify the retained private target IP in web-evidence reports in all five
+  README languages and the output contract. Prepare the next exact release tag
+  and regenerate the CLI reference; no device qualification is promoted.
+
 ## 0.4.0a7 - 2026-10-03
 
 - Decode valid JSON escape spellings of sensitive report keys before redaction

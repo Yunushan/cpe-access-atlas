@@ -167,6 +167,9 @@ class ShellHelperTests(unittest.TestCase):
                         # Run the helper's real discovery command against one
                         # maintenance test module. Under -I it must explicitly
                         # add the trusted checkout root for imports of scripts.
+                        # Use a stdlib-only checker: the source-archive gate's
+                        # tooling environment has no installed project, and -I
+                        # intentionally ignores its extracted-source PYTHONPATH.
                         discovered = subprocess.run(  # noqa: S603 -- real coverage, reviewed tests
                             [
                                 sys.executable,
@@ -178,7 +181,7 @@ class ShellHelperTests(unittest.TestCase):
                                 str(self.base / "discovery.coverage"),
                                 *coverage[1:],
                                 "-p",
-                                "test_release_candidate.py",
+                                "test_github_policy.py",
                             ],
                             cwd=ROOT,
                             env=self.environment,
@@ -189,7 +192,10 @@ class ShellHelperTests(unittest.TestCase):
                         self.assertEqual(
                             discovered.returncode, 0, discovered.stdout + discovered.stderr
                         )
-                        self.assertIn("test_exact_dated_first_heading", discovered.stderr)
+                        self.assertIn(
+                            "test_classic_branch_checks_must_be_bound_to_github_actions",
+                            discovered.stderr,
+                        )
 
     def invoke(
         self,

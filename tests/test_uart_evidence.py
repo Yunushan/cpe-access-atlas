@@ -92,6 +92,53 @@ class UartEvidenceTests(unittest.TestCase):
                     result = inspect_uart_log(path, EXPECTED)
                     self.assertEqual((result.boot_security, result.uboot_security), (expected,) * 2)
 
+    def test_linux_versions_preserve_complete_bounded_localversion_suffixes(self) -> None:
+        releases = (
+            "4.1.25",
+            "4.1.25+",
+            "4.1.25-g12345678901234567890-dirty",
+            "6.1.0-vendor_build.123+",
+            "4.1.25-" + "a" * 57,
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic-uart.log"
+            for release in releases:
+                for delimiter in ("", "\n", "\r\n", "\t", " (private@builder)"):
+                    with self.subTest(release=release, delimiter=delimiter):
+                        path.write_text("Linux version " + release + delimiter, encoding="ascii")
+                        result = inspect_uart_log(path, EXPECTED)
+                        self.assertEqual(result.linux_versions, (release,))
+                        self.assertNotIn("private@builder", repr(result))
+
+    def test_linux_versions_never_return_prefixes_of_unrecognized_tokens(self) -> None:
+        releases = (
+            "4.1.25000",
+            "4.1.25SECRET",
+            "4.1.25-private@subscriber",
+            "4.1.25/synthetic",
+            "4.1.25\x1b[0m",
+            "123SECRET",
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic-uart.log"
+            for release in releases:
+                with self.subTest(release=release):
+                    path.write_text("Linux version " + release + "\n", encoding="ascii")
+                    result = inspect_uart_log(path, EXPECTED)
+                    self.assertEqual(result.linux_versions, ())
+
+    def test_overlong_linux_release_fails_without_echoing_private_token(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "private-synthetic-uart.log"
+            for suffix in ("a" * 58, "SYNTHETICPRIVATE" * 65536):
+                with self.subTest(suffix_length=len(suffix)):
+                    path.write_text("Linux version 4.1.25-" + suffix + "\n", encoding="ascii")
+                    with self.assertRaisesRegex(UartEvidenceError, "overlong Linux") as error:
+                        inspect_uart_log(path, EXPECTED)
+                    self.assertNotIn(str(path), str(error.exception))
+                    self.assertNotIn("SYNTHETICPRIVATE", str(error.exception))
+                    self.assertIsNone(error.exception.__cause__)
+
     def test_distinguishes_other_build_and_unobserved_identity(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "capture.log"

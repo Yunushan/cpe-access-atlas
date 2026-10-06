@@ -202,6 +202,11 @@ değeri veya ham sayfa yazdırılmaz ya da kaydedilmez. Sayfalara ayar gönderil
 CWMP, kabuk, sıfırlama, yeniden başlatma, yükleme veya firmware isteği yapılmaz.
 Bu gözlemler root erişimini veya cihazın desteklendiğini kanıtlamaz.
 
+JSON içindeki `host`, verilen özel IP adresini içerir. Raporu özel tutun ve
+paylaşmadan önce adresi kaldırın. Bildirilen uzunluğundan kısa HTTP gövdesi veya
+toplama sırasında HTTP 401 yanıtı işlemi durdurur; giriş yeniden denenmez. HTTP 403, kimliği
+doğrulanmış hesabın ilgili sayfa için yetkisiz olduğunu gösterebilir.
+
 ## Çevrimdışı UART kanıtı
 
 Elinizde bulunan özel bir UART kaydını ham içeriğini paylaşmadan inceleyin:

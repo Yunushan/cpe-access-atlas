@@ -78,6 +78,14 @@ not proof of complete security properties or real-device interoperability.
 The GitHub audit tests use synthetic API evidence and replace external process
 execution, so the test suite does not inspect or change your GitHub settings.
 
+The separate secret-scan job installs the checksum-pinned Gitleaks version in
+`.github/workflows/secret-scan.yml` and requires the real-scanner regression
+tests before scanning the candidate. Python-only environments skip those tests.
+To run them locally with the same reviewed scanner, set `GITLEAKS_BINARY` to its
+absolute executable path and run
+`python -m unittest discover -s tests -p test_secret_scan.py -v`.
+An explicitly supplied missing executable fails rather than skipping the gate.
+
 Optionally install the local pre-commit hooks, which run a fast subset of the
 CI checks before each commit. They do not replace the complete test, coverage,
 generated-reference, archive, or clean-install gates:

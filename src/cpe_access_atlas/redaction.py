@@ -46,8 +46,16 @@ _MULTILINE_ASSIGNMENT = re.compile(
 )
 _NEXT_ASSIGNMENT = re.compile(rf"(?:(?<![ \t])[ \t]+|[,;&][ \t]*){_FIELD_KEY}[ \t]*[:=][ \t]*")
 _QUOTED_VALUE = re.compile(r"\"(?:\\.|[^\"\\])*+\"|'(?:\\.|[^'\\])*+'", re.DOTALL)
+_YAML_QUOTED_KEY = re.compile(rf"(?:{_QUOTED_VALUE.pattern})[ \t]*:")
+_JSON_ATOM = re.compile(
+    r"(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
+    r"(?=[\s,}\]]|\Z)"
+)
+_JSON_VALUE_BOUNDARY = re.compile(r"[ \t\r\n]*(?=[,}\]]|\Z)")
 _REPORT_LINES = re.compile(r"[^\r\n]*(?:\r\n?|\n|\Z)")
 _YAML_BLOCK = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?[ \t]*(?:#.*)?\Z")
+_YAML_SEQUENCE = re.compile(r"-(?:[ \t]|\Z)")
+_YAML_PROPERTY = re.compile(r"(?:&[^\s,\[\]{}]+|!<[^>\r\n]*>|!(?!<)[^\s,\[\]{}]*)[ \t\r\n]+")
 # Consume the complete HTTP value, including obsolete folded continuations.
 # Applying the assignment matcher alone would leave every cookie after ';'.
 # Continuation lines cannot consume their following CR/LF, and no suffix needs
@@ -144,6 +152,150 @@ def _is_sensitive_assignment_field(name: str) -> bool:
     return _is_sensitive_field(name)
 
 
+def _container_value_end(value: str, position: int) -> int:
+    """Scan one secret flow value without recursive parsing or object allocation.
+
+    A byte per open bracket bounds stack storage by the report size. Quoted
+    delimiters and escaped quotes do not close the container. If its boundary
+    cannot be established, discard the remainder rather than exposing a suffix.
+    This locates boundaries; it does not certify JSON or YAML syntax.
+    """
+
+    closers = bytearray()
+    quote = ""
+    while position < len(value):
+        character = value[position]
+        if quote:
+            if character == "\\":
+                position += 2
+                continue
+            if character == quote:
+                quote = ""
+        elif character in "\"'":
+            quote = character
+        elif character == "#" and value[position - 1] in " \t\r\n[{,}]\"'":
+            # YAML comments can follow whitespace, a flow delimiter, or a
+            # quoted scalar. Their apparent quotes/brackets cannot end a value.
+            position = next(_REPORT_LINES.finditer(value, position)).end()
+            continue
+        elif character in "[{":
+            closers.append(ord("]" if character == "[" else "}"))
+        elif character in "]}":
+            if ord(character) != closers.pop():
+                return len(value)
+            if not closers:
+                return position + 1
+        position += 1
+    return len(value)
+
+
+def _yaml_value_start(value: str, position: int) -> int | None:
+    """Skip YAML prefixes once; an ambiguous property consumes the remainder."""
+
+    while position < len(value):
+        if value[position] == "#":
+            position = next(_REPORT_LINES.finditer(value, position)).end()
+            while position < len(value) and value[position] in " \t\r\n":
+                position += 1
+        elif property_match := _YAML_PROPERTY.match(value, position):
+            position = property_match.end()
+        elif value[position] in "!&":
+            # A property lacking its terminator/separator is ambiguous. Do not
+            # retry assignments inside the token just scanned; that repeats an
+            # absent-terminator search for each fake key in a malformed suffix.
+            return None
+        else:
+            break
+    return position
+
+
+def _flow_plain_value_end(value: str, position: int) -> int:
+    """Consume a YAML flow plain scalar that only begins like a JSON atom."""
+
+    while position < len(value) and value[position] not in ",}]":
+        if value[position] == "#" and value[position - 1] in " \t\r\n":
+            position = next(_REPORT_LINES.finditer(value, position)).end()
+        else:
+            position += 1
+    return position
+
+
+def _redact_container_assignments(value: str) -> str:
+    """Remove complete sensitive subtrees before other passes see their contents.
+
+    Keeping the key and surrounding whitespace preserves ordinary JSON source
+    formatting; the replacement is a quoted string valid in JSON and YAML.
+    Numeric/boolean/null values of quoted JSON keys receive the same treatment.
+    Unknown value shapes remain subject to the conservative text scanner.
+    """
+
+    output = StringIO()
+    cursor = position = 0
+    line_end = -1
+    while match := _MULTILINE_ASSIGNMENT.search(value, position):
+        position = match.end()
+        key = match.group("key")
+        if not _is_sensitive_assignment_field(key) or position == len(value):
+            continue
+        field_start = match.start()
+        while field_start and value[field_start - 1] in " \t\r\n":
+            field_start -= 1
+        flow_field = (
+            ":" in match.group("separator") and field_start > 0 and value[field_start - 1] in "{,"
+        )
+        container_start = (
+            _yaml_value_start(value, position) if ":" in match.group("separator") else position
+        )
+        if container_start is None:
+            end = len(value)
+        elif (
+            container_start < len(value)
+            and value[container_start] in "[{"
+            and not value.startswith("[REDACTED]", container_start)
+        ):
+            end = _container_value_end(value, container_start)
+            # A bracket can also begin an ordinary unquoted text credential.
+            # Do not turn its closing bracket into a new quoted-value boundary
+            # that exposes a plaintext suffix. Preserve only structural closing
+            # delimiters or the next actual assignment on this physical line.
+            # Cache line boundaries: many containers on one long line must not
+            # each rescan its entire remaining suffix.
+            if end > line_end:
+                line = next(_REPORT_LINES.finditer(value, end))
+                line_end = end + len(line.group().rstrip("\r\n"))
+            boundary = _NEXT_ASSIGNMENT.search(value, end, line_end)
+            tail_end = line_end if boundary is None else boundary.start()
+            tail = value[end:tail_end]
+            # A field inside a flow mapping can be followed by its parent's
+            # closer and another array element. Those elements are siblings,
+            # not a continuation of this field's value.
+            if tail.strip(" \t}]") and not (
+                flow_field
+                and (tail.lstrip(" \t").startswith(("}", "]")) or tail.strip(" \t") == ",")
+            ):
+                end = tail_end
+        elif (
+            key.startswith('"')
+            and key.endswith('"')
+            and flow_field
+            and (atom := _JSON_ATOM.match(value, position))
+        ):
+            end = atom.end()
+            if _JSON_VALUE_BOUNDARY.match(value, end) is None:
+                end = _flow_plain_value_end(value, end)
+        else:
+            # Prefixes can contain apparent assignments (including inside a
+            # comment). They have already been inspected; restarting the next
+            # search inside them makes long property chains quadratic.
+            position = container_start
+            continue
+        output.write(value[cursor:position])
+        output.write('"[REDACTED]"')
+        cursor = position = end
+    output.write(value[cursor:])
+    return output.getvalue()
+
+
 def _redact_structured_assignments(value: str) -> str:
     """Mask quoted values before interpreting CR/LF as report line boundaries.
 
@@ -171,6 +323,12 @@ def _redact_structured_assignments(value: str) -> str:
             end = position + len(line.group().rstrip("\r\n"))
             boundary = _NEXT_ASSIGNMENT.search(value, position, end)
             output.write(value[cursor:position])
+            # Preserve the first item marker so the line pass can recognize
+            # YAML's valid indentationless sequences beneath a mapping key.
+            if ":" in match.group("separator") and _YAML_SEQUENCE.match(value, position, end):
+                output.write("- ")
+            elif ":" in match.group("separator") and value.startswith("#", position):
+                output.write("# ")
             output.write("[REDACTED]")
             cursor = position = end if boundary is None else boundary.start()
     output.write(value[cursor:])
@@ -182,7 +340,7 @@ def _redact_assignments(value: str) -> str:
 
     Unquoted punctuation and spaces may belong to a password. Consume them
     through the end of the line unless another field assignment starts.
-    YAML block values consume all more-indented continuation lines. Each
+    YAML block and plain values consume all more-indented continuation lines. Each
     line/token is traversed a bounded number of times; no recursive parsing
     or repeated scan of a shrinking line suffix is needed.
     """
@@ -191,15 +349,52 @@ def _redact_assignments(value: str) -> str:
         return value
     output = StringIO()
     block_indent: int | None = None
+    block_sequence = False
+    pending_indent: int | None = None
     for line_match in _REPORT_LINES.finditer(value):
         raw_line = line_match.group()
         line = raw_line.rstrip("\r\n")
         newline = raw_line[len(line) :]
         indentation = len(line) - len(line.lstrip(" \t"))
         if block_indent is not None:
-            if not line.strip() or indentation > block_indent:
+            if (
+                not line.strip()
+                or line.lstrip(" \t").startswith("#")
+                or indentation > block_indent
+                or (
+                    block_sequence
+                    and indentation == block_indent
+                    and _YAML_SEQUENCE.match(line, indentation)
+                )
+            ):
                 continue
             block_indent = None
+            block_sequence = False
+        if pending_indent is not None:
+            if not line.strip():
+                output.write(raw_line)
+                continue
+            if line.lstrip(" \t").startswith("#"):
+                output.write(f"{line[:indentation]}# [REDACTED]{newline}")
+                continue
+            if indentation > pending_indent and (
+                not line.lstrip(" \t").startswith(('"', "'"))
+                or _YAML_QUOTED_KEY.match(line, indentation)
+            ):
+                # A key with no same-line value can introduce a plain scalar,
+                # sequence, or mapping. Keep one marker and discard its entire
+                # indented value, including fields whose names are not secrets.
+                output.write(f"{line[:indentation]}[REDACTED]{newline}")
+                block_indent = pending_indent
+                pending_indent = None
+                continue
+            if indentation == pending_indent and _YAML_SEQUENCE.match(line, indentation):
+                output.write(f"{line[:indentation]}- [REDACTED]{newline}")
+                block_indent = pending_indent
+                block_sequence = True
+                pending_indent = None
+                continue
+            pending_indent = None
         yaml_key_start = indentation
         if line.startswith(("- ", "-\t"), indentation):
             yaml_key_start += 1
@@ -213,7 +408,10 @@ def _redact_assignments(value: str) -> str:
                 continue
             start = match.end()
             output.write(line[cursor:start])
+            yaml_field = match.start() == yaml_key_start and ":" in match.group("separator")
             if start == len(line):
+                if yaml_field:
+                    pending_indent = yaml_key_start
                 cursor = start
                 continue
             if match.start() == yaml_key_start and _YAML_BLOCK.fullmatch(line[start:]):
@@ -235,6 +433,11 @@ def _redact_assignments(value: str) -> str:
             end = len(line) if boundary is None else boundary.start()
             output.write("[REDACTED]")
             cursor = end
+            if yaml_field and end == len(line):
+                block_indent = yaml_key_start
+                # Properties can introduce an indentationless sequence even
+                # when the anchor/tag occupies the key's first physical line.
+                block_sequence = True
         output.write(line[cursor:])
         output.write(newline)
     return output.getvalue()
@@ -363,10 +566,15 @@ def _redact_xml(value: str) -> str:
 
 
 def redact_text(value: str) -> str:
-    """Assist manual sanitization of bounded text, never certify safe publication."""
+    """Assist manual sanitization, never certify safe publication or source syntax.
+
+    Mixed formats such as XML embedded inside a JSON string can trigger
+    conservative masking across source boundaries and change document syntax.
+    """
 
     if len(value) > MAX_REPORT_CHARS:
         raise RedactionError("report exceeds the safety size limit")
+    value = _redact_container_assignments(value)
     value = _PRIVATE_KEY_BLOCK.sub(
         lambda match: f"{match.group('begin')}\n[REDACTED]\n{match.group('end')}", value
     )

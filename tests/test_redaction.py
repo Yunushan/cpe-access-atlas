@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tracemalloc
 import unittest
 from itertools import product
@@ -10,6 +12,7 @@ from unittest.mock import patch
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+import cpe_access_atlas.redaction as redaction
 from cpe_access_atlas.redaction import RedactionError, redact_text
 
 
@@ -442,6 +445,338 @@ class RedactionTests(unittest.TestCase):
             redact_text("password: |\nmode: bridge"), "password: [REDACTED]\nmode: bridge"
         )
         self.assertEqual(redact_text("notes: |\n  public text"), "notes: |\n  public text")
+
+    def test_yaml_plain_multiline_scalars_remove_the_complete_credential(self) -> None:
+        # YAML folds these indented plain lines into one scalar password value.
+        # Continuations can contain punctuation or look like independent fields.
+        for prefix, newline, key in product(
+            ("", "  ", "- ", "  -   "),
+            ("\n", "\r\n", "\r"),
+            ("password", "WPA_PSK", '"api_key"'),
+        ):
+            indent = " " * (len(prefix) + 2)
+            sibling = " " * len(prefix)
+            source = (
+                f"{prefix}{key}: SYNTHETIC_FIRST{newline}{newline}"
+                f"{indent}SYNTHETIC_SECOND{newline}"
+                f"{indent}unknown=SYNTHETIC_THIRD{newline}"
+                f"{sibling}mode: bridge{newline}"
+            )
+            expected = f"{prefix}{key}: [REDACTED]{newline}{sibling}mode: bridge{newline}"
+            with self.subTest(prefix=prefix, newline=newline, key=key):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(
+            redact_text("notes: visible\n  still public\nmode: bridge"),
+            "notes: visible\n  still public\nmode: bridge",
+        )
+
+    def test_yaml_keys_on_separate_lines_remove_complete_nested_values(self) -> None:
+        for value in (
+            "  SYNTHETIC_FIRST\n  SYNTHETIC_SECOND",
+            "  - SYNTHETIC_FIRST\n  - SYNTHETIC_SECOND",
+            "  value: SYNTHETIC_FIRST\n  hint: SYNTHETIC_SECOND",
+            "  value:\n    nested: SYNTHETIC_FIRST\n  hint: SYNTHETIC_SECOND",
+            '  "value": "SYNTHETIC_FIRST"\n  "hint": "SYNTHETIC_SECOND"',
+            "  'value': 'SYNTHETIC_FIRST'\n  'hint': 'SYNTHETIC_SECOND'",
+        ):
+            source = f"password:\n\n{value}\nmode: bridge\n"
+            expected = "password:\n\n  [REDACTED]\nmode: bridge\n"
+            with self.subTest(value=value):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        # Quoted multiline values have already been consumed as one scalar;
+        # preserve their surrounding blank lines and source indentation.
+        self.assertEqual(
+            redact_text('password:\n\n  "SYNTHETIC_SECRET"\nmode: bridge'),
+            'password:\n\n  "[REDACTED]"\nmode: bridge',
+        )
+        self.assertEqual(redact_text("password=\n"), "password=\n[REDACTED]")
+
+    def test_yaml_indentationless_sequences_do_not_leave_later_items(self) -> None:
+        for indent, marker in product(("", "  "), ("- ", "-\t", "-\n  ")):
+            marker = marker.replace("\n", "\n" + indent)
+            source = (
+                f"{indent}password:\n"
+                f"{indent}{marker}SYNTHETIC_FIRST\n"
+                f"{indent}{marker}SYNTHETIC_SECOND\n"
+                f"{indent}mode: bridge\n"
+            )
+            expected = f"{indent}password:\n{indent}- [REDACTED]\n{indent}mode: bridge\n"
+            with self.subTest(indent=indent, marker=marker):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+
+    def test_json_sensitive_containers_are_replaced_as_complete_values(self) -> None:
+        for name, whitespace, private_value in product(
+            ("password", "cookie", "authorization", "WPA_PSK", r"pass\u0077ord"),
+            ("", " ", "\n  ", "\r\n\t"),
+            (
+                [],
+                {},
+                ["SYNTHETIC_FIRST", "SYNTHETIC_SECOND"],
+                {"value": "SYNTHETIC_FIRST", "hint": "SYNTHETIC_SECOND"},
+                [{"nested": [{"value": 'SYNTHETIC_}]{\\"_SECRET'}]}],
+            ),
+        ):
+            scalar = json.dumps(private_value, indent=2, ensure_ascii=False)
+            source = f'{{ "{name}"{whitespace}:{whitespace}{scalar}, "mode": "bridge" }}'
+            expected = f'{{ "{name}"{whitespace}:{whitespace}"[REDACTED]", "mode": "bridge" }}'
+            with self.subTest(name=name, whitespace=whitespace, value=private_value):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(
+                    json.loads(expected),
+                    {json.loads(f'"{name}"'): "[REDACTED]", "mode": "bridge"},
+                )
+                self.assertEqual(redact_text(expected), expected)
+
+    def test_json_nonstring_scalars_remain_valid_json_after_redaction(self) -> None:
+        for scalar in ("0", "-1", "1.25", "1e12", "-2.5E-4", "true", "false", "null"):
+            source = f'{{"password":\n  {scalar}, "mode":"bridge"}}'
+            expected = '{"password":\n  "[REDACTED]", "mode":"bridge"}'
+            with self.subTest(scalar=scalar):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(json.loads(expected)["password"], "[REDACTED]")
+                self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text('"password":123'), '"password":[REDACTED]')
+        self.assertEqual(
+            redact_text('"password"=123 mode=bridge'), '"password"=[REDACTED] mode=bridge'
+        )
+
+    def test_flow_values_handle_quotes_and_discard_ambiguous_boundaries(self) -> None:
+        source = "password: ['SYNTHETIC_]}_FIRST', {'value': 'SYNTHETIC_SECOND'}]\nmode: bridge"
+        expected = 'password: "[REDACTED]"\nmode: bridge'
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+        for value in (
+            "[SYNTHETIC_SECRET",
+            "{SYNTHETIC_SECRET",
+            "[{SYNTHETIC_SECRET]",
+            '{"value":"SYNTHETIC_SECRET}',
+            '{"value":"SYNTHETIC_SECRET\\',
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(redact_text("password=" + value), 'password="[REDACTED]"')
+        self.assertEqual(redact_text("password=[REDACTED]"), "password=[REDACTED]")
+        self.assertEqual(redact_text("password="), "password=")
+
+    def test_flow_comments_cannot_close_sensitive_containers(self) -> None:
+        cases = (
+            "[FIRST, # comment ] } \" ' \n  SYNTHETIC_DESCENDANT]",
+            "{first: FIRST, # comment } ] \" ' \n  second: SYNTHETIC_DESCENDANT}",
+            "[# comment ]\n  SYNTHETIC_DESCENDANT]",
+            "[FIRST,# comment ]\n  SYNTHETIC_DESCENDANT]",
+            '["FIRST"# comment ]\n, SYNTHETIC_DESCENDANT]',
+            '["# ] }", "SYNTHETIC_DESCENDANT"]',
+            "['# ] }', 'SYNTHETIC_DESCENDANT']",
+            "[FIRST#literal, SYNTHETIC_DESCENDANT]",
+            "[FIRST:#literal, SYNTHETIC_DESCENDANT]",
+        )
+        for value in cases:
+            source = f"password: {value}\nmode: bridge\n"
+            expected = 'password: "[REDACTED]"\nmode: bridge\n'
+            with self.subTest(value=value):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text("password: [# incomplete ]"), 'password: "[REDACTED]"')
+
+    def test_yaml_comments_do_not_release_sensitive_descendant_state(self) -> None:
+        cases = (
+            (
+                "password:\n- FIRST\n# comment\n- SYNTHETIC_DESCENDANT\nmode: bridge\n",
+                "password:\n- [REDACTED]\nmode: bridge\n",
+            ),
+            (
+                "password:\n# comment\n- SYNTHETIC_DESCENDANT\nmode: bridge\n",
+                "password:\n# [REDACTED]\n- [REDACTED]\nmode: bridge\n",
+            ),
+            (
+                "password:\n  first: FIRST\n# comment\n"
+                "  second: SYNTHETIC_DESCENDANT\nmode: bridge\n",
+                "password:\n  [REDACTED]\nmode: bridge\n",
+            ),
+            ("password:\n# comment", "password:\n# [REDACTED]"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+
+    def test_yaml_properties_and_leading_comments_cannot_hide_flow_values(self) -> None:
+        for prefix in (
+            "&synthetic ",
+            "!!seq ",
+            "!local ",
+            "! ",
+            "!<tag:yaml.org,2002:seq> ",
+            "!!seq &synthetic ",
+            "&synthetic !!seq ",
+            "&synthetic # comment\n  ",
+            "# comment\n  ",
+            "# first\n # second\n  ",
+        ):
+            source = f"password: {prefix}[FIRST,\nSYNTHETIC_DESCENDANT]\nmode: bridge\n"
+            expected = 'password: "[REDACTED]"\nmode: bridge\n'
+            with self.subTest(prefix=prefix):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        for prefix in ("&synthetic", "!!seq", "!!seq &synthetic"):
+            source = f"password: {prefix}\n- FIRST\n# comment\n- SYNTHETIC_DESCENDANT\nmode: bridge"
+            expected = "password: [REDACTED]\nmode: bridge"
+            with self.subTest(prefix=prefix):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text("password: &synthetic \n"), "password: [REDACTED]\n")
+        self.assertEqual(redact_text("password: # comment"), "password: [REDACTED]")
+
+    def test_yaml_prefixes_are_not_revisited_as_assignments(self) -> None:
+        # This deterministic operation-count invariant does not depend on CPU
+        # speed. The old outer cursor called the prefix scanner once per fake
+        # assignment, repeatedly traversing the same remaining property chain.
+        for prefix, count in product(
+            (
+                "password: !<",
+                "password: &",
+                "password: !",
+                "password:&",
+                "password:!",
+                "password: # ",
+                "password: # c\n&",
+            ),
+            (8, 64, 256),
+        ):
+            with self.subTest(prefix=prefix, count=count):
+                with patch.object(
+                    redaction, "_yaml_value_start", wraps=redaction._yaml_value_start
+                ) as scanner:
+                    redaction._redact_container_assignments(prefix * count)
+                self.assertEqual(scanner.call_count, 1)
+        for malformed in (
+            "!<missing",
+            "!<tag>without-separation",
+            "!<tag\nvalue",
+            "&",
+        ):
+            source = f"password: {malformed}\nSYNTHETIC_DESCENDANT\nmode: bridge"
+            self.assertEqual(redact_text(source), 'password: "[REDACTED]"')
+        self.assertEqual(redact_text("password: !"), 'password: "[REDACTED]"')
+
+    def test_large_yaml_prefix_chains_complete_with_bounded_resources(self) -> None:
+        # Use a generous process deadline, not a tiny/flaky timing assertion.
+        # Each input is under 600 KiB. The former cubic malformed-tag scan
+        # needed seconds for 12 KiB; the 40,000-prefix case cannot pass by
+        # merely optimizing that repeated-suffix implementation's constants.
+        script = """
+from cpe_access_atlas.redaction import redact_text
+for prefix in ('password: !<', 'password: &', 'password: !', 'password:&', 'password:!',
+               'password: # ', 'password: # c\\n&'):
+    output = redact_text(prefix * 40000)
+    if prefix == 'password: !<':
+        assert output == 'password: "[REDACTED]"'
+print('completed seven bounded prefix cases')
+"""
+        result = subprocess.run(  # noqa: S603 - fixed test-authored script and current interpreter
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "completed seven bounded prefix cases")
+
+    def test_json_atom_prefixes_do_not_expose_yaml_plain_scalar_continuations(self) -> None:
+        for atom in ("123", "true", "false", "null", "-1.2e+3"):
+            source = f'"password": {atom}\n  SYNTHETIC_DESCENDANT\nmode: bridge\n'
+            expected = '"password": [REDACTED]\nmode: bridge\n'
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+            for comment in ("", " # ignored } ]\n "):
+                source = f'{{"password": {atom}{comment}\n  SYNTHETIC_DESCENDANT, mode: bridge}}\n'
+                expected = '{"password": "[REDACTED]", mode: bridge}\n'
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text('{"password":123 unknown'), '{"password":"[REDACTED]"')
+
+    def test_container_prefixes_do_not_expose_plaintext_credential_suffixes(self) -> None:
+        for container, suffix, assignment in product(
+            ("[SYNTHETIC_FIRST]", "{SYNTHETIC_FIRST}"),
+            (" SYNTHETIC_SECOND", ";SYNTHETIC_SECOND", ",SYNTHETIC_SECOND", "}SYNTHETIC_SECOND"),
+            ("=", ": "),
+        ):
+            source = f"password{assignment}{container}{suffix} mode=bridge"
+            expected = f'password{assignment}"[REDACTED]" mode=bridge'
+            with self.subTest(container=container, suffix=suffix, assignment=assignment):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        source = 'password=["SYNTHETIC_FIRST"] SYNTHETIC_SECOND\nmode=bridge'
+        self.assertEqual(redact_text(source), 'password="[REDACTED]"\nmode=bridge')
+        self.assertEqual(redact_text("password=[SYNTHETIC_FIRST] tail"), 'password="[REDACTED]"')
+
+    def test_adjacent_and_nested_json_containers_keep_public_structure(self) -> None:
+        cases = (
+            ('[{"password":[]}]', '[{"password":"[REDACTED]"}]'),
+            (
+                '{\n"password": [],\n"mode":"bridge"\n}',
+                '{\n"password": "[REDACTED]",\n"mode":"bridge"\n}',
+            ),
+            (
+                '{"password": [], "token":{}, "mode":"bridge"}',
+                '{"password": "[REDACTED]", "token":"[REDACTED]", "mode":"bridge"}',
+            ),
+            (
+                '{"nested":{"password":{} }, "mode":"bridge"}',
+                '{"nested":{"password":"[REDACTED]" }, "mode":"bridge"}',
+            ),
+            (
+                '{"list":[{ "password": []}, {"mode":"bridge"}]}',
+                '{"list":[{ "password": "[REDACTED]"}, {"mode":"bridge"}]}',
+            ),
+            (
+                '[{"password":[]},\n "visible", 123, true, null]',
+                '[{"password":"[REDACTED]"},\n "visible", 123, true, null]',
+            ),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(json.loads(redact_text(source)), json.loads(expected))
+        self.assertEqual(
+            redact_text("parent:\n  list: [{password: []}, {mode: bridge}]"),
+            'parent:\n  list: [{password: "[REDACTED]"}, {mode: bridge}]',
+        )
+        source = "password=[SYNTHETIC_SECRET] mode=bridge " * 20_000
+        expected = 'password="[REDACTED]" mode=bridge ' * 20_000
+        self.assertEqual(redact_text(source), expected)
+
+    def test_mixed_json_xml_remains_conservative_without_a_format_guarantee(self) -> None:
+        # Embedded markup can make the XML pass discard the rest of a JSON
+        # string/document. Retain this conservative masking: skipping XML just
+        # because the report begins with '{' could expose an embedded secret.
+        source = '{"public":"<password>SYNTHETIC_SECRET","mode":"bridge"}'
+        output = redact_text(source)
+        self.assertNotIn("SYNTHETIC_SECRET", output)
+        self.assertEqual(output, '{"public":"<password>[REDACTED]')
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(output)
+
+    def test_secret_containers_have_bounded_nonrecursive_scanning(self) -> None:
+        depth = 20_000
+        nested = '{"value":[' * depth + '"SYNTHETIC_SECRET"' + "]}" * depth
+        source = f'{{"password":{nested},"mode":"bridge"}}'
+        expected = '{"password":"[REDACTED]","mode":"bridge"}'
+        tracemalloc.start()
+        try:
+            output = redact_text(source)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(output, expected)
+        self.assertLess(peak, 20 * 1024 * 1024)
+        self.assertEqual(
+            redact_text("password=[SYNTHETIC_SECRET " * 20_000),
+            'password="[REDACTED]"',
+        )
 
     def test_namespaced_and_dotted_credentials_share_field_recognition(self) -> None:
         for name in (

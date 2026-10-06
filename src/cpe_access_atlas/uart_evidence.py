@@ -67,8 +67,15 @@ _UBOOT_CMDLINE_PATTERN = re.compile(
     rb"(?:[ \t]+([0-9]{8,14}))?[ \t]*\r?$"
 )
 _LINUX_PATTERN = re.compile(
-    rb"(?i)\bLinux version[ \t]+(\d{1,4}(?:\.\d{1,4}){1,4}(?:[-+][a-z0-9._-]{1,12})?)"
+    rb"(?i)\bLinux version[ \t]+"
+    # Require a complete, at-most-64-character release token before extracting
+    # its numeric version and optional localversion suffix. Never report a
+    # shorter prefix as if it were the observed kernel release.
+    rb"(?=[a-z0-9._+-]{1,64}(?:[ \t\r\n]|\Z))"
+    rb"(\d{1,4}(?:\.\d{1,4}){1,4}(?:[-+][a-z0-9._+-]{0,63})?)"
+    rb"(?=[ \t\r\n]|\Z)"
 )
+_OVERLONG_LINUX_PATTERN = re.compile(rb"(?i)\bLinux version[ \t]+[0-9][a-z0-9._+-]{64}")
 _HARDWARE_PATTERN = re.compile(
     rb"(?im)^[ \t]*sHardVersion[ \t]*=[ \t]*(V\d{1,4}(?:\.\d{1,4}){1,4})[ \t]*\r?$"
 )
@@ -185,6 +192,8 @@ def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
         raise UartEvidenceError("UART log exceeds the 8 MiB safety limit")
     if _OVERLONG_FIRMWARE_PATTERN.search(data):
         raise UartEvidenceError("UART log contains an overlong firmware version marker")
+    if _OVERLONG_LINUX_PATTERN.search(data):
+        raise UartEvidenceError("UART log contains an overlong Linux version marker")
 
     firmware_versions = _extract_ascii(
         _FIRMWARE_PATTERN, data, "firmware versions", normalize_whitespace=True

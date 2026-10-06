@@ -1645,7 +1645,15 @@ class RepositoryControlTests(unittest.TestCase):
 
     def test_secret_scanning_workflow_runs_gitleaks(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "secret-scan.yml").read_text(encoding="utf-8")
-        self.assertIn("gitleaks/gitleaks-action@", workflow)
+        self.assertIn("gitleaks_8.30.1_linux_x64.tar.gz", workflow)
+        self.assertIn("sha256sum --check --strict", workflow)
+        self.assertIn('--log-opts="HEAD --full-history --diff-merges=separate --text"', workflow)
+        self.assertIn('"$GITLEAKS_BINARY" dir', workflow)
+        self.assertIn("git rev-list --objects --missing=error HEAD", workflow)
+        self.assertIn("git fsck --full --strict --no-reflogs --no-dangling", workflow)
+        self.assertIn('--gitleaks-ignore-path "$ignore_file"', workflow)
+        self.assertIn("test_secret_scan.py", workflow)
+        self.assertNotIn("gitleaks/gitleaks-action@", workflow)
         self.assertIn("push", workflow)
         self.assertIn("pull_request", workflow)
         gitleaks_config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")

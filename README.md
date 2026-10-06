@@ -181,12 +181,18 @@ mirror, and capture page views only when the authenticated root advertises the
 same IDs. It reports response shapes, access levels, route names, parameter
 names, bounded HTML field/element IDs, configuration-object IDs, Lua resource
 names, and the presence of expected identity or root-research strings as
-sanitized JSON. Input values and parameter values are not emitted. It never
+sanitized JSON. HTML input values and parameter values are not emitted. The
+report includes the supplied private target IP in `host`; keep the report
+private and remove that address before sharing it. It never
 submits those pages and does not send CWMP, configuration, shell, reboot, reset,
 upload, or firmware requests or save raw responses. An incorrect password can
 still contribute to the router's login lockout, so the command never retries
 automatically. The HTTP acknowledgement is required because this firmware
 exposes its challenge-hash login over local HTTP.
+
+An incomplete declared HTTP body, HTTP 401, or a returned login page during
+collection stops the command without retrying authentication. HTTP 403 remains
+an observation that the account may lack permission to view that page.
 
 This evidence can show what the exact authenticated firmware exposes; it does
 not itself enable root access or make the blocked recipe rootable.
@@ -232,7 +238,8 @@ cpe-atlas redact --input raw-observations.txt --output sanitized-observations.tx
 
 Redaction is conservative assistance; manually review the output and any
 screenshots, captures, or exported text before sharing. The command reminds you
-that unrecognized sensitive fields may remain. Keep configuration backups private;
+that sensitive data in unsupported formats or unrecognized fields may remain.
+Keep configuration backups private;
 redaction does not make a `config.bin` safe to upload. Its output path must differ
 from the input report, even with `--force`, so the original is preserved.
 
