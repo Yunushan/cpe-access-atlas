@@ -155,7 +155,9 @@ control is disabled. The `local audit source` result prints the full matching
 commit and the number of byte-matched control files. A different local `HEAD`,
 staged control change, modified/deleted control, extra local `.github` file,
 symbolic link, unreadable Git evidence, or blob mismatch fails closed. The
-accepted-risk audit parses the already captured verified policy bytes rather
+local Git checks ignore replacement references, so substituted commits or trees
+cannot redefine the expected control files while retaining the audited commit ID.
+The accepted-risk audit parses the already captured verified policy bytes rather
 than reopening a mutable path. Use `--json` when retaining an audit record.
 
 The default audit uses the solo-maintainer policy and labels branch/release

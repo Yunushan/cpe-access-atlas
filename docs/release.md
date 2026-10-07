@@ -174,8 +174,11 @@ without those lockfile hashes. Keep the prerequisite tooling installation:
 `scripts/build_reproducible.py` derives `SOURCE_DATE_EPOCH` from the reviewed
 Git commit unless an explicit valid epoch is supplied. It resolves `GITHUB_SHA`
 or `HEAD` to an immutable commit and materializes only that tree's Git blob bytes;
-modified and untracked checkout files cannot enter the artifacts. It builds in
-two separate source trees and then rewrites the wheel as platform-neutral
+modified and untracked checkout files cannot enter the artifacts. Commit, tree,
+blob, and timestamp reads ignore local Git replacement references, so a
+replacement cannot change the source bytes while retaining the reviewed commit
+ID. The source-archive verifier uses the same original-object snapshot rule.
+It builds in two separate source trees and then rewrites the wheel as platform-neutral
 `ZIP_STORED` entries with a verified and regenerated `RECORD`. It rewrites the
 source archive as sorted USTAR inside a fixed-header, stored-DEFLATE gzip stream,
 so neither host metadata nor the host's zlib implementation affects the bytes.

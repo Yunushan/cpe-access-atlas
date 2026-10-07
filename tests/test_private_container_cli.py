@@ -171,6 +171,65 @@ class PrivateContainerCliTests(unittest.TestCase):
                 read.assert_not_called()
                 self.assertEqual(output.read_bytes(), b"original")
 
+    def test_output_stat_errors_are_private_and_stop_before_input(self) -> None:
+        source, output = Path("SYNTHETIC_PRIVATE_INPUT"), Path("SYNTHETIC_PRIVATE_OUTPUT")
+        original_exists = Path.exists
+
+        def exists(path: Path) -> bool:
+            if path == output:
+                raise PermissionError(13, "synthetic denied", str(path))
+            return original_exists(path)
+
+        for command in ("private-protect", "private-unprotect"):
+            for force in ([], ["--force"]):
+                with (
+                    self.subTest(command=command, force=bool(force)),
+                    patch.object(Path, "exists", exists),
+                    patch("cpe_access_atlas.cli._read_private_file") as read,
+                    patch("cpe_access_atlas.cli._read_secret") as secret,
+                    patch("cpe_access_atlas.cli.write_private_bytes") as write,
+                ):
+                    code, stdout, stderr = self.run_cli(
+                        [command, "--input", str(source), "--output", str(output), AUTH, *force]
+                    )
+                    self.assertEqual((code, stdout), (1, ""))
+                    self.assertEqual(
+                        stderr,
+                        "ERROR: filesystem operation failed: "
+                        "unable to inspect private output path\n",
+                    )
+                    read.assert_not_called()
+                    secret.assert_not_called()
+                    write.assert_not_called()
+
+    def test_alias_resolution_errors_are_private_and_stop_before_input(self) -> None:
+        for command in ("private-protect", "private-unprotect"):
+            with (
+                self.subTest(command=command),
+                patch.object(Path, "resolve", side_effect=RuntimeError("SYNTHETIC_PRIVATE_INPUT")),
+                patch("cpe_access_atlas.cli._read_private_file") as read,
+                patch("cpe_access_atlas.cli._read_secret") as secret,
+                patch("cpe_access_atlas.cli.write_private_bytes") as write,
+            ):
+                code, stdout, stderr = self.run_cli(
+                    [
+                        command,
+                        "--input",
+                        "SYNTHETIC_PRIVATE_INPUT",
+                        "--output",
+                        "SYNTHETIC_PRIVATE_OUTPUT",
+                        AUTH,
+                        "--force",
+                    ]
+                )
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertEqual(
+                    stderr, "ERROR: unable to compare private input and output paths\n"
+                )
+                read.assert_not_called()
+                secret.assert_not_called()
+                write.assert_not_called()
+
     def test_same_input_and_output_is_always_rejected(self) -> None:
         with TemporaryDirectory() as directory:
             source = Path(directory) / "private.bin"

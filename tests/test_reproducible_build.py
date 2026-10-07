@@ -211,7 +211,10 @@ version = { attr = "package.__version__" }
             patch.object(reproducible.subprocess, "run", return_value=completed) as run,
         ):
             self.assertEqual(reproducible.source_date_epoch(self.base), EPOCH)
-        self.assertEqual(run.call_args.args[0], ["git", "show", "-s", "--format=%ct", "HEAD"])
+        self.assertEqual(
+            run.call_args.args[0],
+            ["git", "--no-replace-objects", "show", "-s", "--format=%ct", "HEAD"],
+        )
         self.assertEqual(run.call_args.kwargs["cwd"], self.base)
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
 
@@ -221,7 +224,7 @@ version = { attr = "package.__version__" }
             self.assertEqual(reproducible.resolve_source_commit(self.base, "HEAD"), commit.lower())
         self.assertEqual(
             run.call_args.args[0],
-            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            ["git", "--no-replace-objects", "rev-parse", "--verify", "HEAD^{commit}"],
         )
         for invalid in ("main", "--help", "a" * 39, "g" * 40):
             with self.subTest(source_ref=invalid):
@@ -1705,6 +1708,107 @@ version = { attr = "package.__version__" }
         self.assertEqual(snapshot.stat().st_mtime, EPOCH)
         with self.assertRaises(FileExistsError):
             reproducible._copy_source_snapshot(root, snapshot, EPOCH, commit)
+
+    def test_source_identity_ignores_real_git_replacements_and_grafts(self) -> None:
+        root = self.base / "replacement-repository"
+        root.mkdir()
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.upper().startswith("GIT_") and key != "SOURCE_DATE_EPOCH"
+        }
+        environment.update(
+            {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_AUTHOR_NAME": "Build Test",
+                "GIT_AUTHOR_EMAIL": "build-test@example.invalid",
+                "GIT_COMMITTER_NAME": "Build Test",
+                "GIT_COMMITTER_EMAIL": "build-test@example.invalid",
+                "GIT_AUTHOR_DATE": f"@{EPOCH} +0000",
+                "GIT_COMMITTER_DATE": f"@{EPOCH} +0000",
+            }
+        )
+
+        def git(*arguments: str, payload: bytes | None = None) -> str:
+            result = subprocess.run(  # noqa: S603 -- fixed Git and synthetic fixture arguments
+                ["git", *arguments],  # noqa: S607 -- disposable local Git repository
+                cwd=root,
+                input=payload,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+            return result.stdout.decode().strip()
+
+        with patch.dict(os.environ, environment, clear=True):
+            git("init", "--quiet", "--template=")
+            original = git("hash-object", "-w", "--stdin", payload=b"reviewed\n")
+            replacement = git("hash-object", "-w", "--stdin", payload=b"replacement\n")
+            tree = git("mktree", payload=f"100644 blob {original}\treviewed.txt\n".encode())
+            other_tree = git(
+                "mktree", payload=f"100644 blob {replacement}\treviewed.txt\n".encode()
+            )
+            commit = git("commit-tree", tree, "-m", "reviewed source")
+            with patch.dict(
+                os.environ,
+                {
+                    "GIT_AUTHOR_DATE": f"@{EPOCH + 60} +0000",
+                    "GIT_COMMITTER_DATE": f"@{EPOCH + 60} +0000",
+                },
+            ):
+                other_commit = git("commit-tree", other_tree, "-m", "replacement source")
+            git("symbolic-ref", "HEAD", "refs/heads/main")
+            git("update-ref", "refs/heads/main", commit)
+            git("read-tree", commit)
+            (root / "reviewed.txt").write_bytes(b"reviewed\n")
+
+            for kind, old, new, namespace in (
+                ("blob", original, replacement, "refs/replace/"),
+                ("tree", tree, other_tree, "refs/replace/"),
+                ("commit", commit, other_commit, "refs/replace/"),
+                ("custom-namespace", original, replacement, "refs/test-replacements/"),
+            ):
+                with (
+                    self.subTest(kind=kind),
+                    patch.dict(os.environ, {"GIT_REPLACE_REF_BASE": namespace}),
+                ):
+                    git("replace", old, new)
+                    try:
+                        # Ordinary reads see the replacement, but the original
+                        # source commit and its tracked checkout are unchanged.
+                        self.assertEqual(git("show", f"{commit}:reviewed.txt"), "replacement")
+                        self.assertEqual(
+                            git(
+                                "--no-replace-objects",
+                                "status",
+                                "--porcelain",
+                                "--untracked-files=no",
+                            ),
+                            "",
+                        )
+                        if kind == "commit":
+                            self.assertEqual(
+                                git("show", "-s", "--format=%ct", commit), str(EPOCH + 60)
+                            )
+                        self.assertEqual(reproducible.resolve_source_commit(root, "HEAD"), commit)
+                        self.assertEqual(reproducible.source_date_epoch(root, commit), EPOCH)
+                        snapshot = self.base / f"snapshot-{kind}"
+                        reproducible._copy_source_snapshot(root, snapshot, EPOCH, commit)
+                        self.assertEqual((snapshot / "reviewed.txt").read_bytes(), b"reviewed\n")
+                        self.assertEqual((snapshot / "reviewed.txt").stat().st_mtime, EPOCH)
+                    finally:
+                        git("replace", "--delete", old)
+
+            # Legacy parent grafts cannot redefine the reviewed tree or epoch.
+            grafts = root / ".git/info/grafts"
+            grafts.parent.mkdir(exist_ok=True)
+            grafts.write_text(f"{commit} {other_commit}\n", encoding="ascii")
+            self.assertEqual(reproducible.resolve_source_commit(root, "HEAD"), commit)
+            self.assertEqual(reproducible.source_date_epoch(root, commit), EPOCH)
+            snapshot = self.base / "snapshot-graft"
+            reproducible._copy_source_snapshot(root, snapshot, EPOCH, commit)
+            self.assertEqual((snapshot / "reviewed.txt").read_bytes(), b"reviewed\n")
 
     def test_source_snapshot_rejects_malformed_or_unsafe_git_trees(self) -> None:
         object_id = b"a" * 40

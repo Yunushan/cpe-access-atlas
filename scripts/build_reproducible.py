@@ -359,6 +359,7 @@ def source_date_epoch(root: Path = ROOT, source_ref: str = "HEAD") -> int:
     result = subprocess.run(  # noqa: S603 -- fixed Git executable and reviewed source ref
         [  # noqa: S607 -- fixed Git query and prevalidated object id
             "git",
+            "--no-replace-objects",
             "show",
             "-s",
             "--format=%ct",
@@ -381,6 +382,7 @@ def resolve_source_commit(root: Path, source_ref: str) -> str:
     result = subprocess.run(  # noqa: S603 -- fixed Git executable and constrained ref
         [  # noqa: S607 -- source ref is constrained above; no shell is involved
             "git",
+            "--no-replace-objects",
             "rev-parse",
             "--verify",
             f"{source_ref}^{{commit}}",
@@ -1009,6 +1011,7 @@ def _copy_source_snapshot(
     inventory = subprocess.run(  # noqa: S603 -- fixed Git executable and exact commit
         [  # noqa: S607 -- exact validated commit; read-only object inventory
             "git",
+            "--no-replace-objects",
             "ls-tree",
             "-r",
             "-z",
@@ -1069,6 +1072,7 @@ def _copy_source_snapshot(
             payload = subprocess.run(  # noqa: S603 -- fixed Git executable and exact object id
                 [  # noqa: S607 -- exact object id parsed from the immutable tree above
                     "git",
+                    "--no-replace-objects",
                     "cat-file",
                     "blob",
                     object_id,

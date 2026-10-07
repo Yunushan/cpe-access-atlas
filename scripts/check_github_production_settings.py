@@ -284,7 +284,7 @@ def _run_local_git(
 
     try:
         completed = subprocess.run(  # noqa: S603 -- resolved Git executable, fixed arguments
-            [executable, "-C", str(root), *arguments],
+            [executable, "--no-replace-objects", "-C", str(root), *arguments],
             input=input_data,
             capture_output=True,
             check=False,
