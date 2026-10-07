@@ -97,20 +97,53 @@ _AUTHORIZATION_OTHER = re.compile(
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _BASIC = re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]+")
-_MAC = re.compile(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+_MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b")
+_HYPHENATED_MAC = re.compile(r"(?=(?:[0-9A-Fa-f]{2}:){0,4}[0-9A-Fa-f]{2}-)" + _MAC.pattern)
 _SUBSCRIBER_ID = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{2,}@[A-Za-z0-9.-]{2,}\b")
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6 = re.compile(
-    r"(?<![A-Za-z0-9])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}"
-    r"(?:%[A-Za-z0-9_.-]+)?(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?=[0-9A-Fa-f]|::)"
+    r"(?:[0-9A-Fa-f]{0,4}:){2,8}(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{0,4})"
+    r"(?:%[A-Za-z0-9_.:-]+)?(?![A-Za-z0-9:]|\.[0-9])"
+)
+# A hyphen inside a complete MAC distinguishes overlap from a valid IPv6
+# suffix. Use the MAC's own boundary, including before a trailing colon.
+_IPV6_MAC_OVERLAP = re.compile(
+    r"(?<![A-Za-z0-9])(?=[0-9A-Fa-f]|::)(?:[0-9A-Fa-f]{0,4}:){2,8}" + _HYPHENATED_MAC.pattern
+)
+# Consume IPv6 first, including any dotted IPv4 tail. A later independent MAC
+# or IPv4 pass would corrupt even a private IPv6 address preserved by the
+# classifier. Hextet/digit repetitions are bounded; only the disjoint scope
+# suffix can grow with the input. ipaddress validates each complete candidate.
+# Include a complete overlapping MAC tail so a prefix such as fe80::AA cannot
+# hide the start of AA-BB-CC-DD-EE-FF from the invalid-candidate fallback.
+_NETWORK_ADDRESS = re.compile(
+    rf"{_IPV6_MAC_OVERLAP.pattern}|{_HYPHENATED_MAC.pattern}|"
+    rf"{_IPV6.pattern}|{_MAC.pattern}|{_IPV4.pattern}"
 )
 
 
-def _redact_public_ip(match: re.Match[str]) -> str:
+def _redact_network_address(match: re.Match[str]) -> str:
     value = match.group(0)
+    # Six two-digit colon groups also match the broad IPv6 candidate pattern,
+    # but are a MAC address, not an IPv6 address. Preserve standalone MAC masking.
+    if _MAC.fullmatch(value):
+        return "[REDACTED-MAC]"
     try:
         address = ipaddress.ip_address(value)
     except ValueError:
+        if ":" in value:
+            # A broad but invalid IPv6 candidate can contain a real MAC or
+            # IPv4 address. Keep their previous masking without rescanning
+            # valid private IPv6. The IPv4 callback receives no colon, so an
+            # invalid dotted address cannot recurse into this fallback again.
+            masked = _MAC.sub("[REDACTED-MAC]", value)
+            if masked != value:
+                # Masking a MAC tail may expose a complete IPv6 prefix. This
+                # rescan cannot reproduce the overlap: every MAC was removed.
+                masked = _IPV6.sub(_redact_network_address, masked)
+            value = masked
+            return _IPV4.sub(_redact_network_address, value)
         return value
     if not address.is_global and (
         address.is_private
@@ -119,7 +152,11 @@ def _redact_public_ip(match: re.Match[str]) -> str:
         or address.is_unspecified
         or address.is_reserved
     ):
-        return value
+        core, separator, scope = value.partition("%")
+        # Preserve the private IP itself, but sanitize addresses in its zone
+        # identifier. The scope grammar contains no %, so nested callbacks
+        # cannot recursively acquire another scope to scan.
+        return core + separator + _NETWORK_ADDRESS.sub(_redact_network_address, scope)
     return "[REDACTED-PUBLIC-IP]"
 
 
@@ -587,7 +624,5 @@ def redact_text(value: str) -> str:
     value = _BASIC.sub("Basic [REDACTED]", value)
     value = _redact_structured_assignments(value)
     value = _redact_assignments(value)
-    value = _MAC.sub("[REDACTED-MAC]", value)
     value = _SUBSCRIBER_ID.sub("[REDACTED-SUBSCRIBER-ID]", value)
-    value = _IPV4.sub(_redact_public_ip, value)
-    return _IPV6.sub(_redact_public_ip, value)
+    return _NETWORK_ADDRESS.sub(_redact_network_address, value)

@@ -84,10 +84,13 @@ Standart CPython 3.11–3.15 gerekir. Kurulum, katalog şemasını çalışma
 zamanında doğrulamak için JSON Schema doğrulayıcısını da yükler.
 
 CI, Windows, Linux ve macOS üzerinde standart CPython 3.11–3.15 sürümlerini
-hedefler. Python 3.15 henüz sürüm adayıdır; yerel uyumluluk kontrolleri final
-sürümle değil, 3.15.0rc2 ile yapılır. Final sürüm çıktığında CI onu tercih eder;
-final sürüm desteğinin doğrulandığını belirtmeden önce tüm matris yeniden
-çalıştırılmalıdır. Serbest iş parçacıklı Python ve PyPy bu matrise dahil değildir.
+hedefler. Önceki yerel uyumluluk kontrolleri 3.15.0rc2 ile yapılmıştı;
+[v0.4.0a9 sürümünün](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a9)
+yayın ve geri yükleme sonrası kontrol matrisleri 3.15.0rc3 ile çalıştırıldı.
+Bunlar ön sürüm sonuçlarıdır; final Python 3.15 doğrulaması sayılmaz.
+Final sürüm çıktığında CI onu tercih eder; final sürüm desteğinin doğrulandığını
+belirtmeden önce tüm matris yeniden çalıştırılmalıdır. Serbest iş parçacıklı
+Python ve PyPy bu matrise dahil değildir.
 Python uyumluluğu, modem/yapılandırma/firmware uyumluluğunu kanıtlamaz.
 
 ```shell

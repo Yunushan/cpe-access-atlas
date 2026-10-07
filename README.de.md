@@ -68,8 +68,10 @@ Siehe [Kompatibilität](SUPPORT.md) und
 Standard-CPython 3.11–3.15. Die Installation enthält auch den JSON-Schema-Validator:
 
 Die CI zielt auf standard CPython 3.11–3.15 unter Windows, Linux und macOS.
-Python 3.15 ist derzeit ein Release Candidate: lokale Kompatibilitätsprüfungen
-verwenden 3.15.0rc2, keine finale Version. Die CI wählt eine
+Frühere lokale Kompatibilitätsprüfungen verwendeten 3.15.0rc2. Die Release-Matrix
+und die Prüfmatrix nach der Wiederherstellung für [v0.4.0a9](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a9)
+liefen mit 3.15.0rc3. Diese Ergebnisse betreffen Vorabversionen und bestätigen
+keine Validierung der finalen Python-Version 3.15. Die CI wählt eine
 3.15-Vorabversion nur, bis die finale Version verfügbar ist; führen Sie die
 gesamte Matrix mit der finalen Version erneut aus, bevor Sie eine Validierung
 auf der finalen Version erklären. Free-threaded Python und PyPy sind nicht Teil
