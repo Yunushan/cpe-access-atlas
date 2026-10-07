@@ -746,6 +746,67 @@ class LocalAuditSourceTests(unittest.TestCase):
                 self.assertEqual(result.status, audit.STATUS_FAIL)
                 self.assertIsNone(policy)
 
+    def test_local_source_ignores_commit_and_tree_replacements(self) -> None:
+        environment = {
+            key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")
+        }
+        environment.update(
+            {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_AUTHOR_NAME": "Audit Test",
+                "GIT_AUTHOR_EMAIL": "audit@example.invalid",
+                "GIT_COMMITTER_NAME": "Audit Test",
+                "GIT_COMMITTER_EMAIL": "audit@example.invalid",
+            }
+        )
+        for kind in ("commit", "tree"):
+            with (
+                self.subTest(kind=kind),
+                patch.dict(os.environ, environment, clear=True),
+                TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                commit, contents = self._repository(root)
+                tree = self._git(root, "rev-parse", f"{commit}^{{tree}}").decode().strip()
+                control = ".github/workflows/ci.yml"
+                policy_path = ".github/codeql-accepted-risks.json"
+                for relative in (control, policy_path):
+                    root.joinpath(*relative.split("/")).write_bytes(b"replacement control\n")
+                self._git(root, "add", "--all")
+                other_tree = self._git(root, "write-tree").decode().strip()
+                if kind == "commit":
+                    replacement = (
+                        self._git(root, "commit-tree", other_tree, "-m", "replacement controls")
+                        .decode()
+                        .strip()
+                    )
+                    original = commit
+                else:
+                    original, replacement = tree, other_tree
+                self._git(root, "replace", original, replacement)
+
+                # Ordinary Git considers the substituted controls clean under
+                # the original HEAD identity, so the real audit must resist it.
+                self.assertEqual(self._git(root, "rev-parse", "HEAD").decode().strip(), commit)
+                self.assertEqual(self._git(root, "status", "--porcelain"), b"")
+                self.assertEqual(
+                    self._git(root, "show", f"{commit}:{policy_path}"), b"replacement control\n"
+                )
+                result, policy = audit._audit_local_control_checkout(commit, root=root)
+                self.assertEqual(result.status, audit.STATUS_FAIL)
+                self.assertIn("index differs from HEAD", result.detail)
+                self.assertIsNone(policy)
+
+                # Restore only the disposable checkout/index while keeping its
+                # replacements active: the genuine reviewed controls must pass.
+                self._git(root, "--no-replace-objects", "read-tree", tree)
+                for relative in (control, policy_path):
+                    root.joinpath(*relative.split("/")).write_bytes(contents[relative])
+                result, policy = audit._audit_local_control_checkout(commit, root=root)
+                self.assertEqual(result.status, audit.STATUS_PASS)
+                self.assertEqual(policy, contents[policy_path])
+
 
 class GitHubAuditIntegrationTests(unittest.TestCase):
     def run_cli(

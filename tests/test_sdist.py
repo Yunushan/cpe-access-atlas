@@ -109,7 +109,7 @@ class SdistTests(unittest.TestCase):
         self.assertTrue(all(not root.exists() for root in roots))
         self.assertIn("bundled tests and coverage passed", output.getvalue())
 
-    def test_git_snapshot_is_used_instead_of_mutable_checkout_bytes(self) -> None:
+    def test_git_snapshot_ignores_mutable_checkout_and_replacement_bytes(self) -> None:
         self.archive()
         subprocess.run(
             ["git", "init", "--quiet"],  # noqa: S607 -- isolated test repository
@@ -170,6 +170,53 @@ class SdistTests(unittest.TestCase):
         ):
             sdist.check_sdist(self.dist, self.source, source_ref="HEAD")
         self.assertEqual(archive_commands, [])
+
+        original_blob = (
+            real_run(
+                ["git", "rev-parse", "HEAD:docs/release.md"],
+                cwd=self.source,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        replacement_blob = (
+            real_run(
+                ["git", "hash-object", "-w", "--stdin"],
+                cwd=self.source,
+                input=tampered,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        real_run(
+            ["git", "replace", original_blob, replacement_blob],
+            cwd=self.source,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        # Matching the replacement must not authorize an altered source archive.
+        with (
+            patch.object(sdist.subprocess, "run", side_effect=run),
+            self.assertRaisesRegex(sdist.SdistError, "missing or changed"),
+        ):
+            sdist.check_sdist(self.dist, self.source, source_ref="HEAD")
+        self.assertEqual(archive_commands, [])
+
+        # The exact reviewed archive remains valid even with the replacement active.
+        self.archive()
+        with (
+            patch.object(sdist.subprocess, "run", side_effect=run),
+            redirect_stdout(io.StringIO()),
+        ):
+            sdist.check_sdist(self.dist, self.source, source_ref="HEAD")
+        self.assertEqual(len(archive_commands), 2)
 
     def test_direct_cli_import_mode_supports_help(self) -> None:
         script = Path(sdist.__file__).resolve()

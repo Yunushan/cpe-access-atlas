@@ -8,10 +8,11 @@ import ssl
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 from email.message import Message
+from http.client import BadStatusLine, HTTPException, HTTPResponse
 from http.client import HTTPConnection as RealHTTPConnection
-from http.client import HTTPException, HTTPResponse
 from http.cookies import CookieError
 from pathlib import Path
 from typing import Any, ClassVar
@@ -769,6 +770,69 @@ class WebEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(WebEvidenceError, "bounded local HTTP"):
                 _request("192.168.1.1", "GET", "/", 1, {}, transport="http")
         self.assertTrue(FakeConnection.instances[0].closed)
+
+    def test_public_collector_traceback_omits_unframed_private_response(self) -> None:
+        token = "SYNTHETIC-PRIVATE-SESSION"
+        malformed = f"<ParaName>SessionToken</ParaName><ParaValue>{token}</ParaValue>\r\n".encode()
+        # Exercise the real parser first: its error actually contains the raw
+        # page, so the later traceback check cannot pass on a harmless fixture.
+        with self.assertRaises(BadStatusLine) as raw:
+            parsed_response(malformed)
+        self.assertIn(token, str(raw.exception))
+        self.assertIn(malformed.decode().strip(), str(raw.exception))
+
+        def framed(body: bytes) -> bytes:
+            return (
+                b"HTTP/1.1 200 OK\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\n\r\n"
+                + body
+            )
+
+        wires = [
+            framed(b'{"lockingTime":0,"sess_token":"session"}'),
+            framed(b"<ajax_response_xml_root>challenge</ajax_response_xml_root>"),
+            framed(b'{"login_need_refresh":true}'),
+            malformed,
+        ]
+        with (
+            patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection),
+            patch.object(
+                FakeConnection, "getresponse", side_effect=lambda: parsed_response(wires.pop(0))
+            ),
+        ):
+            try:
+                collect_zte_web_evidence(
+                    "192.168.1.1",
+                    "admin",
+                    "secret",
+                    timeout=5,
+                    expected_firmware="firmware",
+                    expected_model="model",
+                    expected_hardware="hardware",
+                    transport="http",
+                    acknowledge_local_http_authentication=True,
+                )
+            except WebEvidenceError as error:
+                rendered = "".join(traceback.format_exception(error))
+                self.assertIn("unable to complete the bounded local HTTP request", rendered)
+                self.assertNotIn(token, rendered)
+                self.assertNotIn(malformed.decode().strip(), rendered)
+                self.assertIsNone(error.__cause__)
+                self.assertTrue(error.__suppress_context__)
+            else:
+                self.fail("malformed authenticated response was accepted")
+        self.assertEqual(
+            [(request["method"], request["path"]) for request in FakeConnection.requests],
+            [
+                ("GET", "/?_type=loginData&_tag=login_entry"),
+                ("GET", "/?_type=loginData&_tag=login_token"),
+                ("POST", "/?_type=loginData&_tag=login_entry"),
+                ("GET", "/"),
+            ],
+        )
+        self.assertEqual(len(FakeConnection.instances), 4)
+        self.assertTrue(all(connection.closed for connection in FakeConnection.instances))
 
     def test_expired_deadline_and_missing_http_socket_are_sanitized(self) -> None:
         with self.assertRaises(TimeoutError):

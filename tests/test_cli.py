@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import runpy
+import traceback
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -17,7 +19,13 @@ from xml.etree import ElementTree as ET
 
 from cpe_access_atlas import __version__
 from cpe_access_atlas.catalog import find_recipe
-from cpe_access_atlas.cli import _config_identity, _configure_stdio, _paths_alias, main
+from cpe_access_atlas.cli import (
+    _config_identity,
+    _configure_stdio,
+    _paths_alias,
+    _private_output_exists,
+    main,
+)
 from cpe_access_atlas.config import (
     ConfigError,
     decode_config,
@@ -91,9 +99,120 @@ class CliTests(unittest.TestCase):
             right = Path(directory) / "output.bin"
             left.write_bytes(b"baseline")
             right.write_bytes(b"output")
-            with patch.object(Path, "resolve", side_effect=OSError("unavailable")):
-                with self.assertRaisesRegex(ConfigError, "unable to compare"):
-                    _paths_alias(left, right)
+            for error in (
+                OSError("SYNTHETIC_PRIVATE_PATH"),
+                RuntimeError("SYNTHETIC_PRIVATE_PATH"),
+            ):
+                with self.subTest(error=type(error).__name__):
+                    with (
+                        patch.object(Path, "resolve", side_effect=error),
+                        self.assertRaisesRegex(ConfigError, "unable to compare") as caught,
+                    ):
+                        _paths_alias(left, right)
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+                    self.assertNotIn(
+                        "SYNTHETIC_PRIVATE_PATH",
+                        "".join(traceback.format_exception(caught.exception)),
+                    )
+
+    def test_config_generate_output_stat_errors_do_not_disclose_paths_or_prompt(self) -> None:
+        output = Path("SYNTHETIC_PRIVATE_OUTPUT.bin")
+        original_stat = Path.stat
+
+        def stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if path == output:
+                raise error
+            return original_stat(path, follow_symlinks=follow_symlinks)
+
+        for error in (
+            PermissionError(errno.EACCES, "synthetic denied", str(output)),
+            NotADirectoryError(errno.ENOTDIR, "synthetic non-directory", str(output)),
+            OSError(errno.EIO, "synthetic I/O error", str(output)),
+        ):
+            for force in ([], ["--force"]):
+                with (
+                    self.subTest(error=type(error).__name__, force=bool(force)),
+                    patch.object(Path, "stat", stat),
+                    patch("cpe_access_atlas.cli._read_secret") as secret,
+                    patch("cpe_access_atlas.cli.read_private_config") as read,
+                    patch("cpe_access_atlas.cli.write_private_bytes") as write,
+                ):
+                    code, stdout, stderr = self.run_cli(
+                        [
+                            "config-generate",
+                            *TARGET,
+                            "--output",
+                            str(output),
+                            "--allow-unencrypted",
+                            "--acknowledge-unverified-compatibility",
+                            "--i-own-or-administer-this-device",
+                            *force,
+                        ]
+                    )
+                    self.assertEqual((code, stdout), (1, ""))
+                    self.assertEqual(
+                        stderr,
+                        "ERROR: filesystem operation failed: "
+                        "unable to inspect private output path\n",
+                    )
+                    secret.assert_not_called()
+                    read.assert_not_called()
+                    write.assert_not_called()
+
+    def test_private_output_inspection_distinguishes_missing_existing_and_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "SYNTHETIC_PRIVATE_OUTPUT"
+            self.assertFalse(_private_output_exists(output))
+            output.write_bytes(b"preserve")
+            self.assertTrue(_private_output_exists(output))
+            self.assertTrue(_private_output_exists(Path(directory)))
+            with patch.object(
+                Path, "stat", side_effect=PermissionError(errno.EACCES, "denied", str(output))
+            ):
+                with self.assertRaisesRegex(OSError, "unable to inspect") as caught:
+                    _private_output_exists(output)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
+            self.assertNotIn(
+                "SYNTHETIC_PRIVATE_OUTPUT", "".join(traceback.format_exception(caught.exception))
+            )
+            self.assertEqual(output.read_bytes(), b"preserve")
+
+    def test_private_alias_resolution_errors_are_controlled_before_input(self) -> None:
+        source, output = Path("SYNTHETIC_PRIVATE_INPUT"), Path("SYNTHETIC_PRIVATE_OUTPUT")
+        commands = [
+            [
+                "config-generate",
+                *TARGET,
+                option,
+                str(source),
+                "--acknowledge-unverified-compatibility",
+                "--i-own-or-administer-this-device",
+            ]
+            for option in ("--input-config", "--input-xml", "--identity-file")
+        ]
+        commands.append(["redact", "--input", str(source)])
+        for command in commands:
+            with (
+                self.subTest(command=command[:1], option=command[-4:]),
+                patch.object(Path, "resolve", side_effect=RuntimeError("SYNTHETIC_PRIVATE_INPUT")),
+                patch("cpe_access_atlas.cli._read_secret") as secret,
+                patch("cpe_access_atlas.cli._read_private_file") as private_read,
+                patch("cpe_access_atlas.cli.read_private_config") as config_read,
+                patch("cpe_access_atlas.cli.write_private_bytes") as write_bytes,
+                patch("cpe_access_atlas.cli.write_private_text") as write_text,
+            ):
+                code, stdout, stderr = self.run_cli([*command, "--output", str(output), "--force"])
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertEqual(
+                    stderr, "ERROR: unable to compare private input and output paths\n"
+                )
+                secret.assert_not_called()
+                private_read.assert_not_called()
+                config_read.assert_not_called()
+                write_bytes.assert_not_called()
+                write_text.assert_not_called()
 
     def test_status_reports_blocked_and_no_change(self) -> None:
         code, stdout, stderr = self.run_cli(["status", *TARGET])

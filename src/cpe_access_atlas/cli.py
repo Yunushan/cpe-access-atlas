@@ -97,8 +97,21 @@ def _paths_alias(left: Path, right: Path) -> bool:
         return os.path.normcase(str(left.resolve(strict=False))) == os.path.normcase(
             str(right.resolve(strict=False))
         )
-    except OSError as exc:
-        raise ConfigError("unable to compare private input and output paths") from exc
+    except (OSError, RuntimeError):
+        # Python 3.11/3.12 report symlink loops as RuntimeError rather than OSError.
+        raise ConfigError("unable to compare private input and output paths") from None
+
+
+def _private_output_exists(path: Path) -> bool:
+    """Check an output without disclosing private paths in filesystem errors."""
+
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise OSError("unable to inspect private output path") from None
+    return True
 
 
 def _parse_timeout_argument(value: str) -> float:
@@ -492,7 +505,7 @@ def command_config_generate(args: argparse.Namespace) -> int:
             "output path must differ from the private identity file; keep the original identifiers"
         )
     serial, mac = _config_identity(args)
-    if output.exists() and not args.force:
+    if _private_output_exists(output) and not args.force:
         print(
             "Refused: output artifact already exists; use --force to replace it.",
             file=sys.stderr,
@@ -615,7 +628,7 @@ def _private_container_paths(args: argparse.Namespace) -> tuple[Path, Path] | No
         raise ConfigError(
             "output path must differ from the private input; keep the original artifact"
         )
-    if output.exists() and not args.force:
+    if _private_output_exists(output) and not args.force:
         print(
             "Refused: output artifact already exists; use --force to replace it.",
             file=sys.stderr,

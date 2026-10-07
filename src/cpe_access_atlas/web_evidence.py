@@ -484,10 +484,13 @@ def _request(
         raise WebEvidenceError(
             "TLS peer certificate or IP verification failed; no HTTP fallback was attempted"
         ) from exc
-    except (HTTPException, OSError, TimeoutError) as exc:
+    except (HTTPException, OSError, TimeoutError):
+        # Protocol errors can include raw response bytes (for example, a
+        # BadStatusLine containing a private page). Keep normal library
+        # tracebacks inside the same sanitized boundary as CLI diagnostics.
         raise WebEvidenceError(
             f"unable to complete the bounded local {transport.upper()} request"
-        ) from exc
+        ) from None
     finally:
         if response is not None:
             with suppress(OSError):
