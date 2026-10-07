@@ -97,20 +97,37 @@ _AUTHORIZATION_OTHER = re.compile(
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _BASIC = re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]+")
-_MAC = re.compile(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+_MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b")
 _SUBSCRIBER_ID = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{2,}@[A-Za-z0-9.-]{2,}\b")
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6 = re.compile(
-    r"(?<![A-Za-z0-9])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}"
-    r"(?:%[A-Za-z0-9_.-]+)?(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?=[0-9A-Fa-f]|::)(?:[0-9A-Fa-f]{0,4}:){2,7}"
+    r"(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{0,4})"
+    r"(?:%[A-Za-z0-9_.-]+)?(?![A-Za-z0-9:]|\.[0-9])"
 )
+# Consume IPv6 first, including any dotted IPv4 tail. A later independent MAC
+# or IPv4 pass would corrupt even a private IPv6 address preserved by the
+# classifier. Hextet/digit repetitions are bounded; only the disjoint scope
+# suffix can grow with the input. ipaddress validates each complete candidate.
+_NETWORK_ADDRESS = re.compile(rf"{_IPV6.pattern}|{_MAC.pattern}|{_IPV4.pattern}")
 
 
-def _redact_public_ip(match: re.Match[str]) -> str:
+def _redact_network_address(match: re.Match[str]) -> str:
     value = match.group(0)
+    # Six two-digit colon groups also match the broad IPv6 candidate pattern,
+    # but are a MAC address, not an IPv6 address. Preserve standalone MAC masking.
+    if _MAC.fullmatch(value):
+        return "[REDACTED-MAC]"
     try:
         address = ipaddress.ip_address(value)
     except ValueError:
+        if ":" in value:
+            # A broad but invalid IPv6 candidate can contain a real MAC or
+            # IPv4 address. Keep their previous masking without rescanning
+            # valid private IPv6. The IPv4 callback receives no colon, so an
+            # invalid dotted address cannot recurse into this fallback again.
+            value = _MAC.sub("[REDACTED-MAC]", value)
+            return _IPV4.sub(_redact_network_address, value)
         return value
     if not address.is_global and (
         address.is_private
@@ -587,7 +604,5 @@ def redact_text(value: str) -> str:
     value = _BASIC.sub("Basic [REDACTED]", value)
     value = _redact_structured_assignments(value)
     value = _redact_assignments(value)
-    value = _MAC.sub("[REDACTED-MAC]", value)
     value = _SUBSCRIBER_ID.sub("[REDACTED-SUBSCRIBER-ID]", value)
-    value = _IPV4.sub(_redact_public_ip, value)
-    return _IPV6.sub(_redact_public_ip, value)
+    return _NETWORK_ADDRESS.sub(_redact_network_address, value)

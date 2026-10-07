@@ -70,10 +70,13 @@ CPython standard 3.11–3.15. L'installation inclut aussi le validateur
 JSON Schema :
 
 L'intégration continue cible CPython standard 3.11–3.15 sous Windows, Linux et
-macOS. Python 3.15 est actuellement un candidat à la publication : les
-vérifications locales de compatibilité utilisent 3.15.0rc2, pas une version
-finale. La CI sélectionne une préversion 3.15 uniquement jusqu'à ce que la
-version finale soit disponible ; relancez la matrice complète sur la version
+macOS. Les vérifications locales antérieures de compatibilité utilisaient
+3.15.0rc2 ; les matrices de publication et de vérification après restauration
+de [v0.4.0a9](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a9)
+ont été exécutées avec 3.15.0rc3. Ces résultats concernent des préversions et
+ne valident pas la version finale de Python 3.15. La CI sélectionne une
+préversion 3.15 uniquement jusqu'à ce que la version finale soit disponible ;
+relancez la matrice complète sur la version
 finale avant de déclarer une validation sur version finale. Python sans GIL et
 PyPy ne font pas partie de cette matrice. La compatibilité de l'interpréteur
 n'établit pas la compatibilité modem/configuration/firmware.

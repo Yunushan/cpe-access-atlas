@@ -97,15 +97,16 @@ def inspect_firmware(
 
     _validate_arguments(path, expected_version, expected_sha256)
     source = Path(path)
-    if not source.is_file():
-        raise FirmwareInspectionError("firmware artifact does not exist or is not a regular file")
-
     digest = sha256()
     size = 0
     versions: set[str] = set()
     markers: set[str] = set()
     overlap = b""
     try:
+        if not source.is_file():
+            raise FirmwareInspectionError(
+                "firmware artifact does not exist or is not a regular file"
+            )
         with source.open("rb") as stream:
             next_byte = stream.read(1)
             while next_byte:

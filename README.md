@@ -83,10 +83,12 @@ Requirements: standard CPython 3.11 through 3.15. Use a dedicated virtual enviro
 the committed hash-locked dependencies so evaluation does not silently resolve
 a different runtime or build backend.
 
-CI targets standard CPython 3.11–3.15 on Windows, Linux, and macOS. Python 3.15
-is currently a release candidate: local compatibility checks use 3.15.0rc2,
-not a final release. CI selects a 3.15 prerelease only until final is available;
-rerun the full matrix on final before claiming final-release validation.
+CI targets standard CPython 3.11–3.15 on Windows, Linux, and macOS. Earlier local
+compatibility checks used 3.15.0rc2; the [v0.4.0a9 release](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a9)
+and post-restore recovery matrices exercised 3.15.0rc3. These are prerelease
+results, not final Python 3.15 qualification. CI selects a 3.15 prerelease only
+until final is available; rerun the full matrix on final before claiming
+final-release validation.
 Free-threaded Python and PyPy are not part of this support matrix. Interpreter
 compatibility does not establish modem/config/firmware compatibility.
 

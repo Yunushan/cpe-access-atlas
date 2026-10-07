@@ -251,6 +251,23 @@ class FirmwareInspectionTests(unittest.TestCase):
             self.assertNotIn(str(path), str(error.exception))
             self.assertIsNone(error.exception.__cause__)
 
+    def test_converts_file_check_errors_to_controlled_errors(self) -> None:
+        path = Path("private-subscriber-firmware.bin")
+        with (
+            patch.object(
+                Path,
+                "is_file",
+                side_effect=PermissionError(13, "Permission denied", str(path)),
+            ),
+            patch.object(Path, "open") as open_file,
+        ):
+            with self.assertRaisesRegex(FirmwareInspectionError, "unable to read") as error:
+                inspect_firmware(path)
+        self.assertNotIn(str(path), str(error.exception))
+        self.assertIsNone(error.exception.__cause__)
+        self.assertTrue(error.exception.__suppress_context__)
+        open_file.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

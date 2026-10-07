@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: 0BSD
 from __future__ import annotations
 
+import ipaddress
 import json
 import subprocess
 import sys
@@ -167,6 +168,70 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("abc.def.ghi", output)
         self.assertIn("[REDACTED-PUBLIC-IP]", output)
         self.assertIn("fd00::1", output)
+
+    def test_network_addresses_are_classified_as_complete_tokens(self) -> None:
+        for address, expected in (
+            ("2001:4860:ab:cd:ef:12:34:56", "[REDACTED-PUBLIC-IP]"),
+            ("2606:47:47:47:47:47:47:1", "[REDACTED-PUBLIC-IP]"),
+            ("::ffff:8.8.8.8", "[REDACTED-PUBLIC-IP]"),
+            ("2001:4860::8.8.8.8", "[REDACTED-PUBLIC-IP]"),
+            ("2001:4860:1:2:3:4:8.8.8.8", "[REDACTED-PUBLIC-IP]"),
+            ("2001:4860::8888%eth0", "[REDACTED-PUBLIC-IP]"),
+            ("fd00:ab:cd:ef:12:34:56:78", "fd00:ab:cd:ef:12:34:56:78"),
+            ("fe80::ab:cd:ef:12:34:56%eth0", "fe80::ab:cd:ef:12:34:56%eth0"),
+            ("::ffff:192.168.1.1", "::ffff:192.168.1.1"),
+            ("fd00::8.8.8.8", "fd00::8.8.8.8"),
+            ("::1", "::1"),
+            ("::", "::"),
+            ("00:11:22:33:44:55", "[REDACTED-MAC]"),
+            ("AA-BB-CC-DD-EE-FF", "[REDACTED-MAC]"),
+            ("8.8.8.8", "[REDACTED-PUBLIC-IP]"),
+            ("192.168.1.1", "192.168.1.1"),
+        ):
+            for template in ("address={}", "address:{}", "[{}]:443", '"{}"', "({})."):
+                with self.subTest(address=address, template=template):
+                    source = template.format(address)
+                    result = template.format(expected)
+                    self.assertEqual(redact_text(source), result)
+                    self.assertEqual(redact_text(result), result)
+
+    def test_invalid_ipv6_candidates_retain_mac_and_ipv4_masking(self) -> None:
+        for source, expected in (
+            ("AA:BB:CC:DD:EE:FF%eth0", "[REDACTED-MAC]%eth0"),
+            ("AA:BB:CC:DD:EE:FF:01", "[REDACTED-MAC]:01"),
+            ("AA:BB:CC:DD:EE:FF%8.8.8.8", "[REDACTED-MAC]%[REDACTED-PUBLIC-IP]"),
+            ("ab:cd:8.8.8.8", "ab:cd:[REDACTED-PUBLIC-IP]"),
+            ("ab:cd:192.168.1.1", "ab:cd:192.168.1.1"),
+            ("ab:cd:999.999.999.999", "ab:cd:999.999.999.999"),
+            ("999.999.999.999", "999.999.999.999"),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(redact_text("address=" + source), "address=" + expected)
+                self.assertEqual(redact_text("address=" + expected), "address=" + expected)
+
+    @given(
+        st.lists(st.integers(min_value=0, max_value=255), min_size=6, max_size=6),
+        st.sampled_from(("2001:4860", "fd00:1234")),
+    )
+    @settings(max_examples=100, deadline=None)
+    def test_ipv6_mac_shaped_suffix_is_never_classified_separately(
+        self, groups: list[int], prefix: str
+    ) -> None:
+        address = prefix + ":" + ":".join(f"{group:02x}" for group in groups)
+        parsed = ipaddress.IPv6Address(address)
+        expected = "[REDACTED-PUBLIC-IP]" if parsed.is_global else address
+        for spelling in (address, parsed.compressed, parsed.exploded.upper()):
+            result = "address=" + (expected if parsed.is_global else spelling)
+            self.assertEqual(redact_text("address=" + spelling), result)
+            self.assertEqual(redact_text(result), result)
+
+    def test_long_address_like_input_stays_bounded(self) -> None:
+        # Fixed-width hextet alternatives must not rescan an unbounded suffix.
+        # Invalid short colon tokens retain their existing non-address meaning.
+        source = "ab:cd:ef " * 20_000
+        self.assertEqual(redact_text(source), source)
+        scoped = "2001:4860::1%" + "eth0" * 20_000
+        self.assertEqual(redact_text(scoped), "[REDACTED-PUBLIC-IP]")
 
     def test_escaped_json_sensitive_keys_preserve_source_formatting(self) -> None:
         for key in (

@@ -1648,6 +1648,17 @@ class CliTests(unittest.TestCase):
                         else:
                             self.assertNotIn("path", payload["firmware_artifact"])
 
+    def test_firmware_stat_error_does_not_emit_private_path(self) -> None:
+        private_path = "private-subscriber-firmware.bin"
+        with patch.object(
+            Path, "is_file", side_effect=PermissionError(13, "Permission denied", private_path)
+        ):
+            code, stdout, stderr = self.run_cli(
+                ["firmware-inspect", "--input", private_path, "--json"]
+            )
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertEqual(stderr, "ERROR: unable to read firmware artifact\n")
+
     def test_status_without_blockers_omits_blocker_section(self) -> None:
         recipe = find_recipe(
             "turk-telekom",
