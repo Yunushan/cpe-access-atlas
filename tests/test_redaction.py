@@ -215,6 +215,55 @@ class RedactionTests(unittest.TestCase):
                 self.assertEqual(redact_text("address=" + source), "address=" + expected)
                 self.assertEqual(redact_text("address=" + expected), "address=" + expected)
 
+    def test_ipv6_prefix_does_not_consume_the_start_of_a_hyphenated_mac(self) -> None:
+        for separators, tail in product(product(":-", repeat=5), ("", ":", ":01")):
+            if "-" not in separators:
+                continue  # A colon-only suffix may be part of valid private IPv6.
+            mac = "AA" + "".join(
+                separator + octet
+                for separator, octet in zip(separators, ("BB", "CC", "DD", "EE", "FF"), strict=True)
+            )
+            self.assertEqual(redact_text("mac=" + mac + tail), "mac=[REDACTED-MAC]" + tail)
+            for prefix, expected_prefix in (
+                ("fe80::", "fe80::"),
+                ("2001:4860::", "[REDACTED-PUBLIC-IP]"),
+            ):
+                with self.subTest(prefix=prefix, mac=mac, tail=tail):
+                    expected = expected_prefix + "[REDACTED-MAC]" + tail
+                    self.assertEqual(redact_text(prefix + mac + tail), expected)
+                    self.assertEqual(redact_text(expected), expected)
+            scoped = "fe80::1%" + mac + tail
+            expected_scope = "fe80::1%[REDACTED-MAC]" + tail
+            self.assertEqual(redact_text(scoped), expected_scope)
+            self.assertEqual(redact_text(expected_scope), expected_scope)
+        self.assertEqual(
+            redact_text("2001:4860::1-description"), "[REDACTED-PUBLIC-IP]-description"
+        )
+        self.assertEqual(redact_text("fe80::1-description"), "fe80::1-description")
+
+    def test_private_ipv6_scope_retains_standalone_address_masking(self) -> None:
+        for scope, expected_scope in (
+            ("8.8.8.8", "[REDACTED-PUBLIC-IP]"),
+            ("2001:4860::8888", "[REDACTED-PUBLIC-IP]"),
+            ("2001:4860:AA:BB:CC:DD:EE:FF", "[REDACTED-PUBLIC-IP]"),
+            ("AA-BB-CC-DD-EE-FF", "[REDACTED-MAC]"),
+            ("AA-BB-CC-DD-EE-FF:", "[REDACTED-MAC]:"),
+            ("AA-BB-CC-DD-EE-FF:01", "[REDACTED-MAC]:01"),
+            ("AA-BB:CC-DD:EE-FF", "[REDACTED-MAC]"),
+            ("AA:BB:CC:DD:EE:FF", "[REDACTED-MAC]"),
+            ("192.168.1.1", "192.168.1.1"),
+            ("fd00:ab:cd:ef:12:34:56:78", "fd00:ab:cd:ef:12:34:56:78"),
+            ("fd00::8.8.8.8", "fd00::8.8.8.8"),
+            ("999.999.999.999", "999.999.999.999"),
+            ("eth0", "eth0"),
+        ):
+            for core in ("fe80::1", "fd00:ab:cd:ef:12:34:56:78"):
+                with self.subTest(core=core, scope=scope):
+                    source = f"[{core}%{scope}]:443"
+                    expected = f"[{core}%{expected_scope}]:443"
+                    self.assertEqual(redact_text(source), expected)
+                    self.assertEqual(redact_text(expected), expected)
+
     @given(
         st.lists(st.integers(min_value=0, max_value=255), min_size=6, max_size=6),
         st.sampled_from(("2001:4860", "fd00:1234")),
