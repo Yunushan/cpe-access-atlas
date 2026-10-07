@@ -2,6 +2,23 @@
 
 All notable changes are documented here.
 
+## 0.4.0a10 - 2026-10-07
+
+- Classify complete network-address tokens so public IPv6 addresses are fully
+  redacted, including compressed, scoped, and dotted-tail forms. Add overlap,
+  malformed candidate, scope, idempotence, and adversarial-input regressions while
+  retaining the existing private-address policy. Manual review before sharing
+  remains required.
+- Sanitize firmware-file stat failures through the existing unreadable-artifact
+  error path, preventing filesystem exceptions from exposing private local paths
+  in CLI diagnostics. Verify that a failed stat does not open the artifact.
+- Clarify in all five README languages that the local Python 3.15 RC2 check was
+  historical and a9 release/recovery matrices exercised RC3. Final Python 3.15
+  qualification still requires a successful matrix on the final interpreter.
+- Prepare candidate `v0.4.0a10`; preserve the immutable a9 release and its evidence.
+  Live release controls still require a separate reviewed rotation. No device,
+  root-access, or recovery qualification is promoted.
+
 ## 0.4.0a9 - 2026-10-06
 
 - Default authenticated web-evidence collection to HTTPS on port 443 with
