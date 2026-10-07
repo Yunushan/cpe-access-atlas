@@ -106,9 +106,12 @@ def _private_output_exists(path: Path) -> bool:
     """Check an output without disclosing private paths in filesystem errors."""
 
     try:
-        return path.exists()
+        path.stat()
+    except FileNotFoundError:
+        return False
     except OSError:
         raise OSError("unable to inspect private output path") from None
+    return True
 
 
 def _parse_timeout_argument(value: str) -> float:

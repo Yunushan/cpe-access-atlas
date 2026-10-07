@@ -12,6 +12,7 @@ import ssl
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -341,7 +342,13 @@ class WebTLSIntegrationTests(unittest.TestCase):
                     tls_context=self.client_context(),
                 )
             elapsed = time.monotonic() - started
-        self.assertIsInstance(raised.exception.__cause__, TimeoutError)
+        self.assertIsInstance(raised.exception.__context__, TimeoutError)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertTrue(raised.exception.__suppress_context__)
+        rendered = "".join(traceback.format_exception(raised.exception))
+        self.assertIn("unable to complete the bounded local HTTPS request", rendered)
+        self.assertNotIn("TimeoutError:", rendered)
+        self.assertNotIn("must-not-arrive", rendered)
         self.assertLess(elapsed, 1)
         self.assertEqual(server.requests, [])
         self.assertEqual(server.connections, [(TARGET, 443)])
@@ -361,7 +368,12 @@ class WebTLSIntegrationTests(unittest.TestCase):
         with server.running():
             with self.assertRaises(WebEvidenceError) as raised:
                 _request(TARGET, "GET", "/", 5, {}, tls_context=self.client_context())
-        self.assertIsInstance(raised.exception.__cause__, TimeoutError)
+        self.assertIsInstance(raised.exception.__context__, TimeoutError)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertTrue(raised.exception.__suppress_context__)
+        rendered = "".join(traceback.format_exception(raised.exception))
+        self.assertIn("unable to complete the bounded local HTTPS request", rendered)
+        self.assertNotIn("TimeoutError:", rendered)
         self.assertEqual(server.connections, [(TARGET, 443)])
         self.assertEqual(len(server.requests), 1)
 
