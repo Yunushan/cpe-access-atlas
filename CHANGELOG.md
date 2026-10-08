@@ -2,6 +2,25 @@
 
 All notable changes are documented here.
 
+## 0.4.0a11 - 2026-10-08
+
+- Ignore local Git replacement references when resolving release source commits,
+  timestamps, trees, and blobs, including source-archive verification. Require
+  the production-settings auditor to compare original control objects rather
+  than substituted commits or trees under an unchanged commit identifier.
+- Inspect private output paths directly with `stat`, treating only genuine
+  absence as a missing destination. Sanitize other inspection failures and
+  legacy symlink-loop errors before secret prompts, baseline reads, or writes;
+  an explicitly supplied configuration identity file retains its earlier read
+  order. Preserve existing overwrite and alias guards.
+- Suppress raw protocol and transport exception chains in normal web-evidence
+  API tracebacks so a malformed status line cannot disclose private response
+  text. Retain certificate verification, request limits, connection cleanup,
+  and cumulative TLS deadlines, with regression tests for the actual parser.
+- Prepare candidate `v0.4.0a11`; preserve immutable a10 assets and evidence.
+  Live release controls still require a separate reviewed rotation. No device,
+  root-access, recovery, or final Python 3.15 qualification is promoted.
+
 ## 0.4.0a10 - 2026-10-07
 
 - Classify complete network-address tokens so public IPv6 addresses are fully
