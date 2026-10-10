@@ -771,6 +771,48 @@ class WebEvidenceTests(unittest.TestCase):
                 _request("192.168.1.1", "GET", "/", 1, {}, transport="http")
         self.assertTrue(FakeConnection.instances[0].closed)
 
+    def test_public_collector_traceback_omits_invalid_content_length(self) -> None:
+        marker = "SYNTHETIC-PRIVATE-HEADER"
+        parsed = parsed_response(
+            b"HTTP/1.1 200 OK\r\nContent-Length: "
+            + marker.encode()
+            + b"\r\nConnection: close\r\n\r\n{}"
+        )
+        self.assertEqual(parsed.getheader("Content-Length"), marker)
+        with (
+            patch("cpe_access_atlas.web_evidence.HTTPConnection", FakeConnection),
+            patch.object(FakeConnection, "getresponse", return_value=parsed) as getresponse,
+        ):
+            try:
+                collect_zte_web_evidence(
+                    "192.168.1.1",
+                    "admin",
+                    "secret",
+                    timeout=5,
+                    expected_firmware="firmware",
+                    expected_model="model",
+                    expected_hardware="hardware",
+                    transport="http",
+                    acknowledge_local_http_authentication=True,
+                )
+            except WebEvidenceError as error:
+                rendered = "".join(traceback.format_exception(error))
+                self.assertIn("router returned an invalid Content-Length header", rendered)
+                self.assertNotIn(marker, rendered)
+                self.assertIsNone(error.__cause__)
+                self.assertTrue(error.__suppress_context__)
+            else:
+                self.fail("malformed Content-Length was accepted")
+        getresponse.assert_called_once_with()
+        self.assertTrue(parsed.closed)
+        self.assertIsNone(parsed.fp)
+        self.assertEqual(
+            [(request["method"], request["path"]) for request in FakeConnection.requests],
+            [("GET", "/?_type=loginData&_tag=login_entry")],
+        )
+        self.assertEqual(len(FakeConnection.instances), 1)
+        self.assertTrue(FakeConnection.instances[0].closed)
+
     def test_public_collector_traceback_omits_unframed_private_response(self) -> None:
         token = "SYNTHETIC-PRIVATE-SESSION"
         malformed = f"<ParaName>SessionToken</ParaName><ParaValue>{token}</ParaValue>\r\n".encode()

@@ -348,8 +348,9 @@ def _read_bounded(response: HTTPResponse) -> bytes:
     if raw_length is not None and not response.chunked:
         try:
             declared_length = int(raw_length)
-        except ValueError as exc:
-            raise WebEvidenceError("router returned an invalid Content-Length header") from exc
+        except ValueError:
+            # ValueError includes the raw header value; keep it out of library tracebacks.
+            raise WebEvidenceError("router returned an invalid Content-Length header") from None
         if declared_length < 0 or declared_length > MAX_RESPONSE_BYTES:
             raise WebEvidenceError("router response exceeds the 1 MiB evidence limit")
         expected_length = response.length
