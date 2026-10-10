@@ -131,8 +131,14 @@ def check_sdist(
     expected = {path.relative_to(source) for path in source_inputs(source)}
     with TemporaryDirectory(prefix="cpe-atlas-sdist-") as directory:
         destination = Path(directory)
-        with tarfile.open(archives[0], "r:gz") as archive:
-            _extract_reviewed_archive(archive, destination)
+        try:
+            with (
+                reproducible._bounded_sdist_stream(archives[0]) as raw_source,
+                tarfile.open(fileobj=raw_source, mode="r:") as archive,
+            ):
+                _extract_reviewed_archive(archive, destination)
+        except reproducible.ReproducibleBuildError as exc:
+            raise SdistError(str(exc)) from exc
         roots = tuple(destination.iterdir())
         if len(roots) != 1 or not roots[0].is_dir():
             raise SdistError("source archive must contain exactly one root directory")

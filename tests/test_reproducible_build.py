@@ -477,6 +477,89 @@ version = { attr = "package.__version__" }
         self.assertEqual(first.read_bytes(), once)
         self.assertEqual(gzip.decompress(reproducible._gzip_stored(b"", EPOCH)), b"")
 
+    def test_tar_stream_limit_precedes_extension_parsing(self) -> None:
+        path = self.base / "package.tar.gz"
+        self.archive(path, mtime=EPOCH)
+        raw = gzip.decompress(path.read_bytes())
+        metadata = b"A" * 32768 + b"\0"
+        extensions = {"pax": tarfile.TarInfo.create_pax_global_header({"comment": "A" * 32768})}
+        for label, kind in (
+            ("gnu-long-name", tarfile.GNUTYPE_LONGNAME),
+            ("gnu-long-link", tarfile.GNUTYPE_LONGLINK),
+        ):
+            header = tarfile.TarInfo("././@LongLink")
+            header.type = kind
+            header.size = len(metadata)
+            extensions[label] = (
+                header.tobuf(format=tarfile.GNU_FORMAT)
+                + metadata
+                + b"\0" * (-len(metadata) % tarfile.BLOCKSIZE)
+            )
+        payloads = {name: gzip.compress(extension + raw) for name, extension in extensions.items()}
+        payloads["trailing-padding"] = gzip.compress(raw + b"\0" * 32768)
+        payloads["concatenated-gzip"] = gzip.compress(raw) + gzip.compress(b"\0" * 32768)
+        for label, original in payloads.items():
+            with self.subTest(case=label):
+                path.write_bytes(original)
+                with (
+                    patch.object(reproducible, "_MAX_TAR_STREAM_BYTES", len(raw)),
+                    patch.object(reproducible.tarfile, "open") as parse,
+                    self.assertRaisesRegex(reproducible.ReproducibleBuildError, "tar-stream"),
+                ):
+                    reproducible.canonicalize_sdist(path, EPOCH)
+                parse.assert_not_called()
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(list(self.base.glob(".*.tmp")), [])
+
+    def test_tar_stream_exact_boundary_preserves_canonical_bytes(self) -> None:
+        path = self.base / "package.tar.gz"
+        self.archive(path, mtime=EPOCH)
+        original = path.read_bytes()
+        raw = gzip.decompress(original)
+        expected = reproducible.canonicalize_sdist(path, EPOCH)
+        path.write_bytes(original)
+        with (
+            patch.object(reproducible, "_MAX_TAR_STREAM_BYTES", len(raw)),
+            patch.object(reproducible, "_SDIST_READ_CHUNK_BYTES", 3072),
+        ):
+            self.assertEqual(reproducible.canonicalize_sdist(path, EPOCH), expected)
+        self.assertEqual(path.read_bytes(), expected)
+        path.write_bytes(original)
+        with (
+            patch.object(reproducible, "_MAX_TAR_STREAM_BYTES", len(raw) - 1),
+            patch.object(reproducible.tarfile, "open") as parse,
+            self.assertRaisesRegex(reproducible.ReproducibleBuildError, "tar-stream"),
+        ):
+            reproducible.canonicalize_sdist(path, EPOCH)
+        parse.assert_not_called()
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_gzip_integrity_is_checked_before_tar_parsing(self) -> None:
+        path = self.base / "package.tar.gz"
+        self.archive(path, mtime=EPOCH)
+        original = path.read_bytes()
+        bad_crc = bytearray(original)
+        bad_crc[-8] ^= 1
+        # A valid gzip header followed by an invalid reserved DEFLATE block.
+        invalid_deflate = bytes.fromhex("1f8b080000000000000307")
+        for label, malformed in (
+            ("header", b"not gzip"),
+            ("truncated", original[:-1]),
+            ("crc", bytes(bad_crc)),
+            ("deflate", invalid_deflate),
+            ("truncated-second-member", original + original[:-1]),
+        ):
+            with self.subTest(case=label):
+                path.write_bytes(malformed)
+                with (
+                    patch.object(reproducible.tarfile, "open") as parse,
+                    self.assertRaisesRegex(reproducible.ReproducibleBuildError, "gzip data"),
+                ):
+                    reproducible.canonicalize_sdist(path, EPOCH)
+                parse.assert_not_called()
+                self.assertEqual(path.read_bytes(), malformed)
+                self.assertEqual(list(self.base.glob(".*.tmp")), [])
+
     def test_canonical_wheels_are_platform_neutral_and_have_valid_records(self) -> None:
         first = self.base / "a" / "package.whl"
         second = self.base / "b" / "package.whl"
@@ -1214,7 +1297,7 @@ version = { attr = "package.__version__" }
                 return None
 
         def open_archive(*args: object, **kwargs: object) -> object:
-            if args and args[0] == path:
+            if kwargs.get("mode") == "r:":
                 return MissingPayload()
             return real_open(*args, **kwargs)
 
