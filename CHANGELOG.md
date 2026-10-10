@@ -2,6 +2,15 @@
 
 All notable changes are documented here.
 
+## 0.4.0a13 - 2026-10-10
+
+- Keep malformed `Content-Length` values out of ordinary formatted web-evidence
+  library tracebacks while retaining sanitized diagnostics, response/connection
+  cleanup, and a single login-entry request.
+- Prepare candidate `v0.4.0a13`; preserve immutable a12 assets and evidence.
+  Live release controls still require a separate reviewed rotation. No device,
+  recovery, operational, or final Python 3.15 qualification is promoted here.
+
 ## 0.4.0a12 - 2026-10-10
 
 - Ask setup-python to check the current release manifest for Python 3.15 in CI

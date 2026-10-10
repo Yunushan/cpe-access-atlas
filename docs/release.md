@@ -20,7 +20,10 @@ Before creating a tag:
    version. `Unreleased`, displaced entries, and prefix matches fail; ordinary
    prose that merely mentions the version remains valid.
 2. Run the development checks from `CONTRIBUTING.md`.
-   For the a12 fixes, verify bounded whole-stream gzip expansion before tar
+   For a13, verify malformed `Content-Length` values are absent from ordinary
+   formatted public-collector tracebacks. Retain the real-parser regression for
+   one login-entry request, response/connection cleanup, and no login retry.
+   Retain the a12 checks for bounded whole-stream gzip expansion before tar
    parsing, including PAX/GNU metadata, padding, and integrity failures. Check
    YAML flow-field continuations, comments, properties, quoted escapes, and
    compact sequence mappings, while preserving ordinary public text after a
@@ -98,16 +101,16 @@ historical publisher that used that environment.
 publisher that did not use the `release` environment. Commit
 `e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
 while carrying the earlier broad publishing workflow. Never create or publish
-either tag. For `v0.4.0a12`, rotate the creation quarantine to exclude only
+either tag. For `v0.4.0a13`, rotate the creation quarantine to exclude only
 that exact tag and bind the release environment to the same tag before the
 prepublication audit. Keep the published `v0.4.0a5`, `v0.4.0a6`, `v0.4.0a7`,
-`v0.4.0a8`, `v0.4.0a9`, `v0.4.0a10`, and `v0.4.0a11` tags protected by the
-no-bypass update/deletion rule.
+`v0.4.0a8`, `v0.4.0a9`, `v0.4.0a10`, `v0.4.0a11`, and `v0.4.0a12` tags protected
+by the no-bypass update/deletion rule.
 A broad creation bypass or `v*` environment rule would reopen a
 historical-workflow path.
-Preserve a11's immutable assets, tag, and release receipts, along with
+Preserve a12's immutable assets, tag, and release receipts, along with
 earlier release history. Candidate documentation does not prove that live
-controls have been rotated for a12.
+controls have been rotated for a13.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, DCO, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen
