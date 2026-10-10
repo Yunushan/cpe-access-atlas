@@ -20,7 +20,14 @@ Before creating a tag:
    version. `Unreleased`, displaced entries, and prefix matches fail; ordinary
    prose that merely mentions the version remains valid.
 2. Run the development checks from `CONTRIBUTING.md`.
-   For the a11 source-integrity and privacy fixes, verify original Git bytes
+   For the a12 fixes, verify bounded whole-stream gzip expansion before tar
+   parsing, including PAX/GNU metadata, padding, and integrity failures. Check
+   YAML flow-field continuations, comments, properties, quoted escapes, and
+   compact sequence mappings, while preserving ordinary public text after a
+   comma. Verify redact output-stat failures stop before reading private input.
+   Check that Python 3.15 matrix setup requests the latest available manifest
+   entry without treating a cached or manifest-only release candidate as final.
+   Retain the a11 source-integrity and privacy regressions: original Git bytes
    despite local blob/tree/commit replacements, rejection of altered source
    archives and control files, private output stat and alias-error handling,
    and sanitized malformed-response tracebacks with isolated fixtures. Retain
@@ -91,15 +98,16 @@ historical publisher that used that environment.
 publisher that did not use the `release` environment. Commit
 `e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
 while carrying the earlier broad publishing workflow. Never create or publish
-either tag. For `v0.4.0a11`, rotate the creation quarantine to exclude only
+either tag. For `v0.4.0a12`, rotate the creation quarantine to exclude only
 that exact tag and bind the release environment to the same tag before the
 prepublication audit. Keep the published `v0.4.0a5`, `v0.4.0a6`, `v0.4.0a7`,
-`v0.4.0a8`, `v0.4.0a9`, and `v0.4.0a10` tags protected by the no-bypass update/deletion rule.
+`v0.4.0a8`, `v0.4.0a9`, `v0.4.0a10`, and `v0.4.0a11` tags protected by the
+no-bypass update/deletion rule.
 A broad creation bypass or `v*` environment rule would reopen a
 historical-workflow path.
-Preserve a10's immutable assets, tag, and release receipts, along with
+Preserve a11's immutable assets, tag, and release receipts, along with
 earlier release history. Candidate documentation does not prove that live
-controls have been rotated for a11.
+controls have been rotated for a12.
 
 Publication also depends on reusable CI, dependency-audit, secret-scan, DCO, and
 CodeQL workflows, plus the runtime SBOM matrix. The reusable CI runs all fifteen
