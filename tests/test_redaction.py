@@ -872,6 +872,63 @@ print('completed seven bounded prefix cases')
         self.assertEqual(redact_text(source), expected)
         self.assertEqual(redact_text(expected), expected)
 
+    def test_plain_report_commas_do_not_consume_later_public_lines(self) -> None:
+        for prefix in (
+            "Device notes, ",
+            "Device notes, # comment\n",
+            "{mode: bridge}, ",
+            "[{mode: bridge}], ",
+            "{mode: bridge], ",
+            'notes: "{ not mapping", ',
+            "notes: 'a '' { not mapping', ",
+            "notes: bridge, # { not mapping\n",
+        ):
+            source = prefix + "password: SECRET\nfirmware: public\nmode: bridge"
+            expected = prefix + "password: [REDACTED]\nfirmware: public\nmode: bridge"
+            with self.subTest(prefix=prefix):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        source = 'Device notes, password: !tag "FIRST\nSECOND", mode: bridge'
+        self.assertEqual(redact_text(source), 'Device notes, password: "[REDACTED]", mode: bridge')
+
+    def test_prose_json_atom_prefixes_preserve_later_public_lines(self) -> None:
+        for atom, tail in product(("123", "true", "false", "null", "-1.2e+3"), ("", " EXTRA")):
+            source = f'Device notes, "password": {atom}{tail}\nfirmware: public\nmode: bridge\n'
+            expected = 'Device notes, "password": [REDACTED]\nfirmware: public\nmode: bridge\n'
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+
+    def test_flow_context_keeps_implicit_mapping_and_unclosed_secret_handling(self) -> None:
+        for prefix, suffix in (
+            ("[", ", visible: public]"),
+            ("[? ", ", visible: public]"),
+            ('[ # ignored } , "\n', ", visible: public]"),
+            ("[mode: bridge, ", ", visible: public]"),
+            ("[{mode: bridge}, {", ", visible: public}]"),
+            ("{mode: bridge, ", ""),
+        ):
+            source = prefix + "password: FIRST\nSECOND" + suffix
+            expected = prefix + 'password: "[REDACTED]"' + suffix
+            for key in ("password", "'password'", '"password"'):
+                self.assertEqual(
+                    redact_text(source.replace("password", key)), expected.replace("password", key)
+                )
+                self.assertEqual(
+                    redact_text(expected.replace("password", key)),
+                    expected.replace("password", key),
+                )
+
+        for prefix, property_prefix, scalar in product(
+            ("[", "[? "),
+            ("!tag ", "&anchor ", "!tag &anchor "),
+            ('"FIRST\nSECOND"', "'FIRST\nSECOND'", "'FIRST ''\nSECOND'"),
+        ):
+            source = prefix + "password: " + property_prefix + scalar + ", mode: bridge]"
+            expected = prefix + 'password: "[REDACTED]", mode: bridge]'
+            with self.subTest(property_prefix=property_prefix, scalar=scalar):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+
     def test_yaml_flow_quoted_values_include_properties_and_doubled_quotes(self) -> None:
         for prefix, scalar in product(
             ("", "!local ", "&anchor ", "!<tag:example.test,2026:secret> &anchor "),
@@ -911,7 +968,7 @@ print('completed seven bounded prefix cases')
         # and quoted scalars may skip ahead of apparent keys inside them.
         prior_end = 0
         for call in scan.call_args_list:
-            _, start, end, _ = call.args
+            _, start, end, _, _ = call.args
             self.assertGreaterEqual(start, prior_end)
             prior_end = end
 
