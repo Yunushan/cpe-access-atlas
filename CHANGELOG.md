@@ -2,6 +2,30 @@
 
 All notable changes are documented here.
 
+## 0.4.0a12 - 2026-10-10
+
+- Ask setup-python to check the current release manifest for Python 3.15 in CI
+  and the runtime SBOM matrix instead of preferring a cached release candidate.
+  Retain prerelease fallback when a final build is unavailable in that manifest.
+- Bound the complete decompressed source-archive stream to 160 MiB before tar
+  parsing, including PAX/GNU metadata and padding. Read in bounded chunks,
+  validate gzip integrity, and retain the existing payload, path, source-binding,
+  and reproducibility checks without changing valid canonical artifact bytes.
+- Redact sensitive YAML flow-field continuations through their actual collection
+  boundary, including comments, tag/anchor prefixes, doubled single quotes, and
+  compact mapping entries in sequences. Keep scanning bounded and preserve
+  existing redaction markers. Correct a pre-merge plain-text comma regression
+  so unrelated public fields remain intact; manual review before sharing remains
+  required, and arbitrary YAML semantics are not claimed.
+- Inspect the redact command's output destination with the existing explicit
+  stat guard before reading private input, including with force enabled. Refuse
+  permission and other inspection errors with sanitized diagnostics while
+  preserving overwrite and alias protections.
+- Prepare candidate `v0.4.0a12`; preserve immutable a11 assets and evidence.
+  Live release controls still require a separate reviewed rotation. No device,
+  root-access, recovery, or final Python 3.15 qualification is promoted for this
+  candidate.
+
 ## 0.4.0a11 - 2026-10-08
 
 - Ignore local Git replacement references when resolving release source commits,
