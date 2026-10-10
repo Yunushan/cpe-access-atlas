@@ -1050,7 +1050,22 @@ class RepositoryControlTests(unittest.TestCase):
             matrix = re.search(r"(?m)^        python: (\[.*\])$", workflow)
             self.assertIsNotNone(matrix)
             self.assertEqual(tuple(json.loads(matrix.group(1))), versions)
-            self.assertIn("allow-prereleases: ${{ matrix.python == '3.15' }}", workflow)
+            setup_inputs = re.findall(
+                r"(?m)^      - uses: actions/setup-python@[^\n]+\n"
+                r"        with:\n((?:          [^\n]*\n)+)",
+                workflow,
+            )
+            matrix_setup = [
+                inputs
+                for inputs in setup_inputs
+                if "          python-version: ${{ matrix.python }}\n" in inputs
+            ]
+            self.assertEqual(len(matrix_setup), 1)
+            for option in ("allow-prereleases", "check-latest"):
+                self.assertEqual(
+                    re.findall(rf"(?m)^          {option}: (.+)$", matrix_setup[0]),
+                    ["${{ matrix.python == '3.15' }}"],
+                )
             self.assertNotIn("continue-on-error:", workflow)
         for system in ("ubuntu-latest", "windows-latest", "macos-latest"):
             check = f"test ({system}, 3.15)"
