@@ -1531,11 +1531,47 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("private-output-marker", stderr)
             self.assertEqual(private_output.read_text(encoding="utf-8"), "existing")
 
-            with patch.object(Path, "exists", side_effect=OSError("private-output-marker")):
+            with patch.object(Path, "stat", side_effect=OSError("private-output-marker")):
                 code, stdout, stderr = self.run_cli(["redact", "--output", str(output)])
             self.assertEqual((code, stdout), (2, ""))
             self.assertIn("unable to inspect private output path", stderr)
             self.assertNotIn("private-output-marker", stderr)
+
+    def test_redact_output_stat_errors_precede_private_input_and_writes(self) -> None:
+        output = Path("SYNTHETIC_PRIVATE_OUTPUT_MARKER.txt")
+        original_stat = Path.stat
+
+        def stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if path == output:
+                raise error
+            return original_stat(path, follow_symlinks=follow_symlinks)
+
+        for error in (
+            PermissionError(errno.EACCES, "synthetic denied", str(output)),
+            NotADirectoryError(errno.ENOTDIR, "synthetic non-directory", str(output)),
+            OSError(errno.EIO, "synthetic I/O error", str(output)),
+        ):
+            for force in ([], ["--force"]):
+                for input_args in ([], ["--input", "SYNTHETIC_PRIVATE_INPUT_MARKER.txt"]):
+                    with (
+                        self.subTest(
+                            error=type(error).__name__,
+                            force=bool(force),
+                            from_file=bool(input_args),
+                        ),
+                        patch.object(Path, "stat", stat),
+                        patch.object(Path, "open") as open_input,
+                        patch("cpe_access_atlas.cli.sys.stdin") as stdin,
+                        patch("cpe_access_atlas.cli.write_private_text") as write,
+                    ):
+                        code, stdout, stderr = self.run_cli(
+                            ["redact", *input_args, "--output", str(output), *force]
+                        )
+                    self.assertEqual((code, stdout), (2, ""))
+                    self.assertEqual(stderr, "ERROR: unable to inspect private output path\n")
+                    open_input.assert_not_called()
+                    stdin.read.assert_not_called()
+                    write.assert_not_called()
 
     def test_redact_reads_stdin_only_when_writing_a_private_file(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1545,6 +1581,28 @@ class CliTests(unittest.TestCase):
             self.assertEqual((code, stderr), (0, ""))
             self.assertNotIn("secret", stdout)
             self.assertNotIn("secret", output.read_text(encoding="utf-8"))
+
+    def test_redact_yaml_flow_continuations_from_file_and_stdin(self) -> None:
+        original = '{"password": FIRST\n  SYNTHETIC_SECRET, mode: bridge}\n'
+        expected = '{"password": "[REDACTED]", mode: bridge}\n'
+        for from_stdin in (False, True):
+            with self.subTest(from_stdin=from_stdin), TemporaryDirectory() as directory:
+                source = Path(directory) / "private-source.txt"
+                output = Path(directory) / "private-redacted.txt"
+                source.write_text(original, encoding="utf-8")
+                before = source.read_bytes()
+                args = ["redact", "--output", str(output)]
+                if not from_stdin:
+                    args.extend(["--input", str(source)])
+                with patch("cpe_access_atlas.cli.sys.stdin", StringIO(original)):
+                    code, stdout, stderr = self.run_cli(args)
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertEqual(output.read_text(encoding="utf-8"), expected)
+                self.assertEqual(source.read_bytes(), before)
+                for private_value in ("FIRST", "SYNTHETIC_SECRET", str(source), str(output)):
+                    self.assertNotIn(private_value, stdout)
+                self.assertIn("Manual review required before sharing", stdout)
+                self.assertEqual(list(Path(directory).glob(".private-redacted.txt.*")), [])
 
     def test_redact_wifi_credentials_privately_and_require_manual_review(self) -> None:
         original = (
