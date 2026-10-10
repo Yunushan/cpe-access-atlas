@@ -864,7 +864,7 @@ def command_redact(args: argparse.Namespace) -> int:
     if args.input and _paths_alias(Path(args.input), output):
         raise RedactionError("output path must differ from the private input report")
     try:
-        output_exists = output.exists()
+        output_exists = _private_output_exists(output)
     except OSError:
         raise RedactionError("unable to inspect private output path") from None
     if output_exists and not args.force:

@@ -45,7 +45,7 @@ _MULTILINE_ASSIGNMENT = re.compile(
     rf"(?<![^\s:=\"',;{{}}&<>])(?P<key>{_FIELD_KEY})(?P<separator>\s*[:=]\s*)"
 )
 _NEXT_ASSIGNMENT = re.compile(rf"(?:(?<![ \t])[ \t]+|[,;&][ \t]*){_FIELD_KEY}[ \t]*[:=][ \t]*")
-_QUOTED_VALUE = re.compile(r"\"(?:\\.|[^\"\\])*+\"|'(?:\\.|[^'\\])*+'", re.DOTALL)
+_QUOTED_VALUE = re.compile(r"\"(?:\\.|[^\"\\])*+\"|'(?:''|\\.|[^'\\])*+'", re.DOTALL)
 _YAML_QUOTED_KEY = re.compile(rf"(?:{_QUOTED_VALUE.pattern})[ \t]*:")
 _JSON_ATOM = re.compile(
     r"(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
@@ -247,7 +247,7 @@ def _yaml_value_start(value: str, position: int) -> int | None:
 
 
 def _flow_plain_value_end(value: str, position: int) -> int:
-    """Consume a YAML flow plain scalar that only begins like a JSON atom."""
+    """Consume one YAML flow plain scalar, including folded lines and comments."""
 
     while position < len(value) and value[position] not in ",}]":
         if value[position] == "#" and value[position - 1] in " \t\r\n":
@@ -255,6 +255,42 @@ def _flow_plain_value_end(value: str, position: int) -> int:
         else:
             position += 1
     return position
+
+
+def _advance_flow_context(value: str, position: int, end: int, previous: str) -> tuple[int, str]:
+    """Advance a monotonic delimiter cursor past quoted scalars and comments.
+
+    This only recognizes field boundaries; it does not evaluate YAML. A quoted
+    scalar or comment can advance beyond an apparent assignment inside it, so
+    that assignment cannot acquire the preceding flow delimiter as context.
+    """
+
+    while position < end:
+        character = value[position]
+        if character in " \t\r\n":
+            position += 1
+            continue
+        if character == "#" and (position == 0 or value[position - 1] in " \t\r\n[{,}]\"'"):
+            position = next(_REPORT_LINES.finditer(value, position)).end()
+            continue
+        if not previous or previous in "[{,:=":
+            if character in "\"'":
+                quoted = _QUOTED_VALUE.match(value, position)
+                position = len(value) if quoted is None else quoted.end()
+                previous = character
+                continue
+            if character in "!&":
+                property_match = _YAML_PROPERTY.match(value, position)
+                if property_match is None:
+                    return len(value), ""
+                position = property_match.end()
+                continue
+        if character == "?" and previous in ("{", ",") and value[position + 1] in " \t\r\n":
+            position += 1
+            continue
+        previous = character
+        position += 1
+    return position, previous
 
 
 def _redact_container_assignments(value: str) -> str:
@@ -269,6 +305,8 @@ def _redact_container_assignments(value: str) -> str:
     output = StringIO()
     cursor = position = 0
     line_end = -1
+    context_position = 0
+    context_previous = ""
     while match := _MULTILINE_ASSIGNMENT.search(value, position):
         position = match.end()
         key = match.group("key")
@@ -277,8 +315,12 @@ def _redact_container_assignments(value: str) -> str:
         field_start = match.start()
         while field_start and value[field_start - 1] in " \t\r\n":
             field_start -= 1
-        flow_field = (
-            ":" in match.group("separator") and field_start > 0 and value[field_start - 1] in "{,"
+        context_position, context_previous = _advance_flow_context(
+            value, context_position, match.start(), context_previous
+        )
+        flow_field = ":" in match.group("separator") and (
+            (field_start > 0 and value[field_start - 1] in "{,")
+            or (context_position <= match.start() and context_previous in ("{", ","))
         )
         container_start = (
             _yaml_value_start(value, position) if ":" in match.group("separator") else position
@@ -320,6 +362,25 @@ def _redact_container_assignments(value: str) -> str:
             end = atom.end()
             if _JSON_VALUE_BOUNDARY.match(value, end) is None:
                 end = _flow_plain_value_end(value, end)
+        elif (
+            flow_field
+            and container_start > position
+            and container_start < len(value)
+            and value[container_start] in "\"'"
+        ):
+            quoted = _QUOTED_VALUE.match(value, container_start)
+            end = len(value) if quoted is None else quoted.end()
+        elif (
+            flow_field
+            and container_start < len(value)
+            and value[container_start] not in "\"'"
+            and not value.startswith("[REDACTED]", container_start)
+        ):
+            # YAML flow plain scalars can span physical lines regardless of
+            # their first token. Consume the complete scalar before the line
+            # pass loses the enclosing mapping context. Its comma/closer ends
+            # the value; apparent assignments and comment delimiters do not.
+            end = _flow_plain_value_end(value, container_start)
         else:
             # Prefixes can contain apparent assignments (including inside a
             # comment). They have already been inspected; restarting the next

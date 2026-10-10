@@ -818,6 +818,129 @@ print('completed seven bounded prefix cases')
                 self.assertEqual(redact_text(expected), expected)
         self.assertEqual(redact_text('{"password":123 unknown'), '{"password":"[REDACTED]"')
 
+    def test_yaml_flow_plain_scalars_mask_all_continuation_lines(self) -> None:
+        for key, value, suffix in product(
+            ("password", "'password'", '"password"', r'"pass\u0077ord"'),
+            (
+                "SYNTHETIC_FIRST\n  SYNTHETIC_SECOND",
+                "SYNTHETIC_FIRST # ignored , } ]\n  SYNTHETIC_SECOND",
+                "SYNTHETIC_FIRST\n  mode=SYNTHETIC_SECOND\n  SYNTHETIC_THIRD",
+                "!local SYNTHETIC_FIRST\n  SYNTHETIC_SECOND",
+                "&anchor SYNTHETIC_FIRST\n  SYNTHETIC_SECOND",
+                "!<tag:example.test,2026:secret> SYNTHETIC_FIRST\n  SYNTHETIC_SECOND",
+            ),
+            (", mode: bridge}", "}\nmode: bridge"),
+        ):
+            source = f"{{{key}: {value}{suffix}"
+            expected = f'{{{key}: "[REDACTED]"{suffix}'
+            with self.subTest(key=key, value=value, suffix=suffix):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        source = "[{child: {password: FIRST\n SECOND}}, {mode: bridge}]"
+        self.assertEqual(redact_text(source), '[{child: {password: "[REDACTED]"}}, {mode: bridge}]')
+        self.assertEqual(redact_text("{password: FIRST\n SECOND"), '{password: "[REDACTED]"')
+
+    def test_yaml_flow_fields_after_comments_mask_complete_values(self) -> None:
+        for prefix, indentation in product(
+            ("{# comment } , ' \"\n", "{mode: bridge, # comment } , ' \"\n"),
+            ("", " ", "  "),
+        ):
+            source = prefix + indentation + "password: HEAD\nSECOND, visible: bridge}"
+            expected = prefix + indentation + 'password: "[REDACTED]", visible: bridge}'
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+        for public in ("don't", '"# , password: ignored"', "'a '' # , password: ignored'"):
+            source = "{mode: " + public + ", # comment\npassword: FIRST\nSECOND, visible: bridge}"
+            output = redact_text(source)
+            self.assertNotIn("FIRST", output)
+            self.assertNotIn("SECOND", output)
+            self.assertTrue(output.endswith('password: "[REDACTED]", visible: bridge}'))
+            self.assertEqual(redact_text(output), output)
+        source = "{? password : FIRST\nSECOND, mode: bridge}"
+        self.assertEqual(redact_text(source), '{? password : "[REDACTED]", mode: bridge}')
+
+    def test_yaml_public_properties_preserve_following_secret_field_context(self) -> None:
+        for prefix in ("!local ", "&anchor ", "!<tag:example.test,2026:mode> &anchor "):
+            public = "{mode: " + prefix + '"public # , }", # comment\n'
+            source = public + "password: FIRST\nSECOND, visible: bridge}"
+            expected = public + 'password: "[REDACTED]", visible: bridge}'
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+        # An ambiguous public property cannot disable ordinary secret masking.
+        source = "mode: !<missing\npassword=SECRET\nmode=bridge"
+        expected = "mode: !<missing\npassword=[REDACTED]\nmode=bridge"
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+
+    def test_yaml_flow_quoted_values_include_properties_and_doubled_quotes(self) -> None:
+        for prefix, scalar in product(
+            ("", "!local ", "&anchor ", "!<tag:example.test,2026:secret> &anchor "),
+            (
+                '"FIRST # , }\nSECOND"',
+                "'FIRST '' # , }\nSECOND'",
+                "'FIRST '''' ''\nSECOND'",
+            ),
+        ):
+            source = "{password: " + prefix + scalar + ", mode: bridge}"
+            quote = '"' if prefix else scalar[0]
+            expected = "{password: " + quote + "[REDACTED]" + quote + ", mode: bridge}"
+            with self.subTest(prefix=prefix, scalar=scalar):
+                self.assertEqual(redact_text(source), expected)
+                self.assertEqual(redact_text(expected), expected)
+        self.assertEqual(redact_text('{password: !local "FIRST\nSECOND'), '{password: "[REDACTED]"')
+
+    def test_yaml_flow_existing_markers_remain_idempotent(self) -> None:
+        for prefix in ("", "!local ", "&anchor "):
+            source = "{password: " + prefix + "[REDACTED], mode: bridge}"
+            expected = "{password: [REDACTED], mode: bridge}"
+            self.assertEqual(redact_text(source), expected)
+            self.assertEqual(redact_text(expected), expected)
+
+    def test_yaml_flow_comment_context_advances_without_prefix_rescanning(self) -> None:
+        source = "{mode: bridge, # comment token=fake { password: ignored\n" * 2048
+        source += "password: FIRST\nSECOND, visible: bridge}"
+        with patch.object(
+            redaction, "_advance_flow_context", wraps=redaction._advance_flow_context
+        ) as scan:
+            output = redact_text(source)
+        self.assertNotIn("FIRST", output)
+        self.assertNotIn("SECOND", output)
+        self.assertTrue(output.endswith('password: "[REDACTED]", visible: bridge}'))
+        self.assertEqual(redact_text(output), output)
+        # Each call resumes at or beyond the prior requested offset. Comments
+        # and quoted scalars may skip ahead of apparent keys inside them.
+        prior_end = 0
+        for call in scan.call_args_list:
+            _, start, end, _ = call.args
+            self.assertGreaterEqual(start, prior_end)
+            prior_end = end
+
+    @given(
+        st.lists(
+            st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789 _=/.+-", max_size=80),
+            min_size=1,
+            max_size=8,
+        )
+    )
+    @settings(max_examples=80, deadline=None)
+    def test_generated_yaml_flow_plain_continuations_are_fully_masked(
+        self, continuations: list[str]
+    ) -> None:
+        scalar = "SYNTHETIC_HEAD" + "".join("\n  SYNTHETIC_SECRET" + line for line in continuations)
+        source = "{password: " + scalar + ", mode: bridge}"
+        expected = '{password: "[REDACTED]", mode: bridge}'
+        self.assertEqual(redact_text(source), expected)
+        self.assertEqual(redact_text(expected), expected)
+
+    def test_long_yaml_flow_plain_scalar_is_consumed_once(self) -> None:
+        source = "{password: FIRST" + "\n  field=SYNTHETIC_SECRET" * 4096 + ", mode: bridge}"
+        with patch.object(
+            redaction, "_flow_plain_value_end", wraps=redaction._flow_plain_value_end
+        ) as scan:
+            output = redact_text(source)
+        self.assertEqual(output, '{password: "[REDACTED]", mode: bridge}')
+        self.assertEqual(scan.call_count, 1)
+
     def test_container_prefixes_do_not_expose_plaintext_credential_suffixes(self) -> None:
         for container, suffix, assignment in product(
             ("[SYNTHETIC_FIRST]", "{SYNTHETIC_FIRST}"),
