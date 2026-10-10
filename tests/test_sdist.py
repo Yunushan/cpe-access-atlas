@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gzip
 import io
 import os
 import runpy
@@ -263,6 +264,77 @@ class SdistTests(unittest.TestCase):
         (self.dist / "second.tar.gz").unlink()
         archive.write_bytes(b"not a tar archive")
         self.assert_refused_before_execution()
+
+    def test_tar_stream_limit_rejects_metadata_before_parsing_or_execution(self) -> None:
+        path = self.archive()
+        original = path.read_bytes()
+        raw = gzip.decompress(original)
+        pax = tarfile.TarInfo.create_pax_global_header({"comment": "A" * 32768})
+        metadata = b"A" * 32768 + b"\0"
+        header = tarfile.TarInfo("././@LongLink")
+        header.type = tarfile.GNUTYPE_LONGLINK
+        header.size = len(metadata)
+        gnu = (
+            header.tobuf(format=tarfile.GNU_FORMAT)
+            + metadata
+            + b"\0" * (-len(metadata) % tarfile.BLOCKSIZE)
+        )
+        for label, payload in (
+            ("pax", gzip.compress(pax + raw)),
+            ("gnu", gzip.compress(gnu + raw)),
+            ("padding", gzip.compress(raw + b"\0" * 32768)),
+            ("concatenated", original + gzip.compress(b"\0" * 32768)),
+            ("one-byte-over", gzip.compress(raw + b"\0")),
+        ):
+            with self.subTest(case=label):
+                path.write_bytes(payload)
+                with (
+                    patch.object(sdist.reproducible, "_MAX_TAR_STREAM_BYTES", len(raw)),
+                    patch.object(sdist.tarfile, "open") as parse,
+                    patch.object(sdist.subprocess, "run") as run,
+                    self.assertRaisesRegex(sdist.SdistError, "tar-stream"),
+                ):
+                    sdist.check_sdist(self.dist, self.source)
+                parse.assert_not_called()
+                run.assert_not_called()
+                self.assertEqual(path.read_bytes(), payload)
+
+    def test_exact_tar_stream_boundary_runs_reviewed_archive(self) -> None:
+        path = self.archive()
+        original = path.read_bytes()
+        with (
+            patch.object(
+                sdist.reproducible, "_MAX_TAR_STREAM_BYTES", len(gzip.decompress(original))
+            ),
+            patch.object(sdist.subprocess, "run") as run,
+            redirect_stdout(io.StringIO()),
+        ):
+            sdist.check_sdist(self.dist, self.source)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_invalid_gzip_fails_cleanly_before_tar_parsing_or_execution(self) -> None:
+        path = self.archive()
+        original = path.read_bytes()
+        bad_crc = bytearray(original)
+        bad_crc[-8] ^= 1
+        for payload in (
+            original[:-1],
+            bytes(bad_crc),
+            bytes.fromhex("1f8b080000000000000307"),
+            original + original[:-1],
+        ):
+            with self.subTest(payload_size=len(payload)):
+                path.write_bytes(payload)
+                with (
+                    patch.object(sdist.tarfile, "open") as parse,
+                    patch.object(sdist.subprocess, "run") as run,
+                ):
+                    with self.assertRaisesRegex(sdist.SdistError, "gzip data"):
+                        sdist.check_sdist(self.dist, self.source)
+                parse.assert_not_called()
+                run.assert_not_called()
+                self.assertEqual(path.read_bytes(), payload)
 
     def test_portable_extractor_rejects_collisions_and_invalid_payloads(self) -> None:
         cases = (

@@ -8,6 +8,7 @@ import ast
 import base64
 import configparser
 import csv
+import gzip
 import hashlib
 import io
 import os
@@ -23,13 +24,15 @@ import tomllib
 import unicodedata
 import zipfile
 import zlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import Parser
 from email.policy import default
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory, TemporaryFile
+from typing import BinaryIO, cast
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
@@ -43,6 +46,11 @@ _MAX_SDIST_BYTES = 64 * 1024 * 1024
 _MAX_WHEEL_BYTES = 64 * 1024 * 1024
 _MAX_SDIST_MEMBERS = 4096
 _MAX_EXPANDED_BYTES = 128 * 1024 * 1024
+# Bound the complete tar stream before tarfile can parse PAX/GNU extensions.
+# Keep the existing 128 MiB file-payload budget plus 32 MiB for extension data,
+# member headers and padding (4096 ordinary members need less than 4 MiB).
+_MAX_TAR_STREAM_BYTES = 160 * 1024 * 1024
+_SDIST_READ_CHUNK_BYTES = 1024 * 1024
 _MAX_ARCHIVE_PATH_BYTES = 255
 _GIT_OBJECT_ID = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
 _WINDOWS_INVALID_CHARACTERS = frozenset('<>:"\\|?*')
@@ -399,6 +407,31 @@ def resolve_source_commit(root: Path, source_ref: str) -> str:
     return commit.lower()
 
 
+@contextmanager
+def _bounded_sdist_stream(path: Path) -> Iterator[BinaryIO]:
+    """Verify gzip and cap all expansion before any tar extension is interpreted."""
+
+    with TemporaryFile(mode="w+b") as stream:
+        try:
+            with gzip.open(path, "rb") as compressed:
+                expanded = 0
+                while chunk := compressed.read(
+                    min(_SDIST_READ_CHUNK_BYTES, _MAX_TAR_STREAM_BYTES - expanded + 1)
+                ):
+                    expanded += len(chunk)
+                    if expanded > _MAX_TAR_STREAM_BYTES:
+                        raise ReproducibleBuildError("source archive exceeds the tar-stream limit")
+                    stream.write(chunk)
+        except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+            raise ReproducibleBuildError("source archive has invalid gzip data") from exc
+        # Reading through EOF verifies trailers/CRC and counts concatenated gzip
+        # members and trailing tar padding even when tarfile would stop early.
+        stream.seek(0)
+        # On Windows TemporaryFile aliases NamedTemporaryFile; its binary
+        # wrapper forwards the same seek/read interface used by tarfile.
+        yield cast(BinaryIO, stream)
+
+
 def _validated_members(archive: tarfile.TarFile) -> tuple[tarfile.TarInfo, ...]:
     members: list[tarfile.TarInfo] = []
     names: set[str] = set()
@@ -469,7 +502,10 @@ def canonicalize_sdist(path: Path, epoch: int) -> bytes:
     ) as temporary:
         temporary_path = Path(temporary.name)
     try:
-        with tarfile.open(path, "r:gz") as source:
+        with (
+            _bounded_sdist_stream(path) as raw_source,
+            tarfile.open(fileobj=raw_source, mode="r:") as source,
+        ):
             members = tuple(sorted(_validated_members(source), key=lambda member: member.name))
             roots = {PurePosixPath(member.name).parts[0] for member in members}
             if len(roots) != 1:
