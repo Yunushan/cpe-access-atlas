@@ -10,6 +10,7 @@ from cpe_access_atlas.uart_evidence import (
     MAX_UART_LOG_BYTES,
     MAX_UART_METADATA_VALUES,
     UartEvidenceError,
+    _count_lines,
     inspect_uart_log,
 )
 
@@ -219,6 +220,31 @@ class UartEvidenceTests(unittest.TestCase):
                     self.assertTrue(result.recognized_h3600p_boot_output)
                     self.assertFalse(result.root_access_verified)
                     self.assertFalse(result.device_io_attempted)
+
+    def test_line_count_matches_splitlines_without_materializing_lines(self) -> None:
+        cases = (
+            b"",
+            b"a",
+            b"a\n",
+            b"a\nb",
+            b"\n",
+            b"\n\n",
+            b"a\r\nb",
+            b"a\rb",
+            b"\r\n",
+            b"\r",
+            b"a\v",
+            b"a\f",
+            b"a\x1c",
+            b"a\x1d",
+            b"a\x1e",
+            b"a\x85",
+            b"one\ntwo\r\nthree\rfour\vf",
+            b"trailing\r\n",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertEqual(_count_lines(case), len(case.splitlines()))
 
     def test_empty_log_is_valid_but_has_no_observations(self) -> None:
         with TemporaryDirectory() as directory:

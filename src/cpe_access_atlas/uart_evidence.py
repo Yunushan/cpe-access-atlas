@@ -89,6 +89,22 @@ _UBOOT_PROMPT_PATTERN = re.compile(
 )
 _LOGIN_PROMPT_PATTERN = re.compile(rb"(?im)^[^\r\n]{0,32}\blogin:[ \t]*\r?$")
 _UID_ZERO_PATTERN = re.compile(rb"(?i)(?<![a-z0-9_])uid=0\(root\)(?![a-z0-9_])")
+# Unlike str.splitlines(), bytes.splitlines() breaks only on \n, \r, and \r\n.
+# Counting those without splitting avoids building one object per line, which a
+# newline-dense 8 MiB log would otherwise amplify into millions of live objects.
+_LINE_BOUNDARY_BYTES = b"\n\r"
+
+
+def _count_lines(data: bytes) -> int:
+    """Count lines exactly like ``bytes.splitlines`` without materializing them."""
+
+    if not data:
+        return 0
+    boundaries = len(data) - len(data.translate(None, _LINE_BOUNDARY_BYTES))
+    count = boundaries - data.count(b"\r\n")
+    if data[-1] not in _LINE_BOUNDARY_BYTES:
+        count += 1
+    return count
 
 
 def _extract_ascii(
@@ -217,7 +233,7 @@ def inspect_uart_log(path: str | Path, expected_firmware: str) -> UartEvidence:
 
     return UartEvidence(
         size=len(data),
-        line_count=len(data.splitlines()),
+        line_count=_count_lines(data),
         expected_firmware=expected_firmware,
         firmware_versions=firmware_versions,
         firmware_identity_status=_firmware_status(firmware_versions, expected_firmware),

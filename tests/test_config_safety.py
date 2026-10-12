@@ -146,6 +146,20 @@ class ConfigSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "chunk total"):
                 config._read_chunks(stream)
 
+    def test_chunk_counts_are_bounded_in_both_decoders(self) -> None:
+        # Byte-size limits alone cannot stop a small artifact from encoding many
+        # minimum-size chunks; a hostile container must not amplify into many
+        # AES/zlib context allocations.
+        stream = io.BytesIO(b"".join(struct.pack(">3I", 16, 16, 1) + bytes(16) for _ in range(3)))
+        with patch.object(config, "_MAX_CHUNKS", 2):
+            with self.assertRaisesRegex(ConfigError, "chunk count"):
+                config._read_chunks(stream)
+
+        artifact = compressed_chunks([b"a", b"b", b"c"], 3)
+        with patch.object(config, "_MAX_CHUNKS", 2):
+            with self.assertRaisesRegex(ConfigError, "chunk count"):
+                decode_config(artifact)
+
     def test_doctype_rejection_does_not_depend_on_encoding(self) -> None:
         xml = '<!DOCTYPE DB [<!ENTITY dummy "synthetic">]><DB>&dummy;</DB>'
         for encoding in ("utf-8", "utf-16", "utf-16-le", "utf-16-be"):

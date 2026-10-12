@@ -65,6 +65,11 @@ _MAX_COMPRESSED_BYTES = 16 * 1024 * 1024
 _MAX_XML_DEPTH = 128
 _MAX_XML_ELEMENTS = 100_000
 _MAX_SIGNATURE_BYTES = 128
+# Byte-size limits alone do not bound per-chunk work: a small artifact can encode
+# hundreds of thousands of minimum-size chunks, each spinning up a fresh AES or
+# zlib context. Cap the chunk count so a hostile container cannot amplify a
+# bounded input into unbounded CPU and allocation.
+_MAX_CHUNKS = 65_536
 
 _ROUND_CONSTANTS = (
     0x428A2F98,
@@ -296,10 +301,14 @@ def _read_chunks(
 ) -> bytes:
     chunks: list[bytes] = []
     total_length = 0
+    chunk_count = 0
     while True:
         header = stream.read(_CHUNK_HEADER_SIZE)
         if len(header) != _CHUNK_HEADER_SIZE:
             raise ConfigError("configuration chunk header is truncated")
+        chunk_count += 1
+        if chunk_count > _MAX_CHUNKS:
+            raise ConfigError("configuration chunk count exceeds the safety size limit")
         plain_length, encrypted_length, more = struct.unpack(">3I", header)
         if encrypted_length == 0 or encrypted_length % 16:
             raise ConfigError("configuration chunk has an invalid encrypted length")
@@ -386,6 +395,8 @@ def _decode_compressed(data: bytes) -> bytes:
         compressed_crc = zlib.crc32(compressed, compressed_crc) & 0xFFFFFFFF
         compressed_total += compressed_length
         chunk_count += 1
+        if chunk_count > _MAX_CHUNKS:
+            raise ConfigError("compressed configuration chunk count exceeds the safety size limit")
         try:
             decompressor = zlib.decompressobj()
             plain = decompressor.decompress(compressed, min(remaining, chunk_capacity) + 1)
