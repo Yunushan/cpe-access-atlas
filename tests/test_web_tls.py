@@ -368,7 +368,12 @@ class WebTLSIntegrationTests(unittest.TestCase):
         with server.running():
             with self.assertRaises(WebEvidenceError) as raised:
                 _request(TARGET, "GET", "/", 5, {}, tls_context=self.client_context())
-        self.assertIsInstance(raised.exception.__context__, TimeoutError)
+        # The deadline expiring mid-read surfaces as a clean TimeoutError on
+        # most platforms, but a loaded Windows runner's socket stack can
+        # instead abort the connection outright. Both are OSError (the
+        # production except clause treats them identically); match that
+        # contract instead of one platform-specific subclass.
+        self.assertIsInstance(raised.exception.__context__, OSError)
         self.assertIsNone(raised.exception.__cause__)
         self.assertTrue(raised.exception.__suppress_context__)
         rendered = "".join(traceback.format_exception(raised.exception))
@@ -390,13 +395,17 @@ class WebTLSIntegrationTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 server = _LoopbackTLS(self.server_contexts["trusted"], [wire])
                 with server.running():
+                    # A real handshake plus request/response round trip can
+                    # exceed one second on a loaded CI runner even with no
+                    # injected delay; five seconds matches the headroom used
+                    # by the other real-TLS deadline fixture in this file.
                     if expected is None:
                         with self.assertRaisesRegex(WebEvidenceError, "Content-Length"):
-                            _request(TARGET, "GET", "/", 1, {}, tls_context=self.client_context())
+                            _request(TARGET, "GET", "/", 5, {}, tls_context=self.client_context())
                     else:
                         self.assertEqual(
                             _request(
-                                TARGET, "GET", "/", 1, {}, tls_context=self.client_context()
+                                TARGET, "GET", "/", 5, {}, tls_context=self.client_context()
                             ).body,
                             expected,
                         )
