@@ -1552,6 +1552,7 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("-f .github/dco-signoff.awk", dco)
         self.assertIn("check-signoff", github_audit._REQUIRED_BRANCH_CHECKS)
         self.assertIn("check-signoff", github_audit._REQUIRED_CURRENT_CHECKS)
+        self.assertIn("Signed-off-by:)/\\1\\n\\2/g", dco)
 
         valid = "Subject\n\nSigned-off-by: Example Person <person@example.test>\n"
         body_only = (
@@ -1575,6 +1576,38 @@ class RepositoryControlTests(unittest.TestCase):
                     "Signed-off-by: Example Person <person@example.test>" in result.stdout,
                     expected,
                 )
+
+        flattened = (
+            "Subject line\n\n"
+            "Squash summary and details on one line.  "
+            "Signed-off-by: Example Person <person@example.test> "
+        )
+        # GNU sed (the DCO workflow runs on ubuntu-latest) turns the collapsed
+        # "Signed-off-by:" into a standalone trailing line. Emulate that exact
+        # replacement here so the recovery remains portable across host seds.
+        recovered = re.sub(
+            r"([^\s])\s*(Signed-off-by:)",
+            r"\1\n\2",
+            flattened,
+        )
+        self.assertEqual(
+            recovered,
+            "Subject line\n\n"
+            "Squash summary and details on one line.\n"
+            "Signed-off-by: Example Person <person@example.test> ",
+        )
+        parsed = subprocess.run(  # noqa: S603 - executable resolved via PATH.
+            [git_executable, "interpret-trailers", "--parse"],
+            input=recovered,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        self.assertIn(
+            "Signed-off-by: Example Person <person@example.test>",
+            parsed.stdout,
+        )
 
         awk = shutil.which("awk")
         git_path = shutil.which("git")

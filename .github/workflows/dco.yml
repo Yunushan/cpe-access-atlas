@@ -48,7 +48,13 @@ jobs:
           missing=0
           while IFS= read -r commit; do
             author_email="$(git show -s --format=%ae "$commit")"
-            trailers="$(git show -s --format=%B "$commit" | git interpret-trailers --parse)"
+            # A squash merge can collapse the retained trailer onto a prose line,
+            # for example "Signed-off-by: Name <addr>" appended to the summary.
+            # Re-insert a line break before each sign-off key so it parses again;
+            # the sign-off must still match the author email to pass.
+            trailers="$(git show -s --format=%B "$commit" \
+              | sed -E 's/([^[:space:]])[[:space:]]*(Signed-off-by:)/\1\n\2/g' \
+              | git interpret-trailers --parse)"
             if ! printf '%s\n' "$trailers" \
               | AUTHOR_EMAIL="$author_email" awk -f .github/dco-signoff.awk; then
               echo "::error::Commit $commit lacks a valid DCO sign-off matching its author email."
