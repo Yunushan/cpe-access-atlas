@@ -2,6 +2,20 @@
 
 All notable changes are documented here.
 
+## 0.4.0a14 - 2026-10-14
+
+- Bound both configuration decoders to 65,536 chunks so a small hostile input
+  cannot cause excessive AES or zlib context creation despite byte-size limits.
+- Count UART log lines without creating one object per line, preserving the
+  existing byte-line semantics and bounded passive-analysis behavior.
+- Give real-TLS test fixtures Windows-runner headroom and accept the documented
+  OS-level timeout/connection-abort behavior without changing production limits.
+- Update SHA-pinned artifact and CodeQL actions through a maintainer-signed
+  change while retaining the author-matching DCO gate.
+- Prepare candidate `v0.4.0a14`; preserve immutable a13 assets and prior evidence.
+  Live release controls require a separate reviewed rotation. Device, recovery,
+  and operator qualification remain unchanged.
+
 ## 0.4.0a13 - 2026-10-10
 
 - Keep malformed `Content-Length` values out of ordinary formatted web-evidence
