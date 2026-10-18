@@ -1613,12 +1613,9 @@ class RepositoryControlTests(unittest.TestCase):
             body_only,
             "Subject\n\nBody text.\n\nSigned-off-by: Person <person@example.test>\n",
             "Subject (#1)\n\nSubject  NotSigned-off-by: Person <person@example.test>\n",
-            "Subject (#1)\n\nSubject  mention "
-            "Signed-off-by: Person <person@example.test> mid text\n",
-            "Subject (#1)\n\nTotally different prose "
-            "Signed-off-by: Person <person@example.test>\n",
-            "Subject (#1)\n\nSubject  Signed-off-by: Person <person@example.test>\n"
-            "Second line\n",
+            "Subject (#1)\n\nSubject  mention Signed-off-by: Person <p@e.test> mid text\n",
+            "Subject (#1)\n\nTotally different prose Signed-off-by: Person <p@e.test>\n",
+            "Subject (#1)\n\nSubject  Signed-off-by: Person <p@e.test>\nSecond line\n",
         ):
             with self.subTest(untouched=untouched):
                 self.assertEqual(dco_normalize.normalize(untouched), untouched)
