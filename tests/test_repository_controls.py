@@ -1552,6 +1552,7 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("-f .github/dco-signoff.awk", dco)
         self.assertIn("check-signoff", github_audit._REQUIRED_BRANCH_CHECKS)
         self.assertIn("check-signoff", github_audit._REQUIRED_CURRENT_CHECKS)
+        self.assertIn("python -B scripts/dco_normalize.py", dco)
 
         valid = "Subject\n\nSigned-off-by: Example Person <person@example.test>\n"
         body_only = (
@@ -1575,6 +1576,49 @@ class RepositoryControlTests(unittest.TestCase):
                     "Signed-off-by: Example Person <person@example.test>" in result.stdout,
                     expected,
                 )
+
+        from scripts import dco_normalize
+
+        # Only the narrow collapsed-squash shape is recovered: a single body line
+        # that repeats the subject and ends with a well-formed sign-off.
+        flattened = (
+            "Release the hardening (#66)\n\n"
+            "Release the hardening  Advance the candidate and docs.  "
+            "Signed-off-by: Example Person <person@example.test> \n"
+        )
+        recovered = dco_normalize.normalize(flattened)
+        self.assertEqual(
+            recovered,
+            "Release the hardening (#66)\n\n"
+            "Release the hardening  Advance the candidate and docs.\n"
+            "Signed-off-by: Example Person <person@example.test>",
+        )
+        parsed = subprocess.run(  # noqa: S603 - executable resolved via PATH.
+            [git_executable, "interpret-trailers", "--parse"],
+            input=recovered,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        self.assertIn(
+            "Signed-off-by: Example Person <person@example.test>",
+            parsed.stdout,
+        )
+
+        # Recovery must not rewrite ordinary trailers, multi-line bodies, prose
+        # that merely mentions the key, or a glued "NotSigned-off-by:" key.
+        for untouched in (
+            valid,
+            body_only,
+            "Subject\n\nBody text.\n\nSigned-off-by: Person <person@example.test>\n",
+            "Subject (#1)\n\nSubject  NotSigned-off-by: Person <person@example.test>\n",
+            "Subject (#1)\n\nSubject  mention Signed-off-by: Person <p@e.test> mid text\n",
+            "Subject (#1)\n\nTotally different prose Signed-off-by: Person <p@e.test>\n",
+            "Subject (#1)\n\nSubject  Signed-off-by: Person <p@e.test>\nSecond line\n",
+        ):
+            with self.subTest(untouched=untouched):
+                self.assertEqual(dco_normalize.normalize(untouched), untouched)
 
         awk = shutil.which("awk")
         git_path = shutil.which("git")
