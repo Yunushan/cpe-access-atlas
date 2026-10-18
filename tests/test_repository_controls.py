@@ -1552,7 +1552,7 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("-f .github/dco-signoff.awk", dco)
         self.assertIn("check-signoff", github_audit._REQUIRED_BRANCH_CHECKS)
         self.assertIn("check-signoff", github_audit._REQUIRED_CURRENT_CHECKS)
-        self.assertIn("Signed-off-by:)/\\1\\n\\2/g", dco)
+        self.assertIn("python -B scripts/dco_normalize.py", dco)
 
         valid = "Subject\n\nSigned-off-by: Example Person <person@example.test>\n"
         body_only = (
@@ -1577,24 +1577,21 @@ class RepositoryControlTests(unittest.TestCase):
                     expected,
                 )
 
+        from scripts import dco_normalize
+
+        # Only the narrow collapsed-squash shape is recovered: a single body line
+        # that repeats the subject and ends with a well-formed sign-off.
         flattened = (
-            "Subject line\n\n"
-            "Squash summary and details on one line.  "
-            "Signed-off-by: Example Person <person@example.test> "
+            "Release the hardening (#66)\n\n"
+            "Release the hardening  Advance the candidate and docs.  "
+            "Signed-off-by: Example Person <person@example.test> \n"
         )
-        # GNU sed (the DCO workflow runs on ubuntu-latest) turns the collapsed
-        # "Signed-off-by:" into a standalone trailing line. Emulate that exact
-        # replacement here so the recovery remains portable across host seds.
-        recovered = re.sub(
-            r"([^\s])\s*(Signed-off-by:)",
-            r"\1\n\2",
-            flattened,
-        )
+        recovered = dco_normalize.normalize(flattened)
         self.assertEqual(
             recovered,
-            "Subject line\n\n"
-            "Squash summary and details on one line.\n"
-            "Signed-off-by: Example Person <person@example.test> ",
+            "Release the hardening (#66)\n\n"
+            "Release the hardening  Advance the candidate and docs.\n"
+            "Signed-off-by: Example Person <person@example.test>",
         )
         parsed = subprocess.run(  # noqa: S603 - executable resolved via PATH.
             [git_executable, "interpret-trailers", "--parse"],
@@ -1608,6 +1605,23 @@ class RepositoryControlTests(unittest.TestCase):
             "Signed-off-by: Example Person <person@example.test>",
             parsed.stdout,
         )
+
+        # Recovery must not rewrite ordinary trailers, multi-line bodies, prose
+        # that merely mentions the key, or a glued "NotSigned-off-by:" key.
+        for untouched in (
+            valid,
+            body_only,
+            "Subject\n\nBody text.\n\nSigned-off-by: Person <person@example.test>\n",
+            "Subject (#1)\n\nSubject  NotSigned-off-by: Person <person@example.test>\n",
+            "Subject (#1)\n\nSubject  mention "
+            "Signed-off-by: Person <person@example.test> mid text\n",
+            "Subject (#1)\n\nTotally different prose "
+            "Signed-off-by: Person <person@example.test>\n",
+            "Subject (#1)\n\nSubject  Signed-off-by: Person <person@example.test>\n"
+            "Second line\n",
+        ):
+            with self.subTest(untouched=untouched):
+                self.assertEqual(dco_normalize.normalize(untouched), untouched)
 
         awk = shutil.which("awk")
         git_path = shutil.which("git")

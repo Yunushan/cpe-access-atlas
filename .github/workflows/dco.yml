@@ -22,6 +22,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
       - name: Verify every commit has a DCO Signed-off-by trailer
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -48,12 +51,14 @@ jobs:
           missing=0
           while IFS= read -r commit; do
             author_email="$(git show -s --format=%ae "$commit")"
-            # A squash merge can collapse the retained trailer onto a prose line,
-            # for example "Signed-off-by: Name <addr>" appended to the summary.
-            # Re-insert a line break before each sign-off key so it parses again;
-            # the sign-off must still match the author email to pass.
+            # A single-line squash merge can collapse the retained trailer onto
+            # the end of the body prose, hiding it from interpret-trailers. The
+            # reviewed normalizer recovers only that narrow collapsed-squash shape;
+            # every other message is passed through unchanged. The recovered
+            # sign-off must still match the author email in the matcher below, so
+            # an unsigned commit cannot pass merely because recovery ran.
             trailers="$(git show -s --format=%B "$commit" \
-              | sed -E 's/([^[:space:]])[[:space:]]*(Signed-off-by:)/\1\n\2/g' \
+              | python -B scripts/dco_normalize.py \
               | git interpret-trailers --parse)"
             if ! printf '%s\n' "$trailers" \
               | AUTHOR_EMAIL="$author_email" awk -f .github/dco-signoff.awk; then
