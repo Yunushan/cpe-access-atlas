@@ -130,6 +130,7 @@ _APPROVED_ACTION_REPOSITORIES = frozenset(
         "actions/dependency-review-action",
         "github/codeql-action",
         "gitleaks/gitleaks-action",
+        "ossf/scorecard-action",
     }
 )
 _CI_CHECK_NAMES = tuple(

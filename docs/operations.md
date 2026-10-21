@@ -155,6 +155,39 @@ The CLI intentionally sends no project telemetry. User-visible output, exit
 status, local artifacts, and explicitly retained sanitized evidence are the only
 application-level observations.
 
+### Dated operational observations
+
+- 2026-10-21, runner image: GitHub announced that `ubuntu-latest` migrates to
+  Ubuntu 26 on 2026-10-19. Non-matrix workflow jobs now pin `ubuntu-24.04`.
+  Matrix jobs in `ci.yml` and `release.yml` still use `ubuntu-latest` because
+  their OS values form required-check contexts (for example
+  `test (ubuntu-latest, 3.15)`) and artifact names. Renaming them requires a
+  coordinated ruleset and audit update, and a branch run on the new image, before
+  any candidate depends on it.
+- 2026-10-21, queue latency: macOS jobs stayed queued for more than an hour on a
+  predecessor of `eb7e7ce` before completing. A stalled required check can be a
+  queue condition rather than a code fault. Wait for the queue to clear and re-run;
+  do not change the required-check set to work around it.
+- Squash merges: a default single-line squash body can collapse the retained
+  `Signed-off-by:` trailer and fail the mainline DCO gate. PR #67 was merged with
+  an explicit body. Keep the squash-merge checklist in the pull request template.
+- OpenSSF Scorecard (`.github/workflows/scorecard.yml`): report-only. It runs on
+  `main` pushes, weekly, and on manual dispatch, and retains its SARIF as a workflow
+  artifact without uploading to code scanning. It is not a required check. Before
+  its first run, the live selected-actions allowlist must permit
+  `ossf/scorecard-action` at the pinned commit, or the job fails at action
+  resolution; this is an owner setting. Promote it only after it runs green on two
+  consecutive commits, and update the required check set through the documented
+  ruleset procedure.
+
+### Calendar
+
+- 2027-03-18: accepted CodeQL risks #5 (`src/cpe_access_atlas/config.py`) and #9
+  (`src/cpe_access_atlas/web_evidence.py`) reach their `review_by` date. Re-review
+  them and their compensating controls before that date. Any new commit to `main`
+  before tagging also requires re-running the prepublication audit, because each
+  acceptance must match the audited commit.
+
 ## Recovery exercise gate
 
 The following is a requirement, not a claim that an exercise has occurred. Before
@@ -175,3 +208,53 @@ calling a release production-supported, retain a dated, sanitized record showing
 
 Record an exercise as incomplete when any item is unverified. Do not add a
 hypothetical success record merely to satisfy a readiness review.
+
+### Recovery exercise record template
+
+Copy this template to a dated, sanitized record only when the owner performs the
+exercise. Leave each status `INCOMPLETE` until the evidence reference exists.
+Never record secret values, tokens, recovery codes, or private report content.
+
+```text
+Recovery exercise record
+Exercise date (UTC):          YYYY-MM-DD
+Performed by:                 <name or role>
+Commit restored:              <full SHA>
+Overall status:               INCOMPLETE
+
+1. Confidential reporting reachable  | Status: INCOMPLETE | Evidence: <reference>
+2. Account recovery and synthetic    | Status: INCOMPLETE | Evidence: <reference>
+   credential revocation
+3. Source/release evidence restored  | Status: INCOMPLETE | Evidence: <reference>
+   and reverified (commit, checksums,
+   attestations)
+4. Full required workflows run on    | Status: INCOMPLETE | Evidence: <reference>
+   restored commit
+5. GitHub controls reconstructed or  | Status: INCOMPLETE | Evidence: <reference>
+   independently checked; audit passed
+6. Prior verified package environment| Status: INCOMPLETE | Evidence: <reference>
+   selected through rollback procedure
+7. Incident and communication review | Status: INCOMPLETE | Evidence: <reference>
+   for private data
+Unresolved risks and owners:  <none recorded>
+```
+
+## Incident tabletop record template
+
+Run a tabletop only with the owner or an authorized responder. Record the scenario
+and participants in advance. This template is intentionally empty and states that
+no tabletop has been performed.
+
+```text
+Tabletop record
+Scenario:                     <one sentence, synthetic>
+Date (UTC):                   <YYYY-MM-DD, or NOT PERFORMED>
+Participants (roles only):    <roles>
+Result:                       NOT PERFORMED
+Timeline gaps found:          <none recorded>
+Compromise boundary decided:  <not yet decided>
+Containment steps exercised:  <not yet exercised>
+Communication steps exercised:<not yet exercised>
+Corrective actions and owners:<none recorded>
+Review date:                  <YYYY-MM-DD>
+```

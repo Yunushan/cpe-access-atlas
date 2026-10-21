@@ -107,7 +107,10 @@ The DCO workflow also checks protected `main` after each merge. GitHub can
 credit the pull-request creator as the author of a squash commit, which can
 differ from the author of signed commits in the PR. [GitHub's merge guide](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request)
 describes the author-email selector. Before squashing, inspect the
-resulting author and sign-off trailer. For a bot-created PR that you edit and
+resulting author and sign-off trailer. When squash-merging, supply an explicit
+commit body that ends with a `Signed-off-by:` line for the squash author; a
+default single-line squash body can collapse the trailer and fail the mainline
+DCO check. Do not rewrite protected history to correct it. For a bot-created PR that you edit and
 sign yourself, open a maintainer-authored PR for the change you actually made
 so the final squash author matches your sign-off. A failed mainline DCO check
 blocks release validation; do not rewrite protected history to hide it.
@@ -129,7 +132,10 @@ Dependabot proposes updates to the direct Python constraints in
 `pyproject.toml` and to GitHub Actions. It does not regenerate the custom
 `requirements-*.lock` files; after accepting a constraint change, regenerate
 and review every affected lock as described below. The weekly dependency audit
-still scans every committed lock for known vulnerabilities.
+still scans every committed lock for known vulnerabilities. Every Dependabot pull
+request, including security updates, must pass the required `dependency-review`
+check (which fails on moderate-or-higher severity changes) before merge. Do not
+merge a Dependabot pull request around that check.
 
 The 3.15 jobs allow prereleases until a final interpreter is available. Run the
 suite, coverage, typing, archive tests, and clean wheel/sdist installs on 3.15;

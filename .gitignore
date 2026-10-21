@@ -27,3 +27,4 @@ reports/private/
 *.har
 .DS_Store
 Thumbs.db
+.abacusai/
