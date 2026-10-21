@@ -1,3 +1,8 @@
+# Assessment summary (archived text export)
+
+> Archived text export of the v0.4.0a13 assessment. Not current evidence. Its original character encoding is preserved as exported; some box-drawing and symbol characters are display artifacts. Current completion rule: `docs/production-readiness.md`. Separate assurance register: `docs/enterprise-assurance.md`.
+
+```text
 ARCHIVED 2026-10-21: stale v0.4.0a13 snapshot (88/100), not current evidence.
 Current completion rule: docs/production-readiness.md.
 Separate assurance register: docs/enterprise-assurance.md.
@@ -289,3 +294,4 @@ Assessed Version: 0.4.0a13 (commit f5c2e40)
 Assessment Scope: Full repository analysis
 Methodology: 10-category evaluation with detailed findings
 ================================================================================
+```
