@@ -18,7 +18,7 @@ concurrency:
 jobs:
   scope-and-input-validation:
     timeout-minutes: 5
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -76,7 +76,7 @@ jobs:
   candidate-validation:
     needs: [source-validation, dependency-validation, secret-validation, dco-validation, codeql-validation]
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: read

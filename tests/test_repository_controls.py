@@ -34,6 +34,7 @@ WORKFLOW_FILES = (
     ROOT / ".github" / "workflows" / "codeql.yml",
     ROOT / ".github" / "workflows" / "dco.yml",
     ROOT / ".github" / "workflows" / "secret-scan.yml",
+    ROOT / ".github" / "workflows" / "scorecard.yml",
 )
 
 _SCOPED_CODEQL_SUPPRESSION = re.compile(r"(?i)\b(?:codeql|lgtm)\s*\[[^\]]*\]")
@@ -218,9 +219,35 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("interval: weekly", config)
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         release = (ROOT / "docs" / "release.md").read_text(encoding="utf-8")
+        self.assertIn("required `dependency-review`", contributing)
         for document in (contributing, release):
             self.assertIn("does not regenerate", document)
             self.assertIn("requirements-*.lock", document)
+
+    def test_scorecard_is_report_only_and_not_required(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "scorecard.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0",
+            workflow,
+        )
+        self.assertIn("publish_results: false", workflow)
+        self.assertIn(
+            "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", workflow
+        )
+        self.assertNotIn("security-events: write", workflow)
+        self.assertNotIn("upload-sarif", workflow)
+        self.assertNotIn("id-token: write", workflow)
+        self.assertRegex(workflow, r"(?m)^permissions:\n  contents: read\n")
+        self.assertNotIn("Scorecard", " ".join(github_audit._REQUIRED_BRANCH_CHECKS))
+        self.assertNotIn("Scorecard", " ".join(github_audit._REQUIRED_CURRENT_CHECKS))
+
+    def test_non_matrix_jobs_pin_the_ubuntu_image(self) -> None:
+        for workflow in WORKFLOW_FILES:
+            with self.subTest(workflow=workflow.name):
+                labels = set(
+                    re.findall(r"(?m)^\s+runs-on: (.+)$", workflow.read_text(encoding="utf-8"))
+                )
+                self.assertTrue(labels <= {"${{ matrix.os }}", "ubuntu-24.04"})
 
     def test_dependency_audit_is_periodic_manual_and_covers_every_lock(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
@@ -235,7 +262,7 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIsNotNone(matrix)
         versions = tuple(json.loads(matrix.group(1)))
         self.assertEqual(versions, github_audit._SECURITY_AUDIT_PYTHONS)
-        self.assertIn("runs-on: ubuntu-latest", audit_job)
+        self.assertIn("runs-on: ubuntu-24.04", audit_job)
 
         requirements: list[tuple[str, Requirement]] = []
         for name in ("runtime", "security", "ci", "release", "build"):
@@ -252,6 +279,7 @@ class RepositoryControlTests(unittest.TestCase):
         ) -> list[dict[str, str]]:
             platform_values = {
                 "ubuntu-latest": ("posix", "linux", "Linux", "x86_64"),
+                "ubuntu-24.04": ("posix", "linux", "Linux", "x86_64"),
                 "windows-latest": ("nt", "win32", "Windows", "AMD64"),
                 "macos-latest": ("posix", "darwin", "Darwin", "x86_64"),
             }
@@ -284,7 +312,7 @@ class RepositoryControlTests(unittest.TestCase):
             }
 
         supported = environments(github_audit._RELEASE_OSES, github_audit._RELEASE_PYTHONS)
-        audited = environments(("ubuntu-latest",), versions)
+        audited = environments(("ubuntu-24.04",), versions)
         self.assertEqual(active_in(supported) - active_in(audited), set())
 
     def test_ci_is_periodic_manual_and_freshness_audited(self) -> None:
@@ -1499,6 +1527,22 @@ class RepositoryControlTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, release)
 
+    def test_every_release_asset_class_is_attested_before_publication(self) -> None:
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        manifest = 'sha256sum dist/*.whl dist/*.tar.gz dist/*.json > "dist/SHA256SUMS"'
+        self.assertIn(manifest, release)
+        attest = release.index("      - name: Attest release artifacts\n")
+        publish = release.index("      - name: Publish GitHub release\n")
+        self.assertLess(release.index("pattern: runtime-sbom-*"), release.index(manifest))
+        self.assertLess(release.index(manifest), attest)
+        self.assertLess(attest, publish)
+        attest_step = release[attest:publish]
+        self.assertIn(
+            "uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+            attest_step,
+        )
+        self.assertIn('subject-path: "dist/*"', attest_step)
+
     def test_production_settings_document_external_security_prerequisites(self) -> None:
         settings = (ROOT / "docs" / "github-production-settings.md").read_text(encoding="utf-8")
         self.assertIn("Dependency graph", settings)
@@ -1535,6 +1579,25 @@ class RepositoryControlTests(unittest.TestCase):
     def test_generated_temporary_artifacts_are_ignored(self) -> None:
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".tmp/", gitignore)
+
+    def test_squash_merge_hygiene_is_templated_and_documented(self) -> None:
+        template = (ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        self.assertIn("## Squash merge", template)
+        self.assertIn("ends\n      with a `Signed-off-by:` line", template)
+        self.assertIn("see `CONTRIBUTING.md`", template)
+        self.assertIn("explicit\ncommit body that ends with a `Signed-off-by:` line", contributing)
+        self.assertIn("single-line squash body can collapse the trailer", contributing)
+
+    def test_enterprise_assurance_register_has_one_allowed_status_per_item(self) -> None:
+        register = (ROOT / "docs" / "enterprise-assurance.md").read_text(encoding="utf-8")
+        rows = [line for line in register.splitlines() if re.match(r"^\| \d+ \|", line)]
+        self.assertEqual(len(rows), 6)
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertEqual(len(re.findall(r"\| (PASS|FAIL|NOT-EVIDENCED) \|", row)), 1)
+        table = register.split("## Register", 1)[1].split("## Current state", 1)[0]
+        self.assertNotIn("score", table.lower())
 
     def test_dco_workflow_checks_every_pull_request_commit(self) -> None:
         dco = (ROOT / ".github" / "workflows" / "dco.yml").read_text(encoding="utf-8")
