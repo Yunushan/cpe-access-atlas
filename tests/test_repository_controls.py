@@ -35,6 +35,7 @@ WORKFLOW_FILES = (
     ROOT / ".github" / "workflows" / "dco.yml",
     ROOT / ".github" / "workflows" / "secret-scan.yml",
     ROOT / ".github" / "workflows" / "scorecard.yml",
+    ROOT / ".github" / "workflows" / "platform-matrix.yml",
 )
 
 _SCOPED_CODEQL_SUPPRESSION = re.compile(r"(?i)\b(?:codeql|lgtm)\s*\[[^\]]*\]")
@@ -190,6 +191,129 @@ def _successful_workflow_responses() -> dict[str, object]:
 
 
 class RepositoryControlTests(unittest.TestCase):
+    def test_agent_instruction_mirrors_reference_the_source_and_keep_safety_limits(self) -> None:
+        source_path = ROOT / "AGENTS.md"
+        mirrors = {
+            ROOT / ".github" / "copilot-instructions.md": "../AGENTS.md",
+            ROOT / ".cursor" / "rules" / "cpe-atlas.mdc": "../../AGENTS.md",
+            ROOT / ".clinerules": "AGENTS.md",
+        }
+        self.assertTrue(source_path.is_file())
+        source = source_path.read_text(encoding="utf-8")
+        for phrase in (
+            "100%",
+            "ruff check",
+            "mypy",
+            "cpe-atlas validate",
+            "docs/production-readiness.md",
+        ):
+            with self.subTest(source_phrase=phrase):
+                self.assertIn(phrase, source)
+        for path, reference in mirrors.items():
+            with self.subTest(mirror=path.relative_to(ROOT).as_posix()):
+                self.assertTrue(path.is_file())
+                text = path.read_text(encoding="utf-8")
+                normalized = text.casefold()
+                self.assertIn(reference.casefold(), normalized)
+                self.assertIn("no device i/o", normalized)
+                self.assertIn("never use `apply`", normalized)
+                self.assertIn("never put secrets", normalized)
+                self.assertNotRegex(
+                    text, r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"
+                )
+
+    def test_agent_instructions_are_included_in_the_source_archive(self) -> None:
+        manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+        self.assertRegex(manifest, r"(?m)^include AGENTS\.md(?:\s|$)")
+        self.assertIn("recursive-include .github *.yml *.awk *.json *.md", manifest)
+
+    def test_platform_support_document_matches_ci_and_release_matrices(self) -> None:
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        support_path = ROOT / "docs" / "platform-support.md"
+        self.assertTrue(support_path.is_file())
+        support = support_path.read_text(encoding="utf-8")
+
+        def matrix_values(workflow: str, key: str) -> tuple[str, ...]:
+            match = re.search(rf"(?m)^\s+{key}: \[(.*?)\]$", workflow)
+            self.assertIsNotNone(match, key)
+            assert match is not None
+            return tuple(value.strip().strip('\\"') for value in match.group(1).split(","))
+
+        ci_oses = matrix_values(ci, "os")
+        ci_pythons = matrix_values(ci, "python")
+        self.assertEqual(ci_oses, matrix_values(release, "os"))
+        self.assertEqual(ci_pythons, matrix_values(release, "python"))
+        for value in (*ci_oses, *ci_pythons):
+            with self.subTest(matrix_value=value):
+                self.assertIn(f"`{value}`", support)
+        self.assertIn("## Verified CI snapshot", support)
+        self.assertIn("d50f43ba5445c0918ecbe4504a2ae13164e72ae1", support)
+        self.assertIn("39669303595", support)
+        self.assertIn("Android", support)
+        self.assertIn("iOS", support)
+        self.assertRegex(support, r"(?im)^\|[^\n]*(?:unsupported|unverified)[^\n]*\|$")
+
+    def test_platform_classifiers_do_not_claim_all_operating_systems(self) -> None:
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        classifiers = project["project"]["classifiers"]
+        operating_systems = tuple(
+            value for value in classifiers if value.startswith("Operating System ::")
+        )
+        self.assertEqual(
+            operating_systems,
+            (
+                "Operating System :: Microsoft :: Windows",
+                "Operating System :: POSIX :: Linux",
+                "Operating System :: MacOS",
+            ),
+        )
+
+    def test_ai_tool_guide_keeps_unverified_integrations_evidence_gated(self) -> None:
+        guide = (ROOT / "docs" / "ai-tools.md").read_text(encoding="utf-8")
+        expected_clients = (
+            "Kilo Code",
+            "OpenCode v2",
+            "Cline",
+            "Cursor",
+            "GitHub Copilot in VS Code",
+            "GitHub Copilot CLI",
+        )
+        table = guide.split("| Client surface |", 1)[1]
+        for client in expected_clients:
+            row = next(line for line in table.splitlines() if line.startswith(f"| {client} |"))
+            with self.subTest(client=client):
+                self.assertIn("Documented, not verified", row)
+                self.assertIn("Not recorded", row)
+                self.assertIn("Not performed", row)
+        self.assertIn("2026-07-28", guide)
+        self.assertIn("No environment variables or credentials are required", guide)
+
+    def test_experimental_arm64_workflow_is_nonrequired_and_fully_locked(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "platform-matrix.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("runs-on: ubuntu-24.04-arm", workflow)
+        self.assertIn("pull_request:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("python -m pip install --require-hashes -r requirements-ci.lock", workflow)
+        self.assertIn("python -B -m coverage run -m unittest discover -s tests", workflow)
+        self.assertIn("python -m coverage report -m", workflow)
+        self.assertIn("cpe-atlas validate", workflow)
+        self.assertNotIn("continue-on-error:", workflow)
+        matrix = re.search(r"(?m)^\s+python: \[(.*?)\]$", workflow)
+        self.assertIsNotNone(matrix)
+        assert matrix is not None
+        python_versions = tuple(value.strip().strip('"') for value in matrix.group(1).split(","))
+        self.assertEqual(python_versions, ("3.11", "3.12", "3.13", "3.14", "3.15"))
+        job_name = "Experimental Linux arm64 / Python ${{ matrix.python }}"
+        self.assertIn(f"    name: {job_name}\n", workflow)
+        for python_version in python_versions:
+            check_name = job_name.replace("${{ matrix.python }}", python_version)
+            with self.subTest(check_name=check_name):
+                self.assertNotIn(check_name, github_audit._REQUIRED_BRANCH_CHECKS)
+                self.assertNotIn(check_name, github_audit._REQUIRED_CURRENT_CHECKS)
+
     def test_workflow_actions_are_commit_pinned(self) -> None:
         pattern = re.compile(r"^uses:\s+\S+@[0-9a-f]{40}(?:\s+#.*)?$")
         local_calls = {
@@ -247,7 +371,7 @@ class RepositoryControlTests(unittest.TestCase):
                 labels = set(
                     re.findall(r"(?m)^\s+runs-on: (.+)$", workflow.read_text(encoding="utf-8"))
                 )
-                self.assertTrue(labels <= {"${{ matrix.os }}", "ubuntu-24.04"})
+                self.assertTrue(labels <= {"${{ matrix.os }}", "ubuntu-24.04", "ubuntu-24.04-arm"})
 
     def test_dependency_audit_is_periodic_manual_and_covers_every_lock(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
@@ -1007,6 +1131,19 @@ class RepositoryControlTests(unittest.TestCase):
         self.assertIn("docs/config-cryptography.md", config)
         self.assertTrue((ROOT / "docs/config-cryptography.md").is_file())
 
+    def test_wheel_metadata_uses_evidence_backed_os_classifiers(self) -> None:
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        classifiers = project["project"]["classifiers"]
+        self.assertEqual(classifiers.count("Operating System :: OS Independent"), 0)
+        self.assertEqual(
+            [item for item in classifiers if item.startswith("Operating System ::")],
+            [
+                "Operating System :: Microsoft :: Windows",
+                "Operating System :: POSIX :: Linux",
+                "Operating System :: MacOS",
+            ],
+        )
+
     def test_source_codeql_suppressions_are_exact_and_reviewed(self) -> None:
         expected = (
             "src/cpe_access_atlas/private_files.py",
@@ -1031,6 +1168,23 @@ class RepositoryControlTests(unittest.TestCase):
         relocated = _suppression_context(expected[0], mutated)
         self.assertEqual(relocated[0][:2], expected[:2])
         self.assertNotEqual(relocated, [expected])
+
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            project["project"]["classifiers"].count("Operating System :: OS Independent"), 0
+        )
+        self.assertEqual(
+            [
+                item
+                for item in project["project"]["classifiers"]
+                if item.startswith("Operating System ::")
+            ],
+            [
+                "Operating System :: Microsoft :: Windows",
+                "Operating System :: POSIX :: Linux",
+                "Operating System :: MacOS",
+            ],
+        )
 
     def test_distribution_builds_reuse_hash_verified_backend_without_index_access(self) -> None:
         for name, lock in (("ci", "ci"), ("release", "release")):
@@ -1567,6 +1721,7 @@ class RepositoryControlTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, operations)
         manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+        self.assertIn("recursive-include docs *.md", manifest)
         self.assertIn("recursive-include docs *.md", manifest)
 
     def test_source_distribution_manifest_includes_governance_config(self) -> None:

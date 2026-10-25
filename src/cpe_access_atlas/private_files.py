@@ -32,7 +32,11 @@ def _sync_directory(descriptor: int) -> None:
 def _open_sync_directory(path: Path) -> int:
     """Check POSIX directory synchronization before creating a private artifact."""
 
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    close_on_exec_flag = getattr(os, "O_CLOEXEC", None)
+    if not isinstance(directory_flag, int) or not isinstance(close_on_exec_flag, int):
+        raise OSError("private output requires POSIX directory-open safety flags")
+    flags = os.O_RDONLY | directory_flag | close_on_exec_flag
     descriptor = os.open(path, flags)
     try:
         if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
