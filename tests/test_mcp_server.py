@@ -464,6 +464,19 @@ class McpServerTests(unittest.TestCase):
             self.assertTrue(responses[0]["result"]["isError"])
             self.assertNotIn(b"example-only", output)
 
+    def test_nonsecret_json_text_keeps_its_original_representation(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for text in (r'note: "hello\u0020world"', '{ "items" : [1, 2] }'):
+            with (
+                self.subTest(text=text),
+                patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+            ):
+                code, responses, _ = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertFalse(responses[0]["result"]["isError"])
+            result = json.loads(responses[0]["result"]["content"][0]["text"])
+            self.assertEqual(result["data"]["text"], text)
+
     def test_decoded_redaction_cannot_expand_result_past_the_limit(self) -> None:
         params = _modern_params({"name": "providers", "arguments": {}})
 

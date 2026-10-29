@@ -363,8 +363,11 @@ def _redact_embedded_json_strings(text: str) -> str:
             if "\\" in text[start:cursor]:
                 raise ValueError("invalid escaped JSON string") from None
             continue
+        redacted = _redact_json_strings(decoded)
         parts.append(text[last:start])
-        parts.append(json.dumps(_redact_json_strings(decoded), ensure_ascii=False))
+        parts.append(
+            text[start:cursor] if redacted == decoded else json.dumps(redacted, ensure_ascii=False)
+        )
         last = cursor
     parts.append(text[last:])
     return "".join(parts)
@@ -378,8 +381,11 @@ def _redact_json_strings(value: Any) -> Any:
         except ValueError:
             return _redact_embedded_json_strings(sanitized)
         if isinstance(decoded, (str, list, dict)):
+            redacted = _redact_json_strings(decoded)
+            if redacted == decoded:
+                return sanitized
             return json.dumps(
-                _redact_json_strings(decoded),
+                redacted,
                 ensure_ascii=False,
                 allow_nan=False,
                 separators=(",", ":"),
