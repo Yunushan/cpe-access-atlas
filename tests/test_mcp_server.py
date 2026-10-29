@@ -298,6 +298,29 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(responses[0]["error"]["code"], -32700)
         self.assertEqual(responses[1]["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
 
+    def test_non_scalar_unicode_requests_are_rejected_without_stopping_the_server(self) -> None:
+        malformed = (
+            b'{"jsonrpc":"2.0","id":"\\ud800","method":"ping"}\n'
+            b'{"jsonrpc":"2.0","id":1,"method":"server/discover",'
+            b'"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"\\ud800",'
+            b'"io.modelcontextprotocol/clientCapabilities":{}}}}\n'
+            b'{"jsonrpc":"2.0","id":1,"method":"ping","\\ud800":[]}\n'
+            b'{"jsonrpc":"2.0","id":1,"method":"ping","x":1e9999}\n'
+        )
+        code, responses, output = _run(malformed + _request("ping", 2))
+        self.assertEqual(code, 0)
+        self.assertEqual([item["error"]["code"] for item in responses], [-32600] * 4 + [-32601])
+        self.assertNotIn(b"\\ud800", output)
+        self.assertEqual(responses[-1]["id"], 2)
+
+        valid_pair = b'{"jsonrpc":"2.0","id":"\\ud83d\\ude00","method":"ping"}\n'
+        code, responses, _ = _run(valid_pair)
+        self.assertEqual(code, 0)
+        self.assertEqual(responses[0]["id"], "\U0001f600")
+
+        with patch("cpe_access_atlas.mcp_server.MAX_RESPONSE_BYTES", 1):
+            self.assertEqual(serve(BytesIO(malformed), BytesIO()), 1)
+
     def test_oversized_input_is_rejected_and_stops_server(self) -> None:
         with patch("cpe_access_atlas.mcp_server.MAX_MESSAGE_BYTES", 32):
             code, responses, _ = _run(b"{" + b"a" * 40 + b"}\n")

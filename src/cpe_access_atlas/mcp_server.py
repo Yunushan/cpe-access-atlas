@@ -570,6 +570,12 @@ def serve(input_stream: BinaryIO | None = None, output_stream: BinaryIO | None =
             if not _write_message(sink, _json_error(None, -32700, "Parse error")):
                 return 1
             continue
+        try:
+            json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (ValueError, UnicodeError, RecursionError):
+            if not _write_message(sink, _json_error(None, -32600, "Invalid Request")):
+                return 1
+            continue
         response = _dispatch(message)
         if response is not None and not _write_message(sink, response):
             return 1
