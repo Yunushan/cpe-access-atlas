@@ -8,6 +8,8 @@ This table records what the project CI actually exercised, not what the Python p
 
 Evidence: required CI workflow run [39669303595](https://github.com/Yunushan/cpe-access-atlas/actions/runs/39669303595), head commit `d50f43ba5445c0918ecbe4504a2ae13164e72ae1`, completed successfully on 2026-10-21. All fifteen OS/Python matrix jobs passed. The release workflow uses the same OS and Python matrices; it has not published a release for this commit. Run evidence establishes the runner labels, not an OS image or architecture guarantee.
 
+A later required CI run [40852628617](https://github.com/Yunushan/cpe-access-atlas/actions/runs/40852628617) passed all fifteen OS/Python matrix jobs, package smoke, and cross-platform artifact reproducibility at main commit `ae03b45fc741addad9969476b8890b9c043a9739` on 2026-10-29. The three Python 3.15 jobs each used CPython `3.15.2` final. It is validation evidence for that commit, not a release or broader platform claim.
+
 | Operating system / runner label | Architecture | libc / filesystem detail | Python tested | Tier and current claim |
 |---|---|---|---|---|
 | Windows (`windows-latest`) | Runner architecture not pinned or recorded | libc not applicable; filesystem not asserted | CPython `3.11`, `3.12`, `3.13`, `3.14`, `3.15` | Tier 1: required CI passed for the listed matrix |
@@ -18,11 +20,11 @@ Tier 1 here means required CI coverage only. It does not override the alpha stat
 
 ## Unverified platforms
 
-It is a configuration for prospective testing only, not evidence of an available or successful run.
+These platforms remain unsupported. The experimental Linux arm64 workflow passed on two consecutive main commits: [run 40849776401](https://github.com/Yunushan/cpe-access-atlas/actions/runs/40849776401) at `5a6048fc529ce5a57ae2c1cb96f5bcc36c0e0057` and [run 40852628461](https://github.com/Yunushan/cpe-access-atlas/actions/runs/40852628461) at `ae03b45fc741addad9969476b8890b9c043a9739`, both on 2026-10-29. All five jobs passed in each run. They reported Linux `aarch64`, glibc `2.39`, and CPython `3.11.17`, `3.12.15`, `3.13.17`, `3.14.9`, and `3.15.2`. These results record the tested runners only; the jobs remain experimental and non-required.
 
 | Platform target | Status | Evidence needed before claiming support |
 |---|---|---|
-| Linux arm64 | Configured for experimental CI only; unsupported, unverified | Review actual runtime and dependency evidence; require two consecutive green main commits before promotion |
+| Linux arm64 | Experimental CI passed on two main commits; unsupported and non-required | Review the recorded evidence, establish the release path, and deliberately update required-check policy before promotion |
 | Linux x86_64 musl / Alpine | Unsupported, unverified | Non-required CI on the intended musl image, complete tests and hash-checked dependencies |
 | Windows arm64 | Unsupported, unverified | Actual arm64 runner, full tests and dependency installation evidence |
 | macOS second architecture | Unsupported, unverified | Actual runner for that architecture and full test evidence |
