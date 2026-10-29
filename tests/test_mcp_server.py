@@ -350,6 +350,24 @@ class McpServerTests(unittest.TestCase):
         result = json.loads(responses[0]["result"]["content"][0]["text"])
         self.assertNotEqual(result["data"]["password"], "do-not-return-this")
 
+    def test_redaction_that_breaks_json_returns_a_safe_error(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for value in ("password=example-only", "Authorization: Bearer example-only"):
+            with (
+                self.subTest(value=value),
+                patch(
+                    "cpe_access_atlas.mcp_server._tool_data", return_value={"description": value}
+                ),
+            ):
+                code, responses, output = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertTrue(responses[0]["result"]["isError"])
+            self.assertNotIn(b"example-only", output)
+            self.assertEqual(
+                responses[0]["result"]["content"][0]["text"],
+                "Unable to safely serialize catalog result",
+            )
+
     def test_tool_output_limit_fails_closed(self) -> None:
         with patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 8):
             code, responses, _ = _run(
@@ -478,10 +496,14 @@ class McpServerTests(unittest.TestCase):
 
     def test_redaction_errors_and_expanded_output_limits_fail_closed(self) -> None:
         params = _modern_params({"name": "providers", "arguments": {}})
-        with patch("cpe_access_atlas.mcp_server.redact_text", side_effect=ValueError("private")):
-            code, responses, _ = _run(_request("tools/call", 1, params))
-        self.assertEqual(code, 0)
-        self.assertTrue(responses[0]["result"]["isError"])
+        for error in (ValueError("private"), RecursionError("private")):
+            with (
+                self.subTest(error=type(error)),
+                patch("cpe_access_atlas.mcp_server.redact_text", side_effect=error),
+            ):
+                code, responses, _ = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertTrue(responses[0]["result"]["isError"])
         with (
             patch("cpe_access_atlas.mcp_server._tool_data", return_value={}),
             patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 128),
