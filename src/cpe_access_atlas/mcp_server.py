@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any, BinaryIO, cast
 
@@ -23,6 +24,7 @@ OUTPUT_CONTRACT_VERSION = "1"
 MAX_MESSAGE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_RESULT_BYTES = 1_048_576
+_TEXT_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))")
 _VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
 _CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
 _CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
@@ -341,6 +343,20 @@ def _tool_data(name: str, arguments: dict[str, Any]) -> Any:
     return _root_readiness_data(recipe)
 
 
+def _reject_encoded_sensitive_text(text: str) -> None:
+    for _ in range(8):
+        decoded = _TEXT_ESCAPE.sub(
+            lambda match: chr(int(match.group(1) or match.group(2), 16)), text
+        )
+        if decoded == text:
+            return
+        if redact_text(decoded) != decoded:
+            raise ValueError("escaped sensitive text")
+        text = decoded
+    if _TEXT_ESCAPE.search(text):
+        raise ValueError("escaped text exceeds decoding limit")
+
+
 def _redact_embedded_json_strings(text: str) -> str:
     parts: list[str] = []
     cursor = 0
@@ -370,7 +386,9 @@ def _redact_embedded_json_strings(text: str) -> str:
         )
         last = cursor
     parts.append(text[last:])
-    return "".join(parts)
+    result = "".join(parts)
+    _reject_encoded_sensitive_text(result)
+    return result
 
 
 def _redact_json_strings(value: Any) -> Any:

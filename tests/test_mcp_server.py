@@ -508,6 +508,45 @@ class McpServerTests(unittest.TestCase):
             self.assertTrue(responses[0]["result"]["isError"])
             self.assertNotIn(b"example-only", output)
 
+    def test_escaped_sensitive_text_fails_closed_without_exposing_the_value(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for text in (
+            r"note: password\u003dexample-only",
+            r"note: pa\u0073sword=example-only",
+            r"note: password\x3dexample-only",
+        ):
+            with (
+                self.subTest(text=text),
+                patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+            ):
+                code, responses, output = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertTrue(responses[0]["result"]["isError"])
+            self.assertNotIn(b"example-only", output)
+
+    def test_benign_escaped_text_is_preserved_and_excessive_layers_fail_closed(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        text = r"note: \u0061"
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}):
+            code, responses, _ = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+        result = json.loads(responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(result["data"]["text"], text)
+
+        for _ in range(7):
+            text = text.replace("\\", r"\u005c")
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}):
+            code, responses, _ = _run(_request("tools/call", 2, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+
+        text = text.replace("\\", r"\u005c")
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}):
+            code, responses, _ = _run(_request("tools/call", 3, params))
+        self.assertEqual(code, 0)
+        self.assertTrue(responses[0]["result"]["isError"])
+
     def test_nonsecret_json_text_keeps_its_original_representation(self) -> None:
         params = _modern_params({"name": "providers", "arguments": {}})
         for text in (r'note: "hello\u0020world"', '{ "items" : [1, 2] }'):
