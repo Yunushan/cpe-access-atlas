@@ -519,7 +519,18 @@ def _write_message(output_stream: BinaryIO, message: dict[str, Any]) -> bool:
     except (TypeError, ValueError, UnicodeError):
         return False
     if len(raw) > MAX_RESPONSE_BYTES:
-        return False
+        request_id = message.get("id")
+        error = _json_error(
+            request_id if _valid_request_id(request_id) else None,
+            -32603,
+            "Response exceeds the configured size limit",
+        )
+        raw = json.dumps(error, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(raw) > MAX_RESPONSE_BYTES:
+            error = _json_error(None, -32603, "Response exceeds the configured size limit")
+            raw = json.dumps(error, separators=(",", ":")).encode("utf-8") + b"\n"
+            if len(raw) > MAX_RESPONSE_BYTES:
+                return False
     try:
         output_stream.write(raw)
         output_stream.flush()

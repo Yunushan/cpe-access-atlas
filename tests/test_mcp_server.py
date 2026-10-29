@@ -704,6 +704,29 @@ class McpServerTests(unittest.TestCase):
         self.assertFalse(_write_message(BytesIO(), {"invalid": object()}))
         self.assertFalse(_write_message(BytesIO(), {"invalid": chr(0xD800)}))
 
+    def test_oversized_encoded_result_returns_error_and_server_continues(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        payload = _request("tools/call", 1, params) + _request("ping", 2)
+        with (
+            patch("cpe_access_atlas.mcp_server._tool_data", return_value=["ordinary"] * 20),
+            patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 1024),
+            patch("cpe_access_atlas.mcp_server.MAX_RESPONSE_BYTES", 256),
+        ):
+            code, responses, _ = _run(payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(responses[0]["id"], 1)
+        self.assertEqual(responses[0]["error"]["code"], -32603)
+        self.assertEqual(responses[1]["id"], 2)
+        self.assertEqual(responses[1]["error"]["code"], -32601)
+
+    def test_oversized_response_id_uses_bounded_error_without_id(self) -> None:
+        output = BytesIO()
+        with patch("cpe_access_atlas.mcp_server.MAX_RESPONSE_BYTES", 128):
+            self.assertTrue(_write_message(output, {"id": "x" * 200, "result": {}}))
+        response = json.loads(output.getvalue())
+        self.assertNotIn("id", response)
+        self.assertEqual(response["error"]["code"], -32603)
+
     def test_server_module_has_no_network_subprocess_or_cli_imports(self) -> None:
         path = ROOT / "src" / "cpe_access_atlas" / "mcp_server.py"
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
