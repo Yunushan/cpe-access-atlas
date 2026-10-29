@@ -5,6 +5,7 @@ import json
 import unittest
 from dataclasses import replace
 from io import BytesIO
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -297,6 +298,29 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(responses[0]["error"]["code"], -32700)
         self.assertEqual(responses[1]["result"]["supportedVersions"], [MCP_PROTOCOL_VERSION])
 
+    def test_non_scalar_unicode_requests_are_rejected_without_stopping_the_server(self) -> None:
+        malformed = (
+            b'{"jsonrpc":"2.0","id":"\\ud800","method":"ping"}\n'
+            b'{"jsonrpc":"2.0","id":1,"method":"server/discover",'
+            b'"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"\\ud800",'
+            b'"io.modelcontextprotocol/clientCapabilities":{}}}}\n'
+            b'{"jsonrpc":"2.0","id":1,"method":"ping","\\ud800":[]}\n'
+            b'{"jsonrpc":"2.0","id":1,"method":"ping","x":1e9999}\n'
+        )
+        code, responses, output = _run(malformed + _request("ping", 2))
+        self.assertEqual(code, 0)
+        self.assertEqual([item["error"]["code"] for item in responses], [-32600] * 4 + [-32601])
+        self.assertNotIn(b"\\ud800", output)
+        self.assertEqual(responses[-1]["id"], 2)
+
+        valid_pair = b'{"jsonrpc":"2.0","id":"\\ud83d\\ude00","method":"ping"}\n'
+        code, responses, _ = _run(valid_pair)
+        self.assertEqual(code, 0)
+        self.assertEqual(responses[0]["id"], "\U0001f600")
+
+        with patch("cpe_access_atlas.mcp_server.MAX_RESPONSE_BYTES", 1):
+            self.assertEqual(serve(BytesIO(malformed), BytesIO()), 1)
+
     def test_oversized_input_is_rejected_and_stops_server(self) -> None:
         with patch("cpe_access_atlas.mcp_server.MAX_MESSAGE_BYTES", 32):
             code, responses, _ = _run(b"{" + b"a" * 40 + b"}\n")
@@ -367,6 +391,193 @@ class McpServerTests(unittest.TestCase):
                 responses[0]["result"]["content"][0]["text"],
                 "Unable to safely serialize catalog result",
             )
+
+    def test_embedded_catalog_strings_are_redacted_after_json_decoding(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        data = {
+            "nested": [
+                'hello "password": "example-only" world',
+                '{"password":"example-only"}',
+                "x\nCookie: example-only",
+                {"safe": True, "count": 2, "empty": None},
+            ]
+        }
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value=data):
+            code, responses, output = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+        self.assertNotIn(b"example-only", output)
+        result = json.loads(responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(result["schema_version"], "1")
+        self.assertEqual(result["data"]["nested"][3], data["nested"][3])
+
+    def test_redacted_json_key_collisions_fail_closed(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        with patch(
+            "cpe_access_atlas.mcp_server._tool_data",
+            return_value={"password=one": 1, "password=two": 2},
+        ):
+            code, responses, output = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertTrue(responses[0]["result"]["isError"])
+        self.assertNotIn(b"password=one", output)
+        self.assertNotIn(b"password=two", output)
+
+    def test_nested_json_text_is_redacted_at_each_encoding_layer(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        encoded: object = {"password": "example-only"}
+        for depth in range(1, 5):
+            encoded = json.dumps(encoded)
+            for wrapped in (False, True):
+                text = f"note: {encoded}" if wrapped else encoded
+                with (
+                    self.subTest(depth=depth, wrapped=wrapped),
+                    patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+                ):
+                    code, responses, output = _run(_request("tools/call", 1, params))
+                self.assertEqual(code, 0)
+                self.assertFalse(responses[0]["result"]["isError"])
+                self.assertNotIn(b"example-only", output)
+                json.loads(responses[0]["result"]["content"][0]["text"])
+
+    def test_nested_json_object_text_preserves_nonsecret_values(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        nested = json.dumps({"items": [json.dumps({"password": "example-only"}), 7, None]})
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": nested}):
+            code, responses, output = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+        self.assertNotIn(b"example-only", output)
+        outer = json.loads(responses[0]["result"]["content"][0]["text"])
+        decoded = json.loads(outer["data"]["text"])
+        self.assertEqual(decoded["items"][1:], [7, None])
+
+    def test_nested_encoded_json_in_a_key_is_redacted(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        key = "key: " + json.dumps(json.dumps({"password": "example-only"}))
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={key: "safe"}):
+            code, responses, output = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+        self.assertNotIn(b"example-only", output)
+        result = json.loads(responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(list(result["data"].values()), ["safe"])
+
+    def test_nested_credential_text_with_varied_wrappers_never_leaks(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        wrappers = ("", "prefix ", '"', "\\", "{", "}\n", '"x', 'x"', "[]=;")
+        for index, (prefix, suffix, depth) in enumerate(product(wrappers, wrappers, range(1, 6))):
+            text: object = {"password": "example-only"}
+            for _ in range(depth):
+                text = json.dumps(text)
+            with (
+                self.subTest(index=index),
+                patch(
+                    "cpe_access_atlas.mcp_server._tool_data",
+                    return_value={"text": prefix + str(text) + suffix},
+                ),
+            ):
+                code, responses, output = _run(_request("tools/call", 1, params))
+                self.assertEqual(code, 0)
+                self.assertNotIn(b"example-only", output)
+                if not responses[0]["result"]["isError"]:
+                    json.loads(responses[0]["result"]["content"][0]["text"])
+
+    def test_incomplete_or_invalid_quoted_text_remains_safe_json(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for text in ('note: "unterminated', 'note: "line\nfeed"'):
+            with (
+                self.subTest(text=text),
+                patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+            ):
+                code, responses, _ = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertFalse(responses[0]["result"]["isError"])
+            result = json.loads(responses[0]["result"]["content"][0]["text"])
+            self.assertEqual(result["data"]["text"], text)
+
+    def test_invalid_escaped_quoted_text_fails_closed(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for text in (r'note: "bad\q"', 'note: "{\\"password\\":\\"example-only\\"'):
+            with (
+                self.subTest(text=text),
+                patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+            ):
+                code, responses, output = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertTrue(responses[0]["result"]["isError"])
+            self.assertNotIn(b"example-only", output)
+
+    def test_escaped_sensitive_text_fails_closed_without_exposing_the_value(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for text in (
+            r"note: password\u003dexample-only",
+            r"note: pa\u0073sword=example-only",
+            r"note: password\x3dexample-only",
+        ):
+            with (
+                self.subTest(text=text),
+                patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+            ):
+                code, responses, output = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertTrue(responses[0]["result"]["isError"])
+            self.assertNotIn(b"example-only", output)
+
+    def test_benign_escaped_text_is_preserved_and_excessive_layers_fail_closed(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        text = r"note: \u0061"
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}):
+            code, responses, _ = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+        result = json.loads(responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(result["data"]["text"], text)
+
+        for _ in range(7):
+            text = text.replace("\\", r"\u005c")
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}):
+            code, responses, _ = _run(_request("tools/call", 2, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+
+        text = text.replace("\\", r"\u005c")
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}):
+            code, responses, _ = _run(_request("tools/call", 3, params))
+        self.assertEqual(code, 0)
+        self.assertTrue(responses[0]["result"]["isError"])
+
+    def test_nonsecret_json_text_keeps_its_original_representation(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        for text in (r'note: "hello\u0020world"', '{ "items" : [1, 2] }'):
+            with (
+                self.subTest(text=text),
+                patch("cpe_access_atlas.mcp_server._tool_data", return_value={"text": text}),
+            ):
+                code, responses, _ = _run(_request("tools/call", 1, params))
+            self.assertEqual(code, 0)
+            self.assertFalse(responses[0]["result"]["isError"])
+            result = json.loads(responses[0]["result"]["content"][0]["text"])
+            self.assertEqual(result["data"]["text"], text)
+
+    def test_decoded_redaction_cannot_expand_result_past_the_limit(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+
+        def expand(value: str) -> str:
+            return "x" * 200 if value == "safe" else value
+
+        with (
+            patch("cpe_access_atlas.mcp_server._tool_data", return_value={"description": "safe"}),
+            patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 128),
+            patch("cpe_access_atlas.mcp_server.redact_text", side_effect=expand),
+        ):
+            code, responses, _ = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertTrue(responses[0]["result"]["isError"])
+        self.assertEqual(
+            responses[0]["result"]["content"][0]["text"],
+            "Result exceeds the configured size limit",
+        )
 
     def test_tool_output_limit_fails_closed(self) -> None:
         with patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 8):
@@ -554,6 +765,29 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(serve(BytesIO(_request("ping", 1)), BytesIO()), 1)
         self.assertFalse(_write_message(BytesIO(), {"invalid": object()}))
         self.assertFalse(_write_message(BytesIO(), {"invalid": chr(0xD800)}))
+
+    def test_oversized_encoded_result_returns_error_and_server_continues(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        payload = _request("tools/call", 1, params) + _request("ping", 2)
+        with (
+            patch("cpe_access_atlas.mcp_server._tool_data", return_value=["ordinary"] * 20),
+            patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 1024),
+            patch("cpe_access_atlas.mcp_server.MAX_RESPONSE_BYTES", 256),
+        ):
+            code, responses, _ = _run(payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(responses[0]["id"], 1)
+        self.assertEqual(responses[0]["error"]["code"], -32603)
+        self.assertEqual(responses[1]["id"], 2)
+        self.assertEqual(responses[1]["error"]["code"], -32601)
+
+    def test_oversized_response_id_uses_bounded_error_without_id(self) -> None:
+        output = BytesIO()
+        with patch("cpe_access_atlas.mcp_server.MAX_RESPONSE_BYTES", 128):
+            self.assertTrue(_write_message(output, {"id": "x" * 200, "result": {}}))
+        response = json.loads(output.getvalue())
+        self.assertNotIn("id", response)
+        self.assertEqual(response["error"]["code"], -32603)
 
     def test_server_module_has_no_network_subprocess_or_cli_imports(self) -> None:
         path = ROOT / "src" / "cpe_access_atlas" / "mcp_server.py"

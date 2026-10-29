@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any, BinaryIO, cast
 
@@ -23,6 +24,7 @@ OUTPUT_CONTRACT_VERSION = "1"
 MAX_MESSAGE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_RESULT_BYTES = 1_048_576
+_TEXT_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))")
 _VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
 _CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
 _CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
@@ -341,6 +343,85 @@ def _tool_data(name: str, arguments: dict[str, Any]) -> Any:
     return _root_readiness_data(recipe)
 
 
+def _reject_encoded_sensitive_text(text: str) -> None:
+    for _ in range(8):
+        decoded = _TEXT_ESCAPE.sub(
+            lambda match: chr(int(match.group(1) or match.group(2), 16)), text
+        )
+        if decoded == text:
+            return
+        if redact_text(decoded) != decoded:
+            raise ValueError("escaped sensitive text")
+        text = decoded
+    if _TEXT_ESCAPE.search(text):
+        raise ValueError("escaped text exceeds decoding limit")
+
+
+def _redact_embedded_json_strings(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    last = 0
+    while cursor < len(text):
+        start = text.find('"', cursor)
+        if start < 0:
+            break
+        end = start + 1
+        while end < len(text) and text[end] != '"':
+            end += 2 if text[end] == "\\" else 1
+        if end >= len(text):
+            if "\\" in text[start:]:
+                raise ValueError("incomplete escaped JSON string")
+            break
+        cursor = end + 1
+        try:
+            decoded = json.loads(text[start:cursor])
+        except ValueError:
+            if "\\" in text[start:cursor]:
+                raise ValueError("invalid escaped JSON string") from None
+            continue
+        redacted = _redact_json_strings(decoded)
+        parts.append(text[last:start])
+        parts.append(
+            text[start:cursor] if redacted == decoded else json.dumps(redacted, ensure_ascii=False)
+        )
+        last = cursor
+    parts.append(text[last:])
+    result = "".join(parts)
+    _reject_encoded_sensitive_text(result)
+    return result
+
+
+def _redact_json_strings(value: Any) -> Any:
+    if isinstance(value, str):
+        sanitized = redact_text(value)
+        try:
+            decoded = json.loads(sanitized, parse_constant=_reject_constant)
+        except ValueError:
+            return _redact_embedded_json_strings(sanitized)
+        if isinstance(decoded, (str, list, dict)):
+            redacted = _redact_json_strings(decoded)
+            if redacted == decoded:
+                return sanitized
+            return json.dumps(
+                redacted,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        return sanitized
+    if isinstance(value, list):
+        return [_redact_json_strings(item) for item in value]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            sanitized_key = cast(str, _redact_json_strings(key))
+            if sanitized_key in result:
+                raise ValueError("redacted JSON keys collide")
+            result[sanitized_key] = _redact_json_strings(item)
+        return result
+    return value
+
+
 def _tool_result(data: Any) -> dict[str, Any]:
     try:
         serialized = json.dumps(
@@ -354,7 +435,14 @@ def _tool_result(data: Any) -> dict[str, Any]:
         sanitized = redact_text(serialized)
         if len(sanitized.encode("utf-8")) > min(MAX_RESULT_BYTES, MAX_REPORT_CHARS):
             return _tool_error("Result exceeds the configured size limit")
-        json.loads(sanitized)
+        sanitized = json.dumps(
+            _redact_json_strings(json.loads(sanitized, parse_constant=_reject_constant)),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        if len(sanitized.encode("utf-8")) > min(MAX_RESULT_BYTES, MAX_REPORT_CHARS):
+            return _tool_error("Result exceeds the configured size limit")
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _tool_error("Unable to safely serialize catalog result")
     return {
@@ -449,7 +537,18 @@ def _write_message(output_stream: BinaryIO, message: dict[str, Any]) -> bool:
     except (TypeError, ValueError, UnicodeError):
         return False
     if len(raw) > MAX_RESPONSE_BYTES:
-        return False
+        request_id = message.get("id")
+        error = _json_error(
+            request_id if _valid_request_id(request_id) else None,
+            -32603,
+            "Response exceeds the configured size limit",
+        )
+        raw = json.dumps(error, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(raw) > MAX_RESPONSE_BYTES:
+            error = _json_error(None, -32603, "Response exceeds the configured size limit")
+            raw = json.dumps(error, separators=(",", ":")).encode("utf-8") + b"\n"
+            if len(raw) > MAX_RESPONSE_BYTES:
+                return False
     try:
         output_stream.write(raw)
         output_stream.flush()
@@ -487,6 +586,12 @@ def serve(input_stream: BinaryIO | None = None, output_stream: BinaryIO | None =
             )
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
             if not _write_message(sink, _json_error(None, -32700, "Parse error")):
+                return 1
+            continue
+        try:
+            json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (ValueError, UnicodeError, RecursionError):
+            if not _write_message(sink, _json_error(None, -32600, "Invalid Request")):
                 return 1
             continue
         response = _dispatch(message)
