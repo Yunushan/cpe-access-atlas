@@ -138,10 +138,17 @@ class DirectorySyncTests(unittest.TestCase):
             ),
             patch.object(private_files.os, "fsync") as synced,
             patch.object(private_files.os, "close") as closed,
+            patch.object(
+                private_files.os, "O_DIRECTORY", getattr(os, "O_DIRECTORY", 0), create=True
+            ),
+            patch.object(private_files.os, "O_CLOEXEC", getattr(os, "O_CLOEXEC", 0), create=True),
         ):
             self.assertEqual(private_files._open_sync_directory(parent), 77)
         opened.assert_called_once_with(
-            parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+            parent,
+            os.O_RDONLY
+            | getattr(private_files.os, "O_DIRECTORY", 0)
+            | getattr(private_files.os, "O_CLOEXEC", 0),
         )
         synced.assert_called_once_with(77)
         closed.assert_not_called()
@@ -150,10 +157,25 @@ class DirectorySyncTests(unittest.TestCase):
         with (
             patch.object(private_files.os, "open", side_effect=OSError("open failed")),
             patch.object(private_files.os, "close") as closed,
+            patch.object(
+                private_files.os, "O_DIRECTORY", getattr(os, "O_DIRECTORY", 0), create=True
+            ),
+            patch.object(private_files.os, "O_CLOEXEC", getattr(os, "O_CLOEXEC", 0), create=True),
         ):
             with self.assertRaisesRegex(OSError, "open failed"):
                 private_files._open_sync_directory(Path("synthetic-parent"))
         closed.assert_not_called()
+
+    def test_missing_directory_flags_fail_closed_before_open(self) -> None:
+        for flag in ("O_DIRECTORY", "O_CLOEXEC"):
+            with (
+                self.subTest(flag=flag),
+                patch.object(private_files.os, flag, None, create=True),
+                patch.object(private_files.os, "open") as opened,
+            ):
+                with self.assertRaisesRegex(OSError, "directory-open safety flags"):
+                    private_files._open_sync_directory(Path("synthetic-parent"))
+                opened.assert_not_called()
 
     def test_directory_type_and_preflight_sync_failures_close_the_descriptor(self) -> None:
         for mode, sync_error, message in (
@@ -166,6 +188,12 @@ class DirectorySyncTests(unittest.TestCase):
                 patch.object(private_files.os, "fstat", return_value=SimpleNamespace(st_mode=mode)),
                 patch.object(private_files.os, "fsync", side_effect=sync_error) as synced,
                 patch.object(private_files.os, "close") as closed,
+                patch.object(
+                    private_files.os, "O_DIRECTORY", getattr(os, "O_DIRECTORY", 0), create=True
+                ),
+                patch.object(
+                    private_files.os, "O_CLOEXEC", getattr(os, "O_CLOEXEC", 0), create=True
+                ),
             ):
                 with self.assertRaisesRegex(OSError, message):
                     private_files._open_sync_directory(Path("synthetic-parent"))

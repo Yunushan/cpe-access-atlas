@@ -937,6 +937,13 @@ def command_firmware_inspect(args: argparse.Namespace) -> int:
     return int(False in {inspection.exact_build_match, inspection.sha256_match})
 
 
+def command_mcp(args: argparse.Namespace) -> int:
+    del args
+    from .mcp_server import run_stdio
+
+    return run_stdio()
+
+
 def command_validate(args: argparse.Namespace) -> int:
     del args
     errors = validate_catalog()
@@ -1224,6 +1231,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = subparsers.add_parser("validate", help="validate bundled catalog data")
     validate.set_defaults(func=command_validate)
+
+    mcp = subparsers.add_parser("mcp", help="serve the read-only catalog over MCP stdio")
+    mcp.set_defaults(func=command_mcp)
     return parser
 
 

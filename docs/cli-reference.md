@@ -15,13 +15,13 @@ python scripts/generate_cli_reference.py
 
 ```text
 usage: cpe-atlas [-h] [--version] [--output-contract-version]
-                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate} ...
+                 {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate,mcp} ...
 
 Firmware-aware catalog and safe research tooling for owner-authorized CPE
 access
 
 positional arguments:
-  {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate}
+  {providers,recipes,devices,status,evidence,plan,root-readiness,apply,config-generate,doctor,web-evidence,uart-evidence,report-template,redact,private-protect,private-unprotect,firmware-inspect,validate,mcp}
     providers           list cataloged providers
     recipes             list exact device recipes
     devices             list devices published on official ISP pages (not
@@ -49,6 +49,7 @@ positional arguments:
     firmware-inspect    hash and scan one private firmware artifact without
                         modifying it
     validate            validate bundled catalog data
+    mcp                 serve the read-only catalog over MCP stdio
 
 options:
   -h, --help            show this help message and exit
@@ -192,6 +193,15 @@ options:
                         expected SHA-256 hash of the private artifact (64
                         hexadecimal characters)
   --json
+```
+
+## `cpe-atlas mcp`
+
+```text
+usage: cpe-atlas mcp [-h]
+
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## `cpe-atlas plan`

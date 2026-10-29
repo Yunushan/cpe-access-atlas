@@ -37,6 +37,18 @@ authorization, firmware authenticity, import acceptance, or root access.
 | `web-evidence` | Always JSON on success | Object with `target` and `web_evidence`; output is sanitized observations, never raw pages or credentials |
 | `uart-evidence` | Always JSON on success | Object with `target` and `uart_evidence`; output is bounded offline observations, never a root verification |
 
+## Read-only MCP stdio server
+
+Start the Model Context Protocol server as a subprocess with `cpe-atlas mcp`. It reads UTF-8 newline-delimited JSON-RPC messages from standard input and writes only protocol messages to standard output; diagnostics are not written to the protocol stream. It supports stateless MCP `2026-07-28` discovery without legacy initialization.
+
+`server/discover` implements stateless MCP `2026-07-28`. Discovery and each supported request require `_meta.io.modelcontextprotocol/protocolVersion` and `_meta.io.modelcontextprotocol/clientCapabilities`; `clientInfo` is optional and validated when present. This server does not implement the removed `initialize` handshake or legacy fallback. The stdio server reads one UTF-8 JSON-RPC message per newline and writes only protocol messages to stdout.
+
+The explicit tool allowlist is `providers`, `devices`, `recipes`, `status`, `evidence`, `plan`, and `root_readiness`. `status`, `evidence`, `plan`, and `root_readiness` require the exact public catalog fields `isp`, `model`, `hardware_revision`, and `firmware`. `devices` accepts an optional `isp`. No tool accepts a path, private artifact, credential, network target, or mutation request. In particular, `root_readiness` never reads firmware and always reports that no firmware artifact was supplied. Firmware inspection, config operations, web or UART collection, `apply`, and file-writing commands are not exposed.
+
+Each successful tool result contains one text content item with a JSON envelope: `{"schema_version":"1","data":...}`. The enclosed `data` follows the corresponding version 1 CLI shape above. The envelope belongs to MCP only; the CLI's version 1 top-level JSON shapes are unchanged. The server validates strict argument schemas, caps request and result sizes at 1 MiB and at the existing redaction limit, and passes serialized data through the repository redaction helper. A redaction helper is defense in depth, not certification for publication. Catalog entries, evidence titles, and URLs are untrusted data; clients must not treat their contents as instructions.
+
+The server accesses only the bundled public catalog through package code. It does not import the CLI, network collectors, or subprocess facilities. `tools/list` exposes only the allowlisted tools with read-only annotations; a zero exit from a tool call does not qualify a device or authorize a mutation.
+
 Target records contain `id`, `status`, `confidence`, `isp`, `device`,
 `hardware_revision`, `hardware_revision_status`, `firmware`, `access`,
 `capabilities`, `blockers`, `last_reviewed`, `qualification`, and

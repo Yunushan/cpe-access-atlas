@@ -35,6 +35,8 @@ class SdistTests(unittest.TestCase):
             ".gitleaks.toml": b"[extend]\nuseDefault = true\n",
             ".gitattributes": b"* text=auto eol=lf\n",
             ".pre-commit-config.yaml": b"repos: []\n",
+            ".clinerules": b"synthetic client rules\n",
+            ".cursor/rules/cpe-atlas.mdc": b"synthetic Cursor rules\n",
             "README.md": b"synthetic\n",
             "requirements-ci.lock": b"# synthetic\n",
             "src/cpe_access_atlas/__init__.py": b"value = 'synthetic'\n",
@@ -249,6 +251,33 @@ class SdistTests(unittest.TestCase):
             set(self.files),
         )
 
+    def test_only_reviewed_client_rules_are_source_inputs(self) -> None:
+        for relative in (
+            ".clinerules.backup",
+            ".cursor/mcp.json",
+            ".cursor/rules/unreviewed.mdc",
+        ):
+            path = self.source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"unreviewed client configuration\n")
+        self.assertEqual(
+            {path.relative_to(self.source).as_posix() for path in sdist.source_inputs(self.source)},
+            set(self.files),
+        )
+
+    def test_client_rules_are_optional_for_source_fixtures(self) -> None:
+        for relative in (".clinerules", ".cursor/rules/cpe-atlas.mdc"):
+            (self.source / relative).unlink()
+            del self.files[relative]
+        self.assertEqual(
+            {path.relative_to(self.source).as_posix() for path in sdist.source_inputs(self.source)},
+            set(self.files),
+        )
+        self.archive()
+        with patch.object(sdist.subprocess, "run") as run, redirect_stdout(io.StringIO()):
+            sdist.check_sdist(self.dist, self.source)
+        self.assertEqual(run.call_count, 2)
+
     def test_empty_test_reference_cannot_pass(self) -> None:
         (self.source / "tests/test_example.py").unlink()
         with self.assertRaisesRegex(sdist.SdistError, "no tests"):
@@ -390,6 +419,9 @@ class SdistTests(unittest.TestCase):
             "scripts/unreviewed.py",
             "src/cpe_access_atlas/unreviewed.py",
             ".github/workflows/unreviewed.yml",
+            ".clinerules.backup",
+            ".cursor/mcp.json",
+            ".cursor/rules/unreviewed.mdc",
             "coverage.py",
             "src/sitecustomize.py",
             "tests/__pycache__/test_example.cpython-314.pyc",

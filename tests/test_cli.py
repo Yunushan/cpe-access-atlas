@@ -1886,6 +1886,12 @@ class CliTests(unittest.TestCase):
         recipes.assert_not_called()
         web.assert_not_called()
 
+    def test_mcp_command_runs_stdio_server_without_startup_text(self) -> None:
+        with patch("cpe_access_atlas.mcp_server.run_stdio", return_value=0) as server:
+            code, stdout, stderr = self.run_cli(["mcp"])
+        self.assertEqual((code, stdout, stderr), (0, "", ""))
+        server.assert_called_once_with()
+
     def test_parser_exit_with_no_code_is_treated_as_success(self) -> None:
         with patch(
             "cpe_access_atlas.cli.build_parser",

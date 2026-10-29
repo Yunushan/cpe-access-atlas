@@ -12,6 +12,16 @@ All notable changes are documented here.
   OS-level timeout/connection-abort behavior without changing production limits.
 - Update SHA-pinned artifact and CodeQL actions through a maintainer-signed
   change while retaining the author-matching DCO gate.
+- Add bounded, read-only MCP stdio access to the public catalog using stateless
+  protocol `2026-07-28`, with strict version checks, optional validated client
+  identity, silent notifications, redacted results, and no private-file or device tools.
+- Include the reviewed client-rule files in source archives and verify their
+  presence and bytes without including neighboring client configuration.
+- Document evidence-gated AI-client setup and the recorded CI platform matrix;
+  keep the experimental Linux arm64 checks separate and non-required.
+- Fail closed when POSIX private-output directory safety flags are unavailable.
+- Update hash-locked build and audit tools to setuptools 84.1.0 and filelock
+  4.2.1 to resolve four dependency advisories while preserving runtime dependencies.
 - Prepare candidate `v0.4.0a14`; preserve immutable a13 assets and prior evidence.
   Live release controls require a separate reviewed rotation. Device, recovery,
   and operator qualification remain unchanged.

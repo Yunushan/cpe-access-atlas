@@ -62,6 +62,11 @@ def source_inputs(source: Path) -> tuple[Path, ...]:
             ".pre-commit-config.yaml",
         )
     ]
+    paths.extend(
+        path
+        for name in (".clinerules", ".cursor/rules/cpe-atlas.mdc")
+        if (path := source / name).is_file()
+    )
     paths.extend(source.glob("*.md"))
     paths.extend(source.glob("requirements-*.lock"))
     for directory in ("src/cpe_access_atlas", "scripts", "tests", "docs", ".github", "schemas"):
