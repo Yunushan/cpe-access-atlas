@@ -341,15 +341,56 @@ def _tool_data(name: str, arguments: dict[str, Any]) -> Any:
     return _root_readiness_data(recipe)
 
 
+def _redact_embedded_json_strings(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    last = 0
+    while cursor < len(text):
+        start = text.find('"', cursor)
+        if start < 0:
+            break
+        end = start + 1
+        while end < len(text) and text[end] != '"':
+            end += 2 if text[end] == "\\" else 1
+        if end >= len(text):
+            if "\\" in text[start:]:
+                raise ValueError("incomplete escaped JSON string")
+            break
+        cursor = end + 1
+        try:
+            decoded = json.loads(text[start:cursor])
+        except ValueError:
+            if "\\" in text[start:cursor]:
+                raise ValueError("invalid escaped JSON string") from None
+            continue
+        parts.append(text[last:start])
+        parts.append(json.dumps(_redact_json_strings(decoded), ensure_ascii=False))
+        last = cursor
+    parts.append(text[last:])
+    return "".join(parts)
+
+
 def _redact_json_strings(value: Any) -> Any:
     if isinstance(value, str):
-        return redact_text(value)
+        sanitized = redact_text(value)
+        try:
+            decoded = json.loads(sanitized, parse_constant=_reject_constant)
+        except ValueError:
+            return _redact_embedded_json_strings(sanitized)
+        if isinstance(decoded, (str, list, dict)):
+            return json.dumps(
+                _redact_json_strings(decoded),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        return sanitized
     if isinstance(value, list):
         return [_redact_json_strings(item) for item in value]
     if isinstance(value, dict):
         result: dict[str, Any] = {}
         for key, item in value.items():
-            sanitized_key = redact_text(key)
+            sanitized_key = cast(str, _redact_json_strings(key))
             if sanitized_key in result:
                 raise ValueError("redacted JSON keys collide")
             result[sanitized_key] = _redact_json_strings(item)
