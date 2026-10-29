@@ -106,7 +106,7 @@ publisher that did not use the `release` environment. Commit
 `e7f4a6f7d373d48aaf6a3f953b37580fd492cfad` declared that unreleased version
 while carrying the earlier broad publishing workflow. Never create or publish
 either tag. The published `v0.4.0a14` used an exact-tag creation quarantine
-exception and release environment. For the next reviewed candidate, update
+exception and release environment. For the `v0.4.0a15` candidate, update
 the candidate-specific auditor and documentation with the new version, rotate
 the quarantine to exclude only that tag, and bind the release environment to
 the same tag before the prepublication audit. Keep all published release tags,
