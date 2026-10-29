@@ -341,6 +341,22 @@ def _tool_data(name: str, arguments: dict[str, Any]) -> Any:
     return _root_readiness_data(recipe)
 
 
+def _redact_json_strings(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, list):
+        return [_redact_json_strings(item) for item in value]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            sanitized_key = redact_text(key)
+            if sanitized_key in result:
+                raise ValueError("redacted JSON keys collide")
+            result[sanitized_key] = _redact_json_strings(item)
+        return result
+    return value
+
+
 def _tool_result(data: Any) -> dict[str, Any]:
     try:
         serialized = json.dumps(
@@ -354,7 +370,14 @@ def _tool_result(data: Any) -> dict[str, Any]:
         sanitized = redact_text(serialized)
         if len(sanitized.encode("utf-8")) > min(MAX_RESULT_BYTES, MAX_REPORT_CHARS):
             return _tool_error("Result exceeds the configured size limit")
-        json.loads(sanitized)
+        sanitized = json.dumps(
+            _redact_json_strings(json.loads(sanitized, parse_constant=_reject_constant)),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        if len(sanitized.encode("utf-8")) > min(MAX_RESULT_BYTES, MAX_REPORT_CHARS):
+            return _tool_error("Result exceeds the configured size limit")
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _tool_error("Unable to safely serialize catalog result")
     return {

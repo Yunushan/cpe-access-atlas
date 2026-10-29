@@ -368,6 +368,56 @@ class McpServerTests(unittest.TestCase):
                 "Unable to safely serialize catalog result",
             )
 
+    def test_embedded_catalog_strings_are_redacted_after_json_decoding(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        data = {
+            "nested": [
+                'hello "password": "example-only" world',
+                '{"password":"example-only"}',
+                "x\nCookie: example-only",
+                {"safe": True, "count": 2, "empty": None},
+            ]
+        }
+        with patch("cpe_access_atlas.mcp_server._tool_data", return_value=data):
+            code, responses, output = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertFalse(responses[0]["result"]["isError"])
+        self.assertNotIn(b"example-only", output)
+        result = json.loads(responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(result["schema_version"], "1")
+        self.assertEqual(result["data"]["nested"][3], data["nested"][3])
+
+    def test_redacted_json_key_collisions_fail_closed(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        with patch(
+            "cpe_access_atlas.mcp_server._tool_data",
+            return_value={"password=one": 1, "password=two": 2},
+        ):
+            code, responses, output = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertTrue(responses[0]["result"]["isError"])
+        self.assertNotIn(b"password=one", output)
+        self.assertNotIn(b"password=two", output)
+
+    def test_decoded_redaction_cannot_expand_result_past_the_limit(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+
+        def expand(value: str) -> str:
+            return "x" * 200 if value == "safe" else value
+
+        with (
+            patch("cpe_access_atlas.mcp_server._tool_data", return_value={"description": "safe"}),
+            patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 128),
+            patch("cpe_access_atlas.mcp_server.redact_text", side_effect=expand),
+        ):
+            code, responses, _ = _run(_request("tools/call", 1, params))
+        self.assertEqual(code, 0)
+        self.assertTrue(responses[0]["result"]["isError"])
+        self.assertEqual(
+            responses[0]["result"]["content"][0]["text"],
+            "Result exceeds the configured size limit",
+        )
+
     def test_tool_output_limit_fails_closed(self) -> None:
         with patch("cpe_access_atlas.mcp_server.MAX_RESULT_BYTES", 8):
             code, responses, _ = _run(
