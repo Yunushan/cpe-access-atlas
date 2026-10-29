@@ -85,10 +85,12 @@ requirements until an authorized administrator updates the repository settings.
   immutability for an existing release. Preserve older artifacts and publish
   a new version through the protected process. See
   [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-- For the next candidate, `v0.4.0a14`, rotate the live tag rules and release
-  environment using the fail-closed rotation procedure below before creating
-  its tag. The three rulesets below describe the required final state, not
-  their mutation order or a claim that live settings have already changed.
+- `v0.4.0a14` was published on 2026-10-29. The examples below describe its
+  audited controls, not an authorization to create another tag. For a future
+  candidate, update the version and auditor together, then rotate the live
+  tag rules and release environment using the fail-closed procedure below.
+  The three rulesets describe the required final state, not their mutation
+  order or proof of the current live settings.
 - Protect release-tag creation with three deliberately separate rulesets:
   1. a rotating quarantine with `include: refs/tags/v*`, only
      `exclude: refs/tags/v0.4.0a14`, the creation restriction, and **no bypass
@@ -121,8 +123,9 @@ requirements until an authorized administrator updates the repository settings.
 - Configure a `release` environment without mandatory reviewers. The owner
   authorizes publication by creating the protected release tag after checking
   the candidate. Disable administrator bypass and select exactly the current
-  candidate tag (`v0.4.0a14`), not `v*`, unrestricted refs, or branches. Update
-  that one policy only when the package version advances to a reviewed candidate.
+  candidate tag (for the published a14, `v0.4.0a14`), not `v*`, unrestricted
+  refs, or branches. Update that one policy only when the package version
+  advances to a reviewed candidate.
   This exact-tag boundary prevents a tag created later at an older commit from
   running that commit's historical publishing workflow with release credentials.
   It is defense in depth; the creation quarantine remains mandatory because at
