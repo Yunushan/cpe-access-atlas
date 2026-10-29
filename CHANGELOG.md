@@ -2,6 +2,13 @@
 
 All notable changes are documented here.
 
+## 0.4.0a15 - 2026-10-29
+
+- Harden read-only MCP results against embedded and escaped sensitive fields,
+  malformed Unicode and oversized responses while keeping the session usable.
+- Prepare candidate `v0.4.0a15`; preserve the immutable a14 release and its
+  evidence. Device, recovery, and operator qualification remain unchanged.
+
 ## 0.4.0a14 - 2026-10-14
 
 - Bound both configuration decoders to 65,536 chunks so a small hostile input

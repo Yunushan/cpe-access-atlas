@@ -85,17 +85,17 @@ requirements until an authorized administrator updates the repository settings.
   immutability for an existing release. Preserve older artifacts and publish
   a new version through the protected process. See
   [GitHub's release immutability guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-- `v0.4.0a14` was published on 2026-10-29. The examples below describe its
-  audited controls, not an authorization to create another tag. For a future
+- `v0.4.0a14` was published on 2026-10-29. The examples below describe the
+  proposed `v0.4.0a15` candidate controls, not proof of their live state. For a
   candidate, update the version and auditor together, then rotate the live
   tag rules and release environment using the fail-closed procedure below.
   The three rulesets describe the required final state, not their mutation
   order or proof of the current live settings.
 - Protect release-tag creation with three deliberately separate rulesets:
   1. a rotating quarantine with `include: refs/tags/v*`, only
-     `exclude: refs/tags/v0.4.0a14`, the creation restriction, and **no bypass
+     `exclude: refs/tags/v0.4.0a15`, the creation restriction, and **no bypass
      actors**;
-  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a14`, no
+  2. an exact-candidate rule with only `include: refs/tags/v0.4.0a15`, no
      exclusions, the creation restriction, and the personal repository owner
      as the only always-bypass actor; and
   3. a full `refs/tags/v*` update/deletion restriction with no exclusions and
@@ -123,7 +123,7 @@ requirements until an authorized administrator updates the repository settings.
 - Configure a `release` environment without mandatory reviewers. The owner
   authorizes publication by creating the protected release tag after checking
   the candidate. Disable administrator bypass and select exactly the current
-  candidate tag (for the published a14, `v0.4.0a14`), not `v*`, unrestricted
+  candidate tag (`v0.4.0a15`), not `v*`, unrestricted
   refs, or branches. Update that one policy only when the package version
   advances to a reviewed candidate.
   This exact-tag boundary prevents a tag created later at an older commit from
