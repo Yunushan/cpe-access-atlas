@@ -26,8 +26,12 @@ An item is never marked `PASS` from configuration, intent, or a planned action.
 
 ## Current state
 
-- The latest published release is `v0.4.0a13`. Candidate `v0.4.0a14` is not
-  tagged or published; publication requires explicit owner authorization.
+- As of 2026-10-29, the latest published release is the immutable alpha
+  [`v0.4.0a14`](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a14),
+  built from commit `ae03b45fc741addad9969476b8890b9c043a9739`. Its
+  [release workflow](https://github.com/Yunushan/cpe-access-atlas/actions/runs/40858927801)
+  completed successfully. Maintainer verification of its artifacts does not
+  satisfy the separate external-review requirement in item 4.
 - Recovery exercise and incident tabletop records are templates in
   [`operations.md`](operations.md). Both are incomplete, and no exercise or
   tabletop has been performed.
