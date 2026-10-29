@@ -5,6 +5,7 @@ import json
 import unittest
 from dataclasses import replace
 from io import BytesIO
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -438,6 +439,26 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn(b"example-only", output)
         result = json.loads(responses[0]["result"]["content"][0]["text"])
         self.assertEqual(list(result["data"].values()), ["safe"])
+
+    def test_nested_credential_text_with_varied_wrappers_never_leaks(self) -> None:
+        params = _modern_params({"name": "providers", "arguments": {}})
+        wrappers = ("", "prefix ", '"', "\\", "{", "}\n", '"x', 'x"', "[]=;")
+        for index, (prefix, suffix, depth) in enumerate(product(wrappers, wrappers, range(1, 6))):
+            text: object = {"password": "example-only"}
+            for _ in range(depth):
+                text = json.dumps(text)
+            with (
+                self.subTest(index=index),
+                patch(
+                    "cpe_access_atlas.mcp_server._tool_data",
+                    return_value={"text": prefix + str(text) + suffix},
+                ),
+            ):
+                code, responses, output = _run(_request("tools/call", 1, params))
+                self.assertEqual(code, 0)
+                self.assertNotIn(b"example-only", output)
+                if not responses[0]["result"]["isError"]:
+                    json.loads(responses[0]["result"]["content"][0]["text"])
 
     def test_incomplete_or_invalid_quoted_text_remains_safe_json(self) -> None:
         params = _modern_params({"name": "providers", "arguments": {}})
