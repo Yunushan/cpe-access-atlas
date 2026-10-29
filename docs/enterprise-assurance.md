@@ -27,11 +27,12 @@ An item is never marked `PASS` from configuration, intent, or a planned action.
 ## Current state
 
 - As of 2026-10-29, the latest published release is the immutable alpha
-  [`v0.4.0a14`](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a14),
-  built from commit `ae03b45fc741addad9969476b8890b9c043a9739`. Its
-  [release workflow](https://github.com/Yunushan/cpe-access-atlas/actions/runs/40858927801)
-  completed successfully. Maintainer verification of its artifacts does not
-  satisfy the separate external-review requirement in item 4.
+  [`v0.4.0a15`](https://github.com/Yunushan/cpe-access-atlas/releases/tag/v0.4.0a15),
+  built from commit `f7f43351a59e14f4983a591216cb67870193c93e`. Its
+  [release workflow](https://github.com/Yunushan/cpe-access-atlas/actions/runs/40924940150)
+  succeeded on its second attempt after a macOS SBOM job was cancelled before
+  execution on the first. Maintainer verification of the downloaded artifacts
+  does not satisfy the separate external-review requirement in item 4.
 - Recovery exercise and incident tabletop records are templates in
   [`operations.md`](operations.md). Both are incomplete, and no exercise or
   tabletop has been performed.
