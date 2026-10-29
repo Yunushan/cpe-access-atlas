@@ -354,7 +354,8 @@ def _tool_result(data: Any) -> dict[str, Any]:
         sanitized = redact_text(serialized)
         if len(sanitized.encode("utf-8")) > min(MAX_RESULT_BYTES, MAX_REPORT_CHARS):
             return _tool_error("Result exceeds the configured size limit")
-    except (TypeError, ValueError, UnicodeError):
+        json.loads(sanitized)
+    except (TypeError, ValueError, UnicodeError, RecursionError):
         return _tool_error("Unable to safely serialize catalog result")
     return {
         "resultType": "complete",
