@@ -196,11 +196,16 @@ another platform's constants or a new payload number does not resolve their
 personalization or establish their cipher policy. No upstream static key
 material is reproduced here.
 
-The [H3600P decoder issue](https://github.com/mkst/zte-config-utility/issues/137)
-also received a comment on October 15. Its potentially sensitive body was not
-inspected, so this review makes no claim about any proposed solution in that
-comment. These retrieval limits rule out describing this work as an exhaustive
-review of every newly posted artifact or method.
+The [October 15 comment in the H3600P decoder issue](https://github.com/mkst/zte-config-utility/issues/137#issuecomment-6197321189)
+was created and last updated at `2026-10-15T16:43:56Z`. A follow-up allowlisted,
+in-memory structural check identified its sole public link as the already
+reviewed [Digi H3600P article](https://lacerta.es/zteh3600p/). It identified no
+new repository, codec-source link or attachment. The potentially sensitive
+body was not rendered or retained, and this was not a complete semantic
+review. No newly identified implementation or exact-TTN.10 qualification came
+from that check; it does not prove that the comment contains no proposal.
+These retrieval limits rule out describing this work as an exhaustive review
+of every newly posted artifact or method.
 
 ## Route selection and language/library choices
 
