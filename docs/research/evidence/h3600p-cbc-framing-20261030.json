@@ -1,0 +1,212 @@
+{
+  "status": "PASS",
+  "recorded_utc": "2026-10-30T11:22:45.155206+00:00",
+  "source_commit": "ac46da90f67eb3d0cb7d8ed1f766d0a12fe50a8b",
+  "helper_sha256": "d328ba5a70ae5acfd414b6afa4a6679529bc9aec505c750913512796b62da31e",
+  "scope": "Synthetic codec-framing discriminator; existing key derivation held constant, not independently validated",
+  "device_io": false,
+  "private_artifacts_used": false,
+  "target_firmware_compatibility": "NOT ESTABLISHED",
+  "results": [
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [],
+      "chunk_count": 1,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [],
+      "chunk_count": 1,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        16
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        16
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration chunk capacity exceeds the safety size limit"
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        32
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        32
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        48
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        48
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration chunk XML exceeds the safety size limit"
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        64
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        64
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration chunk exceeds the safety size limit"
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        80
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        80
+      ],
+      "chunk_count": 2,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration data is invalid"
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        16,
+        80
+      ],
+      "chunk_count": 3,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        16,
+        80
+      ],
+      "chunk_count": 3,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration chunk capacity exceeds the safety size limit"
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        32,
+        64
+      ],
+      "chunk_count": 3,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        32,
+        64
+      ],
+      "chunk_count": 3,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration chunk exceeds the safety size limit"
+    },
+    {
+      "source_cipher_policy": "reset-per-chunk",
+      "plaintext_split_offsets": [
+        48,
+        80
+      ],
+      "chunk_count": 3,
+      "current_decoder_payload_exact": true,
+      "continuous_model_payload_exact": false,
+      "current_decoder_xml_exact": true,
+      "controlled_error": null
+    },
+    {
+      "source_cipher_policy": "continuous-CBC",
+      "plaintext_split_offsets": [
+        48,
+        80
+      ],
+      "chunk_count": 3,
+      "current_decoder_payload_exact": false,
+      "continuous_model_payload_exact": true,
+      "current_decoder_xml_exact": false,
+      "controlled_error": "compressed configuration chunk XML exceeds the safety size limit"
+    }
+  ]
+}
