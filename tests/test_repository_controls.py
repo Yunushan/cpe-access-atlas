@@ -351,7 +351,7 @@ class RepositoryControlTests(unittest.TestCase):
     def test_scorecard_is_report_only_and_not_required(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "scorecard.yml").read_text(encoding="utf-8")
         self.assertIn(
-            "uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0",
+            "uses: ossf/scorecard-action@23f22cd43608bae7a1f1fa2603d7314dee9538a5 # v2.6.0",
             workflow,
         )
         self.assertIn("publish_results: false", workflow)
